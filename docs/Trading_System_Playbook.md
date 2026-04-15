@@ -10,32 +10,45 @@ Pro Picks Update (mensile)
         │
         ▼
 ┌─────────────────────┐
-│  FASE 1: SCREENING  │  ← Perplexity (news + catalyst)
-│  Nuovi ingressi     │  ← Claude (analisi qualitativa)
+│  FASE 1: SCREENING  │  ← Perplexity 2A/2B (news + catalyst, cross-check fondamentale)
+│  Nuovi ingressi     │
 │  basket mensile     │
 └────────┬────────────┘
          │
          ▼
-┌─────────────────────┐
-│  FASE 2: SCORING    │  ← Motore Python (score tecnico)
-│  Classificazione    │  ← TradingView (conferma grafica)
-│  A / B / Skip       │
-└────────┬────────────┘
+┌─────────────────────────────┐
+│  FASE 2: REGIME + SCORING   │  ← Weekly regime (Python + Pine weekly_regime_engine)
+│  entry_allowed ≥ NEUTRAL    │  ← propicks-scan (score 0-100, classe A/B/C/D)
+│  score tecnico + classifica │  ← propicks-scan --validate (Claude, gate su regime+score)
+│  verdict AI strutturato     │
+└────────┬────────────────────┘
+         │  CLI stampa blocco TRADINGVIEW PINE INPUTS
+         │  (Entry / Stop / Target pronti da incollare)
+         ▼
+┌─────────────────────────────┐
+│  FASE 3: EXECUTION          │  ← Perplexity 2C (red flag 24h)
+│  Timing real-time su Pine   │  ← Pine daily_signal_engine (BRK/PB/GC/SQZ/DIV → alert push)
+│  Entry + sizing + apertura  │  ← propicks-portfolio size + add (validazione hard)
+│  Log nel journal            │  ← propicks-journal add
+└────────┬────────────────────┘
          │
          ▼
-┌─────────────────────┐
-│  FASE 3: EXECUTION  │  ← Alert TradingView (timing)
-│  Entry + sizing     │  ← Python (position size)
-│  Stop + Target      │
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  FASE 4: GESTIONE   │  ← Review settimanale
-│  Trailing stop      │  ← Journal Python
-│  Exit management    │
-└─────────────────────┘
+┌─────────────────────────────┐
+│  FASE 4: GESTIONE           │  ← Review settimanale (Claude 3B)
+│  Trailing stop              │  ← propicks-portfolio status / risk
+│  Exit management            │  ← Journal Python (append-only)
+│  Post-trade (Claude 3D)     │
+└─────────────────────────────┘
 ```
+
+**Divisione dei layer:**
+- **Python** → regime weekly (EOD), score tecnico, validazione AI, sizing, journal.
+- **TradingView Pine** → timing real-time dei trigger di entry (yfinance vede solo EOD).
+- **Perplexity** → cross-check fondamentale indipendente dal verdict Claude (news, catalyst, red flag 24h).
+
+Il contratto tra Python e Pine (indicatori, pesi, soglie) è definito in
+`src/propicks/config.py` e replicato nei commenti di testa dei due Pine script.
+Vedi **sezione 4** per i dettagli.
 
 ---
 
@@ -243,16 +256,29 @@ mi interessa migliorare.
 
 ---
 
-## 4. SETUP TRADINGVIEW — Alert e Indicatori
+## 4. SETUP TRADINGVIEW — Pine Script, Alert e Indicatori
 
-### 4A. Indicatori da configurare su ogni titolo in watchlist
+### 4A. Pine script committati nel repo
+
+La cartella [`tradingview/`](../tradingview/) contiene due Pine script che
+affiancano il motore Python. **Contract**: i parametri di default (EMA/RSI/ATR/volume,
+pesi scoring, soglie A/B/C/D, soglie regime) devono corrispondere a
+`src/propicks/config.py` — un commento in testa a entrambi i file segna la
+regola. Se tocchi un parametro da un lato, aggiornalo anche dall'altro.
+
+| File | Timeframe | Scopo |
+|------|-----------|-------|
+| `weekly_regime_engine.pine` | Weekly | Filtro macro a 5 bucket (STRONG_BULL → STRONG_BEAR). Stessa logica replicata in `domain/regime.py`. Serve come gate: se regime ≤ BEAR nessun long. |
+| `daily_signal_engine.pine` | Daily | Rileva trigger di entry in tempo reale (BREAKOUT, PULLBACK, GOLDEN_CROSS, SQUEEZE, DIVERGENCE) che yfinance (EOD) non può vedere. I livelli Entry/Stop/Target vengono dal blocco **TRADINGVIEW PINE INPUTS** stampato da `propicks-scan`. |
+
+### 4B. Indicatori standard da configurare su ogni titolo in watchlist
 
 ```
 Setup standard per ogni chart:
-- Timeframe principale: Daily
-- Timeframe conferma: Weekly
+- Timeframe principale: Daily    (con daily_signal_engine.pine caricato)
+- Timeframe conferma: Weekly     (con weekly_regime_engine.pine caricato)
 
-Indicatori:
+Indicatori nativi (già coperti dai Pine, li aggiungi solo se vuoi conferma visuale):
 1. EMA 20 (blu) + EMA 50 (arancione) — trend direction
 2. RSI 14 con livelli 30/70 — momentum
 3. Volume con media 20 periodi — conferma movimenti
@@ -262,6 +288,25 @@ Opzionali ma utili:
 5. MACD (12,26,9) — conferma trend
 6. Bollinger Bands (20,2) — volatilità e squeeze
 ```
+
+### 4C. Handoff Python → TradingView (entry/stop/target)
+
+Al termine di `propicks-scan [--validate]`, la CLI stampa un blocco:
+
+```
+==============================================================
+TRADINGVIEW PINE INPUTS — AAPL
+==============================================================
+Apri il Pine "AI Trading System — Daily" → Settings → Position:
+  Entry Price:   185.50
+  Stop Loss:     171.50
+  Target:        210.00
+```
+
+Questi numeri sono pronti da incollare negli input del Pine daily. Se Claude
+(`--validate`) ha suggerito un target, viene usato quello; altrimenti solo
+entry e stop (ATR-based). Questo è l'unico punto di accoppiamento tra i due
+sistemi — nessuna API, nessun webhook.
 
 ### 4B. Alert da impostare per ogni scenario
 
@@ -309,9 +354,10 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 ### Entry Rules (tutte devono essere vere)
 - [ ] Il titolo è nel basket Pro Picks attivo
 - [ ] Perplexity conferma catalyst concreto e nessun red flag
-- [ ] Claude assegna score >= 6/10
+- [ ] **Regime weekly >= NEUTRAL** (`propicks-scan` mostra "✓ ENTRY OK", oppure Pine weekly ≥ 3/5). BEAR/STRONG_BEAR blocca l'entry salvo override esplicito.
 - [ ] Score tecnico Python >= 60/100
-- [ ] Setup TradingView mostra entry point definito
+- [ ] Verdict Claude `--validate` = CONFIRM (o CAUTION con conviction ≥ 6/10)
+- [ ] Pine daily ha emesso un trigger (BRK/PB/GC/SQZ/DIV) o il setup è chiaramente definito sul grafico
 - [ ] Nessuna earnings nei prossimi 5 giorni di trading
 - [ ] Posizione size calcolata e coerente con il piano
 
@@ -336,6 +382,7 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 - Max loss portafoglio settimanale: 5% del capitale totale
 - Se raggiungi -5% settimanale: stop trading per il resto della settimana
 - Se raggiungi -15% mensile: stop trading, revisione completa strategia
+- Regime weekly a BEAR/STRONG_BEAR: `--validate` viene saltato di default (nessun costo API, nessun verdict). Per forzare usa `--force-validate` — ma sappi che stai comprando controtrend.
 
 ---
 
@@ -345,44 +392,53 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 ```
 □ Scarica lista nuovi ingressi e uscite
 □ Per ogni nuovo ingresso:
-  □ Esegui prompt Perplexity 2A (o 2B per italiane)
-  □ Esegui score Python
-  □ Esegui prompt Claude 3A
+  □ Esegui prompt Perplexity 2A (o 2B per italiane) — cross-check fondamentale
+  □ Esegui propicks-scan TICKER --validate
+    ↳ include regime weekly + score tecnico + verdict Claude
+    ↳ stampa il blocco TRADINGVIEW PINE INPUTS (entry/stop/target)
+  □ Esegui prompt Claude 3A solo se vuoi approfondire (il verdict --validate copre già la tesi)
   □ Classifica: A (azione immediata) / B (watchlist) / C (skip)
-□ Per ogni uscita:
+    ↳ Skip automatico se regime BEAR/STRONG_BEAR o score < 60 o verdict REJECT
+□ Per ogni uscita dal basket:
   □ Se in portafoglio: valuta se tenere con trailing stop o chiudere
 □ Se troppi candidati: esegui prompt Claude 3C
-□ Imposta alert TradingView per tutti i titoli classe A e B
+□ Carica Pine weekly_regime_engine + daily_signal_engine sui grafici dei titoli A/B
+□ Incolla entry/stop/target dei titoli A nei Settings del Pine daily
+□ Imposta alert push del Pine daily (BRK/PB/GC/SQZ/DIV)
 ```
 
 ### Giornaliero (15 minuti)
 ```
-□ Controlla alert TradingView scattati
-□ Se alert scattato:
-  □ Esegui prompt Perplexity 2C (check rapido)
-  □ Se tutto ok: esegui trade con size calcolata
-  □ Logga nel journal Python
-□ Controlla P/L posizioni aperte (solo guardare, non agire d'impulso)
+□ Controlla alert push dal Pine daily (trigger real-time su watchlist)
+□ Se alert scattato su un titolo classe A/B:
+  □ Esegui prompt Perplexity 2C (check red flag ultime 24h)
+  □ Verifica che il regime weekly sia ancora ≥ NEUTRAL
+    (rilancia propicks-scan TICKER se dubbi — il regime cambia lentamente)
+  □ Se tutto ok: propicks-portfolio size + add
+  □ Logga con propicks-journal add
+□ Controlla P/L posizioni aperte (propicks-portfolio status — solo guardare, non agire d'impulso)
 ```
 
 ### Venerdì sera — Review settimanale (30 minuti)
 ```
-□ Aggiorna tabella posizioni con prezzi correnti
-□ Esegui prompt Claude 3B (revisione settimanale)
-□ Aggiorna stop loss dove necessario
-□ Aggiorna alert TradingView
+□ propicks-portfolio status + propicks-portfolio risk → snapshot P/L e rischio a stop
+□ Rilancia propicks-scan su ogni posizione aperta per aggiornare regime weekly
+  ↳ se una posizione è scivolata a regime BEAR, tighten stop o chiudi
+□ Esegui prompt Claude 3B (revisione settimanale) con la tabella di status
+□ Aggiorna stop loss dove necessario (propicks-portfolio update)
+□ Aggiorna i livelli negli input del Pine daily se lo stop è stato spostato
 □ Controlla se qualche titolo della watchlist si è avvicinato all'entry
-□ Calcola P/L settimanale e aggiorna journal
+□ Calcola P/L settimanale (propicks-journal stats) e aggiorna journal
 □ Se un trade è stato chiuso: esegui prompt Claude 3D (post-trade)
 ```
 
 ### Fine mese — Review mensile (1 ora)
 ```
-□ Calcola performance mensile totale
-□ Confronta vs S&P 500 e FTSE MIB dello stesso periodo
-□ Analizza win rate e profit factor dal journal
+□ propicks-report monthly → report markdown con performance vs ^GSPC e FTSEMIB.MI
+□ Analizza win rate e profit factor dal journal (propicks-journal stats)
 □ Identifica pattern: quali strategie Pro Picks performano meglio?
-□ Rivedi le regole: qualcosa da aggiustare?
+□ Cross-check regime: i trade con verdict CONFIRM su regime STRONG_BULL hanno davvero vinto di più?
+□ Rivedi le regole: qualcosa da aggiustare? (ricorda: modifiche al config.py vanno replicate nei Pine)
 □ Prepara per il prossimo update Pro Picks
 ```
 
@@ -395,8 +451,10 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 - Data e prezzo entry / exit
 - P/L in % e in valore assoluto
 - Durata del trade (giorni)
-- Score Claude (1-10) al momento dell'entry
+- Score Claude (1-10) al momento dell'entry (da verdict `--validate`)
 - Score tecnico Python al momento dell'entry
+- Regime weekly al momento dell'entry (STRONG_BULL / BULL / NEUTRAL)
+- Trigger Pine che ha scatenato l'entry (BRK / PB / GC / SQZ / DIV)
 - Motivo entry (catalyst specifico)
 - Motivo exit (stop/target/altro)
 - Note qualitative post-trade

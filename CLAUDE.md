@@ -15,10 +15,11 @@ propicks-ai-framework/
 ├── CLAUDE.md                  # Questo file — contesto per Claude Code
 ├── pyproject.toml             # Deps, entry points CLI, tool config (ruff/pytest/mypy)
 ├── src/propicks/
-│   ├── config.py              # Parametri operativi (capitale, regole, pesi)
+│   ├── config.py              # Parametri operativi (capitale, regole, pesi, regime, contract Pine)
 │   ├── domain/                # Puro: nessun I/O, nessuna rete
-│   │   ├── indicators.py      # EMA, RSI, ATR, pct_change
-│   │   ├── scoring.py         # 6 sub-score + classify + analyze_ticker
+│   │   ├── indicators.py      # EMA, RSI, ATR, ADX, MACD, pct_change
+│   │   ├── scoring.py         # 6 sub-score + classify + analyze_ticker (orchestra regime)
+│   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
 │   │   ├── sizing.py          # calculate_position_size, portfolio_value
 │   │   ├── validation.py      # validate_scores, validate_date
 │   │   └── verdict.py         # verdict qualitativo, max_drawdown
@@ -42,6 +43,11 @@ propicks-ai-framework/
 │       ├── portfolio.py       # propicks-portfolio
 │       ├── journal.py         # propicks-journal
 │       └── report.py          # propicks-report
+├── tradingview/               # Pine script (contract con config.py)
+│   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
+│   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
+├── docs/
+│   └── Trading_System_Playbook.md  # Workflow operativo + prompt Perplexity/Claude
 ├── tests/
 │   ├── conftest.py            # Fixture condivise
 │   └── unit/                  # Test puri su domain/ (no I/O, no rete)
@@ -49,6 +55,7 @@ propicks-ai-framework/
 │       ├── test_scoring.py
 │       ├── test_sizing.py
 │       ├── test_verdict.py
+│       ├── test_regime.py
 │       └── test_thesis_validator.py # SDK Anthropic mockato
 ├── data/                      # Runtime state (gitignored)
 │   ├── portfolio.json         # Stato corrente del portafoglio
@@ -126,9 +133,9 @@ propicks-scan AAPL MSFT NVDA AMZN --strategy TechTitans
 propicks-scan AAPL --json
 propicks-scan AAPL MSFT --brief
 
-# Validazione AI della tesi (gated su score_composite >= 60, cache 24h)
+# Validazione AI della tesi (gate doppio: score >= 60 E regime weekly >= NEUTRAL)
 propicks-scan AAPL --validate
-propicks-scan AAPL --force-validate   # bypassa gate e cache
+propicks-scan AAPL --force-validate   # bypassa gate (score + regime) e cache
 
 # Calcolo position size per un trade
 propicks-portfolio size AAPL --entry 185.50 --stop 171.50 \
@@ -180,6 +187,7 @@ Queste regole sono hardcoded e NON devono essere aggirate:
 - **Max loss mensile**: 15% del capitale totale → blocco trading e revisione
 - **No entry se earnings entro 5 giorni** (warning, non blocco — il trader decide)
 - **Score minimo per entry**: Claude >= 6/10, Tecnico >= 60/100
+- **Regime weekly minimo per validazione AI**: NEUTRAL (code >= 3). BEAR/STRONG_BEAR skippano `--validate` senza spendere token (override con `--force-validate`).
 
 ## Convenzioni Codice
 
@@ -202,11 +210,16 @@ Queste regole sono hardcoded e NON devono essere aggirate:
 - **`ai/`** è l'unico modulo che parla con l'SDK Anthropic (parallelo a
   `market/`). Espone `validate_thesis(analysis)` che ritorna un dict strutturato;
   nessun altro layer importa `anthropic` direttamente. Include gate su
-  `score_composite`, cache giornaliera su disco (`data/ai_cache/`) e tool
-  `web_search` server-side per dati real-time (spot, earnings, news).
+  `score_composite` **e sul regime weekly** (skip se BEAR/STRONG_BEAR),
+  cache giornaliera su disco (`data/ai_cache/`) e tool `web_search`
+  server-side per dati real-time (spot, earnings, news).
 - **`reports/`** può importare da tutti gli altri layer per comporre i markdown.
 - **`cli/`** è thin: parsing argparse + chiamata a funzioni di domain/io/ai/reports
   + formatting tabellare. Nessuna logica di business qui.
+- **`tradingview/`** NON è Python — sono Pine script che replicano visualmente
+  il motore. Il Pine è il layer real-time (timing + alert) che yfinance (EOD)
+  non copre. I parametri di default devono matchare `config.py` byte per byte.
+  Contract documentato in testa a entrambi i file `.pine`.
 
 ## Workflow di Integrazione con AI
 
@@ -222,6 +235,32 @@ direttamente l'API Anthropic (`claude-opus-4-6` di default) e restituisce un
 verdict strutturato (CONFIRM/CAUTION/REJECT) validato via pydantic. Il prompt di
 sistema è statico (prompt caching abilitato), il contenuto dinamico viene
 inserito nel user prompt per non invalidare la cache lato server.
+
+**Il prompt Perplexity resta in pipeline come cross-check indipendente**:
+il prompt 2C (check news/earnings ultime 24h) viene eseguito manualmente
+prima dell'entry anche se Claude ha già dato CONFIRM. Perplexity e Claude
+hanno fonti e bias diversi — la ridondanza è intenzionale, non overhead.
+
+## Pipeline end-to-end (Perplexity → Python → TradingView)
+
+La pipeline è **manuale** ma con contract rigidi tra gli stadi:
+
+```
+Pro Picks (mensile)
+  → Perplexity 2A/2B (news + catalyst, cross-check fondamentale)
+  → propicks-scan --validate  ← regime weekly + score + verdict Claude
+  → copy/paste del blocco TRADINGVIEW PINE INPUTS nei settings del Pine daily
+  → Pine daily (timing real-time: BRK/PB/GC/SQZ/DIV → alert push)
+  → Perplexity 2C (check red flag ultime 24h)
+  → propicks-portfolio size + add
+  → propicks-journal add
+```
+
+**Consistency garantita da:**
+- `domain/regime.py` = replica Python del Pine weekly (stessa classificazione 5-bucket)
+- `tradingview/*.pine` hanno header che punta a `config.py` come source of truth per EMA/RSI/ATR/volume/soglie
+- `propicks-scan` stampa sempre il blocco Pine-ready a fine output così il trader copia-incolla i livelli invece di digitarli
+- Il gate regime in `validate_thesis` impedisce chiamate Claude quando il Pine weekly direbbe NO ENTRY
 
 ## Estensioni Future (Roadmap)
 

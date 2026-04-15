@@ -67,7 +67,7 @@ L'install editable registra **4 comandi CLI** nel PATH del virtualenv:
 propicks-scan AAPL
 ```
 
-Stampa tabella con indicatori (EMA, RSI, ATR, volume), sei sub-score, score composito 0-100 e classificazione A/B/C/D. Include il blocco **COPIA/INCOLLA per prompt Claude 3A** da passare all'analisi qualitativa.
+Stampa tabella con **regime macro weekly** (STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR), indicatori (EMA, RSI, ATR, volume), sei sub-score, score composito 0-100, classificazione A/B/C/D e un **blocco pronto da incollare negli input del Pine daily** (`tradingview/daily_signal_engine.pine`) con entry / stop / target.
 
 Batch multi-ticker:
 
@@ -80,9 +80,11 @@ propicks-scan AAPL MSFT --brief # solo tabella riassuntiva
 Validazione AI della tesi (richiede `ANTHROPIC_API_KEY`):
 
 ```bash
-propicks-scan AAPL --validate         # solo se score_composite >= 60 (gate), con cache giornaliera
+propicks-scan AAPL --validate         # gate su score ≥ 60 E regime weekly ≥ NEUTRAL, cache giornaliera
 propicks-scan AAPL --force-validate   # bypassa gate e cache, forza la chiamata
 ```
+
+La validazione viene **saltata** se il regime weekly è BEAR o STRONG_BEAR (mirror del filtro Pine `entryAllowed = regime >= NEUTRAL`): nessuna chiamata Claude, nessun costo. Usa `--force-validate` se vuoi comunque un'opinione su un setup controtrend.
 
 Output: verdict (CONFIRM/CAUTION/REJECT), conviction 0-10, bull/bear case, catalizzatori, rischi, trigger di invalidazione e allineamento con il setup tecnico. I risultati vengono cacheati per 24h in `data/ai_cache/`.
 
@@ -175,13 +177,15 @@ I test unit sono puri (nessuna rete, nessun filesystem mutato) e coprono indicat
 ```
 propicks-ai-framework/
 ├── src/propicks/
-│   ├── config.py         # Parametri operativi
-│   ├── domain/           # Logica pura (indicators, scoring, sizing, verdict)
+│   ├── config.py         # Parametri operativi (invarianti + contract Pine)
+│   ├── domain/           # Logica pura (indicators, scoring, sizing, verdict, regime)
 │   ├── io/               # Persistenza JSON atomica (portfolio, journal)
 │   ├── market/           # Adapter yfinance (unico punto che parla con la rete)
 │   ├── ai/               # Adapter Anthropic (validazione tesi via Claude)
 │   ├── reports/          # Generatori markdown (weekly, monthly, benchmark)
 │   └── cli/              # Thin argparse wrappers (entry points)
+├── tradingview/          # Pine scripts (daily_signal + weekly_regime)
+├── docs/                 # Playbook operativo, prompt AI, note
 ├── tests/unit/           # Test puri su domain/
 ├── data/                 # Stato runtime (portfolio.json, journal.json)
 └── reports/              # Report markdown generati
@@ -195,6 +199,22 @@ La separazione dei layer è strict: `domain/` non importa da `io/market/cli/repo
 
 `ai/` è l'unico modulo che parla con l'SDK Anthropic (parallelo a `market/` per yfinance): la CLI chiama `validate_thesis` e riceve un verdict strutturato. Nessun altro layer importa `anthropic` direttamente.
 
+## Integrazione con TradingView
+
+La cartella [`tradingview/`](./tradingview/) contiene due Pine script che affiancano il motore Python:
+
+| File | Timeframe | Scopo |
+|------|-----------|-------|
+| `weekly_regime_engine.pine` | Weekly | Filtro macro (5-bucket: STRONG_BULL → STRONG_BEAR). Stessa logica replicata in `domain/regime.py`. |
+| `daily_signal_engine.pine` | Daily | Rileva trigger di entry in tempo reale (BREAKOUT, PULLBACK, GOLDEN_CROSS, SQUEEZE, DIV) che yfinance (EOD) non vede. |
+
+**Contract**: i parametri di default dei Pine (EMA/RSI/ATR/volume, pesi scoring, soglie A/B/C/D, soglie regime) **devono** corrispondere a `src/propicks/config.py`. Un commento in testa a entrambi i file Pine segna la regola; se tocchi i parametri da un lato aggiorna anche l'altro.
+
+**Divisione del lavoro**:
+- Python calcola regime weekly + score tecnico + validazione AI + sizing/journal.
+- TradingView osserva il prezzo in tempo reale e lancia gli alert di entry.
+- `propicks-scan --validate` stampa a fine output un blocco **TRADINGVIEW PINE INPUTS** con i livelli (entry / stop / target) da incollare direttamente nei settings del Pine daily.
+
 ## Regole di business (invarianti)
 
 Queste regole sono hardcoded e applicate dalla validazione di `add_position`:
@@ -206,6 +226,7 @@ Queste regole sono hardcoded e applicate dalla validazione di `add_position`:
 - Max loss settimanale: **5%** del capitale → stop trading
 - Max loss mensile: **15%** del capitale → stop trading + revisione
 - Score minimo per entry: Claude **≥ 6/10**, Tecnico **≥ 60/100**
+- Regime weekly minimo per validazione AI: **NEUTRAL** (code ≥ 3). BEAR/STRONG_BEAR blocca `--validate` (override con `--force-validate`).
 
 ## Workflow con AI
 
