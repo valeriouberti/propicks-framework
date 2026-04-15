@@ -14,7 +14,7 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 
-from propicks.config import EMA_SLOW
+from propicks.config import EMA_SLOW, REGIME_MIN_WEEKLY_BARS
 
 
 @dataclass
@@ -45,6 +45,27 @@ def download_history(ticker: str, period: str = "1y") -> pd.DataFrame:
         raise DataUnavailable(
             ticker,
             f"storia insufficiente: {len(hist)} barre (min {min_bars} per EMA{EMA_SLOW} stabile)",
+        )
+    return hist
+
+
+def download_weekly_history(ticker: str, period: str = "3y") -> pd.DataFrame:
+    """Scarica storico weekly per il regime classifier.
+
+    Default ``period="3y"`` garantisce >= 150 barre settimanali, ampio margine
+    oltre il warm-up ``REGIME_MIN_WEEKLY_BARS`` per stabilità di EMA40 + ADX.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=False)
+    except Exception as exc:
+        raise DataUnavailable(ticker, f"errore yfinance (weekly): {exc}") from exc
+    if hist is None or hist.empty:
+        raise DataUnavailable(ticker, "nessun dato weekly disponibile")
+    if len(hist) < REGIME_MIN_WEEKLY_BARS:
+        raise DataUnavailable(
+            ticker,
+            f"storia weekly insufficiente: {len(hist)} barre "
+            f"(min {REGIME_MIN_WEEKLY_BARS})",
         )
     return hist
 

@@ -5,7 +5,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi, pct_change
+from propicks.domain.indicators import (
+    compute_adx,
+    compute_atr,
+    compute_ema,
+    compute_macd,
+    compute_rsi,
+    pct_change,
+)
 
 
 def test_ema_constant_series_equals_constant():
@@ -46,3 +53,38 @@ def test_pct_change_basic():
     s = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0, 110.0])
     # bars=5 → confronto iloc[-6] = 100 con iloc[-1] = 110 → +10%
     assert pct_change(s, bars=5) == 0.1
+
+
+def test_adx_strong_trend_high_value():
+    # Serie strettamente monotona → trend fortissimo → ADX alto
+    n = 100
+    close = pd.Series(np.linspace(100, 200, n))
+    high = close + 1.0
+    low = close - 1.0
+    adx = compute_adx(high, low, close, period=14).dropna()
+    assert adx.iloc[-1] > 40  # trend direzionale puro
+
+
+def test_adx_choppy_range_low_value():
+    np.random.seed(7)
+    # Prezzo oscillante in un range stretto → no trend → ADX basso
+    close = pd.Series(100 + np.sin(np.linspace(0, 20, 200)) * 2 + np.random.randn(200) * 0.3)
+    high = close + 0.5
+    low = close - 0.5
+    adx = compute_adx(high, low, close, period=14).dropna()
+    assert adx.iloc[-1] < 30
+
+
+def test_macd_bull_cross_when_trend_up():
+    # Prezzo in salita → EMA fast > EMA slow → MACD line > 0
+    close = pd.Series(np.linspace(100, 150, 80))
+    macd_line, signal_line, hist = compute_macd(close)
+    assert macd_line.iloc[-1] > 0
+    assert macd_line.iloc[-1] > signal_line.iloc[-1]
+
+
+def test_macd_bear_cross_when_trend_down():
+    close = pd.Series(np.linspace(150, 100, 80))
+    macd_line, signal_line, hist = compute_macd(close)
+    assert macd_line.iloc[-1] < 0
+    assert macd_line.iloc[-1] < signal_line.iloc[-1]

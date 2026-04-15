@@ -61,3 +61,49 @@ def pct_change(close: pd.Series, bars: int) -> float | None:
     if past <= 0:
         return None
     return (now - past) / past
+
+
+def compute_adx(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = 14,
+) -> pd.Series:
+    """ADX di Wilder — misura la forza del trend, non la direzione.
+
+    Implementazione speculare al blocco ADX del Pine weekly_regime_engine:
+    smoothing RMA (equivalente a EMA con alpha=1/period) su TR, +DM, -DM.
+    """
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    plus_dm_s = pd.Series(plus_dm, index=high.index)
+    minus_dm_s = pd.Series(minus_dm, index=high.index)
+
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * plus_dm_s.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm_s.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
+    return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+
+def compute_macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """MACD classico. Ritorna (macd_line, signal_line, histogram)."""
+    ema_fast = compute_ema(close, fast)
+    ema_slow = compute_ema(close, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = compute_ema(macd_line, signal)
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist

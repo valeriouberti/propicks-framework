@@ -22,11 +22,23 @@ def _fmt_pct(x: float | None) -> str:
     return f"{x * 100:+.2f}%" if x is not None else "-"
 
 
+def _regime_row(regime: dict | None) -> str:
+    if not regime:
+        return "n/a (dati weekly insufficienti)"
+    gate = "✓ ENTRY OK" if regime["entry_allowed"] else "✗ NO ENTRY"
+    return (
+        f"{regime['regime']} ({regime['regime_code']}/5)  {gate}  "
+        f"| trend {regime['trend']}/{regime['trend_strength']} "
+        f"| ADX {regime['adx']} | RSI(w) {regime['rsi']}"
+    )
+
+
 def print_analysis(r: dict) -> None:
     """Output dettagliato per un singolo ticker."""
     header = [
         ["Ticker", r["ticker"]],
         ["Strategia", r["strategy"] or "-"],
+        ["Regime weekly", _regime_row(r.get("regime"))],
         ["Prezzo", f"{r['price']:.2f}"],
         ["EMA fast / slow", f"{r['ema_fast']:.2f} / {r['ema_slow']:.2f}"],
         ["RSI(14)", f"{r['rsi']:.2f}"],
@@ -167,6 +179,33 @@ def print_ai_verdict(r: dict) -> None:
                 print(f"  - {k}: {adj[k]}")
 
 
+def print_tradingview_block(r: dict) -> None:
+    """Blocco con i numeri da incollare negli input del Pine daily.
+
+    Usa target da Claude se disponibile, altrimenti lo omette
+    (il Pine accetta 0 come "disabled" ma mostrarlo vuoto è più chiaro).
+    """
+    price = r["price"]
+    v = r.get("ai_verdict") or {}
+    adj = v.get("suggested_adjustments") or {}
+
+    stop = adj.get("stop") if isinstance(adj.get("stop"), (int, float)) else r["stop_suggested"]
+    target = adj.get("target") if isinstance(adj.get("target"), (int, float)) else None
+
+    print()
+    print("=" * 70)
+    print(f"TRADINGVIEW PINE INPUTS — {r['ticker']}")
+    print("=" * 70)
+    print('Apri il Pine "AI Trading System — Daily" → Settings → Position:')
+    print(f"  Entry Price:   {price:.2f}")
+    print(f"  Stop Loss:     {stop:.2f}")
+    if target is not None:
+        print(f"  Target:        {target:.2f}")
+    else:
+        print("  Target:        -  (Claude non ha suggerito un target)")
+    print()
+
+
 def print_copy_paste(results: list[dict]) -> None:
     """Blocco pronto da incollare nel prompt Claude 3A."""
     print()
@@ -244,10 +283,12 @@ def main() -> int:
     if len(results) == 1:
         print_analysis(results[0])
         print_ai_verdict(results[0])
+        print_tradingview_block(results[0])
     else:
         print_summary_table(results)
         for r in results:
             print_ai_verdict(r)
+            print_tradingview_block(r)
     # print_copy_paste(results)
     return 0
 

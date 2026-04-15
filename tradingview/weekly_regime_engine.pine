@@ -15,6 +15,14 @@
 //    indipendentemente da quello che dice il daily
 // 3. Usa i livelli di supporto/resistenza settimanali come
 //    riferimento per stop loss e target
+//
+// ─── CONTRATTO CON IL MOTORE PYTHON ─────────────────────────────────────────
+// I default weekly qui DEVONO corrispondere a src/propicks/config.py:
+//   REGIME_WEEKLY_EMA_FAST=10, REGIME_WEEKLY_EMA_SLOW=30,
+//   REGIME_WEEKLY_EMA_200D=40, REGIME_ADX_PERIOD=14,
+//   REGIME_ADX_STRONG=25, REGIME_ADX_WEAK=20.
+// La classificazione 5/4/3/2/1 (STRONG_BULL…STRONG_BEAR) è replicata in
+// src/propicks/domain/regime.py. Se cambi le soglie qui, aggiorna anche là.
 // ============================================================================
 
 //@version=6

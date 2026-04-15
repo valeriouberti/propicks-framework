@@ -29,7 +29,12 @@ from propicks.config import (
     WEIGHT_VOLUME,
 )
 from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi, pct_change
-from propicks.market.yfinance_client import DataUnavailable, download_history
+from propicks.domain.regime import classify_regime
+from propicks.market.yfinance_client import (
+    DataUnavailable,
+    download_history,
+    download_weekly_history,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +189,13 @@ def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict
         print(f"[errore] {err}", file=sys.stderr)
         return None
 
+    regime: Optional[dict] = None
+    try:
+        weekly = download_weekly_history(ticker)
+        regime = classify_regime(weekly)
+    except DataUnavailable as err:
+        print(f"[warning] regime weekly non disponibile per {ticker}: {err}", file=sys.stderr)
+
     close = hist["Close"]
     high = hist["High"]
     low = hist["Low"]
@@ -249,4 +261,5 @@ def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict
         "perf_1w": pct_change(close, 5),
         "perf_1m": pct_change(close, 21),
         "perf_3m": pct_change(close, 63),
+        "regime": regime,
     }

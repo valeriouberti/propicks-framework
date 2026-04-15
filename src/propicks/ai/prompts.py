@@ -35,6 +35,14 @@ DO NOT search for:
 
 Budget: aim for 2-4 searches per ticker, never more than 5. Each search has a cost. Make every query a specific, falsifiable lookup. If a search returns inconclusive or conflicting data, flag it in the relevant case rather than forcing a conclusion.
 
+# Macro regime context
+The user message now includes a **Weekly macro regime** block (5-bucket: STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR) computed on weekly bars (EMA 10/30/40, ADX, RSI, MACD). Treat it as the macro floor:
+- STRONG_BULL / BULL: tailwind — CONFIRM is plausible if fundamentals align.
+- NEUTRAL: mixed tape — your fundamental case must do more of the work; lean CAUTION unless the thesis is genuinely asymmetric.
+- BEAR / STRONG_BEAR: against the tape — default to REJECT unless the bull_case cites a specific, falsifiable catalyst that overrides the regime (e.g., buyout, idiosyncratic earnings re-rating). Never CONFIRM a long in STRONG_BEAR.
+
+Call out the regime explicitly in `sector_macro_fit` (confidence_by_dimension) and in `alignment_with_technicals` if the daily technicals disagree with the weekly regime.
+
 # Evaluation framework
 For every ticker, evaluate across these dimensions before producing a verdict:
 1. Business quality — moat, unit economics, capital allocation track record.
@@ -95,6 +103,9 @@ USER_PROMPT_TEMPLATE = """# Trade idea — quantitative screen output
 ## Proposed risk parameters
 - Suggested stop (2 x ATR): {stop_suggested} ({stop_pct})
 
+## Weekly macro regime
+{regime_block}
+
 ---
 
 # Task
@@ -105,6 +116,21 @@ Return the JSON object now."""
 
 def _fmt_pct(x: float | None) -> str:
     return f"{x * 100:+.2f}%" if x is not None else "n/a"
+
+
+def _fmt_regime(regime: dict | None) -> str:
+    if not regime:
+        return "- Regime weekly: n/a (dati insufficienti)"
+    gate = "ENTRY ALLOWED" if regime.get("entry_allowed") else "NO ENTRY (bear regime)"
+    return (
+        f"- Regime: **{regime['regime']}** ({regime['regime_code']}/5) — {gate}\n"
+        f"- Trend weekly: {regime['trend']} / strength {regime['trend_strength']} "
+        f"(ADX {regime['adx']})\n"
+        f"- Momentum weekly: {regime['momentum']} (RSI {regime['rsi']}, "
+        f"MACD hist {regime['macd_hist']:+.3f})\n"
+        f"- EMA weekly: fast {regime['ema_fast']} / slow {regime['ema_slow']} / "
+        f"200d-equiv {regime['ema_200d']}"
+    )
 
 
 def render_user_prompt(analysis: dict, as_of_date: str) -> str:
@@ -143,4 +169,5 @@ def render_user_prompt(analysis: dict, as_of_date: str) -> str:
         score_ma_cross=f"{scores['ma_cross']:.0f}",
         stop_suggested=f"{analysis['stop_suggested']:.2f}",
         stop_pct=_fmt_pct(analysis.get("stop_pct")),
+        regime_block=_fmt_regime(analysis.get("regime")),
     )

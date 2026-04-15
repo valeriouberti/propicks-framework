@@ -14,6 +14,14 @@
 // 2. Configura gli alert (tasto destro → Add Alert on Indicator)
 // 3. Quando scatta un alert, esegui il check Perplexity (prompt 2C)
 //    e verifica lo score Python prima di entrare
+//
+// ─── CONTRATTO CON IL MOTORE PYTHON ─────────────────────────────────────────
+// I default sotto DEVONO corrispondere a src/propicks/config.py:
+//   EMA_FAST=20, EMA_SLOW=50, RSI_PERIOD=14, ATR_PERIOD=14,
+//   VOLUME_AVG_PERIOD=20, WEIGHT_* (composite).
+// I bucket degli score e le soglie A/B/C/D (75/60/45) riflettono
+// src/propicks/domain/scoring.py. Non modificare un solo lato:
+// se tocchi i parametri qui, aggiorna anche config.py (e viceversa).
 // ============================================================================
 
 //@version=6

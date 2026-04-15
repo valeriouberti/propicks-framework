@@ -63,6 +63,18 @@ LOOKBACK_DAYS: int = 120
 
 
 # ---------------------------------------------------------------------------
+# WEEKLY REGIME (filtro macro — replica Pine weekly_regime_engine.pine)
+# ---------------------------------------------------------------------------
+REGIME_WEEKLY_EMA_FAST: int = 10    # ≈ EMA 50 daily
+REGIME_WEEKLY_EMA_SLOW: int = 30    # ≈ EMA 150 daily
+REGIME_WEEKLY_EMA_200D: int = 40    # ≈ EMA 200 daily
+REGIME_ADX_PERIOD: int = 14
+REGIME_ADX_STRONG: float = 25.0
+REGIME_ADX_WEAK: float = 20.0
+REGIME_MIN_WEEKLY_BARS: int = 60    # warm-up per EMA40 stabile
+
+
+# ---------------------------------------------------------------------------
 # SCORING WEIGHTS
 # ---------------------------------------------------------------------------
 WEIGHT_TREND: float = 0.25

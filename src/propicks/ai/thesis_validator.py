@@ -25,7 +25,7 @@ from propicks.config import (
 )
 
 
-_CACHE_VERSION = "v3"
+_CACHE_VERSION = "v4"
 
 _RR_TOLERANCE = 0.05
 _RR_CONFIRM_FLOOR = 2.0
@@ -122,6 +122,16 @@ def validate_thesis(
     """
     if gate and analysis.get("score_composite", 0) < AI_MIN_SCORE_FOR_VALIDATION:
         return None
+
+    if gate:
+        regime = analysis.get("regime")
+        if regime is not None and not regime.get("entry_allowed", True):
+            print(
+                f"[ai] {analysis.get('ticker', '?')} skipped: weekly regime "
+                f"{regime.get('regime', '?')} — no long entries allowed",
+                file=sys.stderr,
+            )
+            return None
 
     ticker = analysis["ticker"]
     day = date.today().isoformat()
