@@ -1,0 +1,265 @@
+// ============================================================================
+// AI TRADING SYSTEM — Daily Signal Engine v1.0
+// ============================================================================
+// Timeframe: DAILY
+// Scopo: Entry timing, alert operativi, scoring visuale
+//
+// Questo indicatore è il pannello operativo quotidiano.
+// Mostra i segnali di entry/exit in tempo reale, lo score tecnico
+// composito (allineato al motore Python), e genera alert automatici
+// per breakout, pullback, volume spike e stop loss.
+//
+// COME USARLO:
+// 1. Piazza sul grafico daily dei titoli nella tua watchlist Pro Picks
+// 2. Configura gli alert (tasto destro → Add Alert on Indicator)
+// 3. Quando scatta un alert, esegui il check Perplexity (prompt 2C)
+//    e verifica lo score Python prima di entrare
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — Daily", overlay=true, max_labels_count=50, max_lines_count=50)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+
+// Trend
+emaFastLen   = input.int(20, "EMA Fast", minval=5, maxval=50, group="Trend")
+emaSlowLen   = input.int(50, "EMA Slow", minval=20, maxval=200, group="Trend")
+
+// Momentum
+rsiLen       = input.int(14, "RSI Period", minval=5, maxval=30, group="Momentum")
+rsiOB        = input.int(70, "RSI Overbought", minval=60, maxval=90, group="Momentum")
+rsiOS        = input.int(30, "RSI Oversold", minval=10, maxval=40, group="Momentum")
+
+// Volume
+volAvgLen    = input.int(20, "Volume MA Period", minval=10, maxval=50, group="Volume")
+volSpike     = input.float(1.5, "Volume Spike Multiplier", minval=1.2, maxval=5.0, step=0.1, group="Volume")
+volExtreme   = input.float(2.5, "Volume Extreme Multiplier", minval=2.0, maxval=10.0, step=0.5, group="Volume")
+
+// ATR / Risk
+atrLen       = input.int(14, "ATR Period", minval=5, maxval=30, group="Risk")
+atrStopMult  = input.float(2.0, "ATR Stop Multiplier", minval=1.0, maxval=4.0, step=0.5, group="Risk")
+
+// Display
+showEMA      = input.bool(true, "Show EMA Lines", group="Display")
+showSignals  = input.bool(true, "Show Entry/Exit Signals", group="Display")
+showStop     = input.bool(true, "Show ATR Stop Level", group="Display")
+showScore    = input.bool(true, "Show Score Table", group="Display")
+showBG       = input.bool(true, "Show Background Coloring", group="Display")
+
+// Position Management (per alert stop/target)
+entryPrice   = input.float(0.0, "Entry Price (0=disabled)", minval=0, group="Position")
+stopPrice    = input.float(0.0, "Stop Loss Price (0=auto ATR)", minval=0, group="Position")
+targetPrice  = input.float(0.0, "Target Price (0=disabled)", minval=0, group="Position")
+
+
+// ─── CALCOLI ────────────────────────────────────────────────────────────────
+
+// EMA
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+// RSI
+rsi = ta.rsi(close, rsiLen)
+
+// ATR
+atr = ta.atr(atrLen)
+atrPct = atr / close * 100
+
+// Volume
+volAvg = ta.sma(volume, volAvgLen)
+volRatio = volume / volAvg
+
+// 52 Week High/Low (252 trading days)
+high52w = ta.highest(high, 252)
+low52w  = ta.lowest(low, 252)
+distFromHigh = (high52w - close) / high52w * 100
+
+// MACD per conferma
+[macdLine, signalLine, macdHist] = ta.macd(close, 12, 26, 9)
+
+// Bollinger Bands per squeeze detection
+bbBasis = ta.sma(close, 20)
+bbDev   = ta.stdev(close, 20)
+bbUpper = bbBasis + 2 * bbDev
+bbLower = bbBasis - 2 * bbDev
+bbWidth = (bbUpper - bbLower) / bbBasis * 100
+bbSqueeze = bbWidth < ta.sma(bbWidth, 50) * 0.75  // Squeeze quando BB strette
+
+
+// ─── SCORING (replica del motore Python) ────────────────────────────────────
+
+// Score Trend (0-100)
+scoreTrend = close > emaFast and close > emaSlow and emaFast > emaSlow ? 100.0 : close > emaFast and close > emaSlow ? 80.0 : close > emaFast and close < emaSlow ? 60.0 : close < emaFast and close > emaSlow ? 40.0 : close < emaFast and close < emaSlow and emaFast < emaSlow ? 0.0 : 20.0
+
+// Score Momentum RSI (0-100)
+scoreMomentum = rsi >= 50 and rsi <= 65 ? 100.0 : rsi > 65 and rsi <= 70 ? 75.0 : rsi >= 40 and rsi < 50 ? 60.0 : rsi > 70 and rsi <= 80 ? 40.0 : rsi >= 30 and rsi < 40 ? 45.0 : rsi > 80 ? 15.0 : rsi < 30 ? 20.0 : 50.0
+
+// Score Volume (0-100)
+scoreVolume = volRatio >= 1.2 and volRatio <= 2.0 ? 100.0 : volRatio >= 1.0 and volRatio < 1.2 ? 70.0 : volRatio > 2.0 and volRatio <= 3.0 ? 80.0 : volRatio > 3.0 ? 60.0 : volRatio >= 0.7 and volRatio < 1.0 ? 50.0 : volRatio >= 0.5 and volRatio < 0.7 ? 30.0 : 15.0
+
+// Score Distance from 52w High (0-100)
+scoreDistHigh = distFromHigh < 3 ? 75.0 : distFromHigh >= 3 and distFromHigh < 5 ? 85.0 : distFromHigh >= 5 and distFromHigh < 10 ? 100.0 : distFromHigh >= 10 and distFromHigh < 15 ? 80.0 : distFromHigh >= 15 and distFromHigh < 25 ? 50.0 : distFromHigh >= 25 and distFromHigh < 35 ? 30.0 : 10.0
+
+// Score Volatility ATR% (0-100)
+scoreVol = atrPct >= 1.0 and atrPct <= 3.0 ? 100.0 : atrPct > 0.5 and atrPct < 1.0 ? 60.0 : atrPct > 3.0 and atrPct <= 5.0 ? 70.0 : atrPct > 5.0 ? 30.0 : atrPct < 0.5 ? 40.0 : 50.0
+
+// Score MA Cross (0-100)
+goldenCross = emaFast > emaSlow and emaFast[5] <= emaSlow[5]
+deathCross  = emaFast < emaSlow and emaFast[5] >= emaSlow[5]
+emaSpread   = math.abs(emaFast - emaSlow) / emaSlow
+
+scoreMACross = goldenCross ? 100.0 : deathCross ? 5.0 : emaFast > emaSlow and emaSpread > 0.02 ? 80.0 : emaFast > emaSlow ? 70.0 : emaFast < emaSlow and emaSpread > 0.02 ? 15.0 : 30.0
+
+// Composite Score (stessi pesi del Python)
+compositeScore = scoreTrend * 0.25 + scoreMomentum * 0.20 + scoreVolume * 0.15 + scoreDistHigh * 0.15 + scoreVol * 0.10 + scoreMACross * 0.15
+
+
+// ─── CONDIZIONI DI SEGNALE ──────────────────────────────────────────────────
+
+// BREAKOUT: prezzo rompe sopra EMA slow con volume
+breakoutSignal = close > emaSlow and close[1] <= emaSlow[1] and volRatio >= volSpike
+
+// PULLBACK su supporto EMA in uptrend
+pullbackSignal = low <= emaFast and close > emaFast * 0.99 and emaFast > emaSlow and rsi > 35
+
+// GOLDEN CROSS
+goldenCrossSignal = goldenCross
+
+// VOLUME SPIKE
+volumeSpikeSignal = volRatio >= volExtreme
+
+// SQUEEZE BREAKOUT (BB squeeze + breakout)
+squeezeBreakout = bbSqueeze[1] and not bbSqueeze and close > bbUpper
+
+// RSI DIVERGENZA BULLISH (prezzo fa lower low, RSI fa higher low)
+priceLowerLow = low < ta.lowest(low, 14)[1]
+rsiHigherLow  = rsi > ta.valuewhen(priceLowerLow[1], rsi, 0)
+bullishDiv    = priceLowerLow and rsiHigherLow and rsi < 40
+
+// SEGNALI BEARISH / EXIT
+deathCrossSignal = deathCross
+rsiOverboughtExit = rsi > 80 and rsi < rsi[1] and rsi[1] > rsi[2]  // RSI curva giù da >80
+
+// Stop Loss Level (ATR-based)
+atrStop = close - (atr * atrStopMult)
+
+// Position alerts
+hitStop   = stopPrice > 0 and close < stopPrice
+hitTarget = targetPrice > 0 and close > targetPrice
+
+
+// ─── VISUALIZZAZIONE ────────────────────────────────────────────────────────
+
+// EMA Lines
+plot(showEMA ? emaFast : na, "EMA Fast", color=color.new(#2196F3, 0), linewidth=2)
+plot(showEMA ? emaSlow : na, "EMA Slow", color=color.new(#FF9800, 0), linewidth=2)
+
+// ATR Stop Level
+plot(showStop ? atrStop : na, "ATR Stop", color=color.new(#F44336, 60), linewidth=1, style=plot.style_stepline)
+
+// Position levels
+plot(entryPrice > 0 ? entryPrice : na, "Entry", color=color.new(#FFFFFF, 50), linewidth=1, style=plot.style_linebr)
+plot(stopPrice > 0 ? stopPrice : na, "Stop", color=color.new(#F44336, 30), linewidth=2, style=plot.style_linebr)
+plot(targetPrice > 0 ? targetPrice : na, "Target", color=color.new(#4CAF50, 30), linewidth=2, style=plot.style_linebr)
+
+// Background color per regime
+regimeColor = compositeScore >= 75 ? color.new(#4CAF50, 92) : compositeScore >= 60 ? color.new(#8BC34A, 94) : compositeScore >= 45 ? color.new(#FFC107, 95) : compositeScore >= 30 ? color.new(#FF9800, 95) : color.new(#F44336, 95)
+bgcolor(showBG ? regimeColor : na)
+
+// ─── SEGNALI SUL GRAFICO ────────────────────────────────────────────────────
+
+if showSignals
+    // Entry signals (triangoli verdi sotto le candele)
+    if breakoutSignal
+        label.new(bar_index, low, "BRK", style=label.style_triangleup, color=color.new(#4CAF50, 0), textcolor=color.white, size=size.small)
+
+    if pullbackSignal
+        label.new(bar_index, low, "PB", style=label.style_triangleup, color=color.new(#2196F3, 0), textcolor=color.white, size=size.small)
+
+    if goldenCrossSignal
+        label.new(bar_index, low, "GC", style=label.style_triangleup, color=color.new(#FFD700, 0), textcolor=color.black, size=size.normal)
+
+    if squeezeBreakout
+        label.new(bar_index, low, "SQZ", style=label.style_triangleup, color=color.new(#9C27B0, 0), textcolor=color.white, size=size.small)
+
+    if bullishDiv
+        label.new(bar_index, low, "DIV", style=label.style_triangleup, color=color.new(#00BCD4, 0), textcolor=color.white, size=size.small)
+
+    // Exit / Warning signals (triangoli rossi sopra le candele)
+    if deathCrossSignal
+        label.new(bar_index, high, "DC", style=label.style_triangledown, color=color.new(#F44336, 0), textcolor=color.white, size=size.normal)
+
+    if rsiOverboughtExit
+        label.new(bar_index, high, "OB", style=label.style_triangledown, color=color.new(#FF9800, 0), textcolor=color.white, size=size.small)
+
+    // Volume spike (diamante sopra la candela)
+    if volumeSpikeSignal
+        label.new(bar_index, high, "VOL", style=label.style_diamond, color=color.new(#E91E63, 0), textcolor=color.white, size=size.tiny)
+
+
+// ─── TABELLA SCORE ──────────────────────────────────────────────────────────
+
+scoreColor(val) =>
+    val >= 75 ? color.new(#4CAF50, 0) : val >= 50 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+if showScore
+    var table scoreTable = table.new(position.top_right, 2, 10, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
+
+    classText = compositeScore >= 75 ? "A — ENTRY" : compositeScore >= 60 ? "B — WATCH" : compositeScore >= 45 ? "C — NEUTRAL" : "D — SKIP"
+
+    classColor = compositeScore >= 75 ? color.new(#4CAF50, 0) : compositeScore >= 60 ? color.new(#8BC34A, 0) : compositeScore >= 45 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+    table.cell(scoreTable, 0, 0, "SCORE", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 0, str.tostring(compositeScore, "#.0") + "/100", text_color=classColor, text_size=size.normal)
+
+    table.cell(scoreTable, 0, 1, "CLASS", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 1, classText, text_color=classColor, text_size=size.small)
+
+    table.cell(scoreTable, 0, 2, "Trend", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 2, str.tostring(scoreTrend, "#.0"), text_color=scoreColor(scoreTrend), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 3, "Momentum", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 3, str.tostring(scoreMomentum, "#.0"), text_color=scoreColor(scoreMomentum), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 4, "Volume", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 4, str.tostring(scoreVolume, "#.0"), text_color=scoreColor(scoreVolume), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 5, "Dist 52wH", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 5, str.tostring(scoreDistHigh, "#.0"), text_color=scoreColor(scoreDistHigh), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 6, "Volatility", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 6, str.tostring(scoreVol, "#.0"), text_color=scoreColor(scoreVol), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 7, "MA Cross", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 7, str.tostring(scoreMACross, "#.0"), text_color=scoreColor(scoreMACross), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 8, "RSI", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 8, str.tostring(rsi, "#.0"), text_color=scoreColor(scoreMomentum), text_size=size.tiny)
+
+    table.cell(scoreTable, 0, 9, "ATR Stop", text_color=color.gray, text_size=size.tiny)
+    table.cell(scoreTable, 1, 9, "$" + str.tostring(atrStop, "#.##"), text_color=color.new(#F44336, 0), text_size=size.tiny)
+
+
+// ─── ALERT ──────────────────────────────────────────────────────────────────
+
+alertcondition(breakoutSignal, "BREAKOUT", "BREAKOUT: {{ticker}} chiude sopra EMA slow con volume {{volume}} ({{interval}})")
+
+alertcondition(pullbackSignal, "PULLBACK su EMA", "PULLBACK: {{ticker}} tocca EMA fast in uptrend, RSI ok ({{interval}})")
+
+alertcondition(goldenCrossSignal, "GOLDEN CROSS", "GOLDEN CROSS: {{ticker}} EMA fast incrocia sopra EMA slow ({{interval}})")
+
+alertcondition(deathCrossSignal, "DEATH CROSS", "DEATH CROSS: {{ticker}} EMA fast incrocia sotto EMA slow ({{interval}})")
+
+alertcondition(volumeSpikeSignal, "VOLUME SPIKE", "VOLUME SPIKE: {{ticker}} volume estremo rispetto alla media ({{interval}})")
+
+alertcondition(squeezeBreakout, "SQUEEZE BREAKOUT", "SQUEEZE BREAKOUT: {{ticker}} esce da Bollinger squeeze al rialzo ({{interval}})")
+
+alertcondition(bullishDiv, "RSI DIVERGENZA BULLISH", "DIV BULLISH: {{ticker}} possibile divergenza RSI bullish ({{interval}})")
+
+alertcondition(hitStop, "STOP LOSS HIT", "STOP LOSS: {{ticker}} ha chiuso sotto il tuo stop ({{interval}})")
+
+alertcondition(hitTarget, "TARGET HIT", "TARGET: {{ticker}} ha raggiunto il target ({{interval}})")
+
+alertcondition(rsiOverboughtExit, "RSI OVERBOUGHT EXIT", "RSI EXIT: {{ticker}} RSI curva giù da zona ipercomprato ({{interval}})")
+
+alertcondition(compositeScore >= 75 and compositeScore[1] < 75, "SCORE UPGRADE A", "SCORE A: {{ticker}} score composito salito sopra 75/100 — valuta entry ({{interval}})")

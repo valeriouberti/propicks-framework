@@ -1,0 +1,288 @@
+// ============================================================================
+// AI TRADING SYSTEM — Weekly Trend & Regime v1.0
+// ============================================================================
+// Timeframe: WEEKLY
+// Scopo: Conferma trend macro, regime di mercato, livelli chiave
+//
+// Questo indicatore è il quadro strategico.
+// NON genera segnali di entry — quello lo fa il daily.
+// Serve per rispondere a una sola domanda:
+// "Il contesto macro supporta un ingresso long su questo titolo?"
+//
+// COME USARLO:
+// 1. Piazza sul grafico weekly PRIMA di valutare un entry sul daily
+// 2. Se il regime è BEARISH o il trend è giù, NON entrare long
+//    indipendentemente da quello che dice il daily
+// 3. Usa i livelli di supporto/resistenza settimanali come
+//    riferimento per stop loss e target
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — Weekly Regime", overlay=true, max_labels_count=30, max_lines_count=20)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+
+// Trend
+emaFastLen  = input.int(10, "EMA Fast (weekly)", minval=4, maxval=26, group="Trend", tooltip="10 settimane ≈ EMA 50 daily")
+emaSlowLen  = input.int(30, "EMA Slow (weekly)", minval=10, maxval=52, group="Trend", tooltip="30 settimane ≈ EMA 150 daily")
+ema200dLen  = input.int(40, "EMA 200d equiv (weekly)", minval=30, maxval=52, group="Trend", tooltip="40 settimane ≈ EMA 200 daily")
+
+// Momentum
+rsiLen      = input.int(14, "RSI Period", minval=5, maxval=30, group="Momentum")
+macdFast    = input.int(12, "MACD Fast", group="Momentum")
+macdSlow    = input.int(26, "MACD Slow", group="Momentum")
+macdSignal  = input.int(9, "MACD Signal", group="Momentum")
+
+// Market Structure
+pivotLookback = input.int(5, "Pivot Lookback", minval=2, maxval=10, group="Structure", tooltip="Periodi per identificare swing high/low")
+
+// Display
+showEMA     = input.bool(true, "Show EMA Lines", group="Display")
+showRegime  = input.bool(true, "Show Regime Panel", group="Display")
+showLevels  = input.bool(true, "Show Key Levels", group="Display")
+showPivots  = input.bool(true, "Show Pivot Points", group="Display")
+showBG      = input.bool(true, "Show Background", group="Display")
+showMACD    = input.bool(true, "Show MACD Panel", group="Display")
+
+
+// ─── CALCOLI TREND ──────────────────────────────────────────────────────────
+
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+ema200d  = ta.ema(close, ema200dLen)
+
+// RSI Weekly
+rsi = ta.rsi(close, rsiLen)
+
+// MACD Weekly
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// ATR Weekly
+atr = ta.atr(14)
+atrPct = atr / close * 100
+
+// ADX per forza del trend (approssimato con DI+/DI-)
+trueRange = ta.tr(true)
+plusDM  = high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0
+minusDM = low[1] - low > high - high[1] ? math.max(low[1] - low, 0) : 0
+smoothTR   = ta.rma(trueRange, 14)
+smoothPDM  = ta.rma(plusDM, 14)
+smoothMDM  = ta.rma(minusDM, 14)
+plusDI  = smoothPDM / smoothTR * 100
+minusDI = smoothMDM / smoothTR * 100
+dx = math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
+adx = ta.rma(dx, 14)
+
+// 52 Week High/Low
+high52w = ta.highest(high, 52)
+low52w  = ta.lowest(low, 52)
+distFromHigh = (high52w - close) / high52w * 100
+
+// Performance
+perfWeekly = nz((close - close[1]) / close[1] * 100)
+perf4w     = nz((close - close[4]) / close[4] * 100)
+perf13w    = nz((close - close[13]) / close[13] * 100)
+perf26w    = nz((close - close[26]) / close[26] * 100)
+
+
+// ─── REGIME CLASSIFICATION ──────────────────────────────────────────────────
+
+// Trend Direction
+trendBullish = emaFast > emaSlow and close > ema200d
+trendBearish = emaFast < emaSlow and close < ema200d
+trendMixed   = not trendBullish and not trendBearish
+
+// Trend Strength
+trendStrong   = adx > 25
+trendWeak     = adx < 20
+
+// Momentum State
+momentumBull  = rsi > 50 and macdLine > signalLine
+momentumBear  = rsi < 50 and macdLine < signalLine
+momentumDiv   = (rsi > 50 and macdLine < signalLine) or (rsi < 50 and macdLine > signalLine)
+
+// Price Position
+aboveAllEMA = close > emaFast and close > emaSlow and close > ema200d
+belowAllEMA = close < emaFast and close < emaSlow and close < ema200d
+
+// REGIME COMPOSITO
+// 5 = Strong Bull, 4 = Bull, 3 = Neutral/Transition, 2 = Bear, 1 = Strong Bear
+regime = aboveAllEMA and trendStrong and momentumBull ? 5 : trendBullish and momentumBull ? 4 : belowAllEMA and trendStrong and momentumBear ? 1 : trendBearish and momentumBear ? 2 : 3
+
+regimeText = regime == 5 ? "STRONG BULL" : regime == 4 ? "BULLISH" : regime == 3 ? "NEUTRAL" : regime == 2 ? "BEARISH" : "STRONG BEAR"
+
+regimeColor = regime == 5 ? color.new(#4CAF50, 0) : regime == 4 ? color.new(#8BC34A, 0) : regime == 3 ? color.new(#FFC107, 0) : regime == 2 ? color.new(#FF9800, 0) : color.new(#F44336, 0)
+
+// Entry Filter: il daily dovrebbe entrare long SOLO se regime >= 3
+entryAllowed = regime >= 3
+entryText = entryAllowed ? "ENTRY OK" : "NO ENTRY"
+entryColor = entryAllowed ? color.new(#4CAF50, 0) : color.new(#F44336, 0)
+
+// Segnale di cambio regime
+regimeChange = regime != regime[1]
+regimeUpgrade = regime > regime[1]
+regimeDowngrade = regime < regime[1]
+
+
+// ─── MARKET STRUCTURE — Pivot Points ────────────────────────────────────────
+
+pivotHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
+pivotLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
+
+// Higher Highs / Higher Lows detection
+var float lastPivotHigh = na
+var float lastPivotLow = na
+var bool higherHighs = false
+var bool higherLows = false
+
+if not na(pivotHigh)
+    higherHighs := pivotHigh > nz(lastPivotHigh)
+    lastPivotHigh := pivotHigh
+
+if not na(pivotLow)
+    higherLows := pivotLow > nz(lastPivotLow)
+    lastPivotLow := pivotLow
+
+// Market Structure
+structureBull = higherHighs and higherLows
+structureBear = not higherHighs and not higherLows
+
+
+// ─── VISUALIZZAZIONE ────────────────────────────────────────────────────────
+
+// EMA Lines
+p1 = plot(showEMA ? emaFast : na, "EMA Fast", color=color.new(#2196F3, 0), linewidth=2)
+p2 = plot(showEMA ? emaSlow : na, "EMA Slow", color=color.new(#FF9800, 0), linewidth=2)
+p3 = plot(showEMA ? ema200d : na, "EMA 200d", color=color.new(#F44336, 40), linewidth=3, style=plot.style_line)
+
+// EMA ribbon fill
+fillColor = emaFast > emaSlow ? color.new(#4CAF50, 88) : color.new(#F44336, 88)
+fill(p1, p2, color=fillColor)
+
+// Background per regime
+bgColor = regime == 5 ? color.new(#4CAF50, 94) : regime == 4 ? color.new(#8BC34A, 95) : regime == 3 ? color.new(#FFC107, 96) : regime == 2 ? color.new(#FF9800, 95) : color.new(#F44336, 94)
+bgcolor(showBG ? bgColor : na)
+
+// Pivot Points sul grafico
+if showPivots
+    if not na(pivotHigh)
+        label.new(bar_index - pivotLookback, pivotHigh, "H", style=label.style_circle, color=color.new(#F44336, 30), textcolor=color.white, size=size.tiny)
+    if not na(pivotLow)
+        label.new(bar_index - pivotLookback, pivotLow, "L", style=label.style_circle, color=color.new(#4CAF50, 30), textcolor=color.white, size=size.tiny)
+
+// Regime change markers
+if showPivots and regimeChange
+    if regimeUpgrade
+        label.new(bar_index, low, "▲ " + regimeText, style=label.style_label_up, color=color.new(#4CAF50, 20), textcolor=color.white, size=size.small)
+    if regimeDowngrade
+        label.new(bar_index, high, "▼ " + regimeText, style=label.style_label_down, color=color.new(#F44336, 20), textcolor=color.white, size=size.small)
+
+// Key levels (52w high/low)
+plot(showLevels ? high52w : na, "52w High", color=color.new(#4CAF50, 60), linewidth=1, style=plot.style_stepline)
+plot(showLevels ? low52w : na, "52w Low", color=color.new(#F44336, 60), linewidth=1, style=plot.style_stepline)
+
+
+// ─── PANNELLO REGIME ────────────────────────────────────────────────────────
+
+perfColor(val) =>
+    val > 0 ? color.new(#4CAF50, 0) : val < 0 ? color.new(#F44336, 0) : color.gray
+
+macdCol = macdLine > signalLine ? color.new(#4CAF50, 0) : color.new(#F44336, 0)
+macdTxt = macdLine > signalLine ? "BULL" : "BEAR"
+
+if showRegime
+    var table regimePanel = table.new(position.top_right, 2, 14, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
+
+    // Header
+    table.cell(regimePanel, 0, 0, "WEEKLY", text_color=color.gray, text_size=size.small)
+    table.cell(regimePanel, 1, 0, "REGIME", text_color=color.gray, text_size=size.small)
+
+    // Regime
+    table.cell(regimePanel, 0, 1, "Regime", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 1, regimeText, text_color=regimeColor, text_size=size.normal)
+
+    // Entry filter
+    table.cell(regimePanel, 0, 2, "Filter", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 2, entryText, text_color=entryColor, text_size=size.small)
+
+    // Trend
+    trendTxt = trendBullish ? "BULL" : trendBearish ? "BEAR" : "MIXED"
+    trendCol = trendBullish ? color.new(#4CAF50, 0) : trendBearish ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+    table.cell(regimePanel, 0, 3, "Trend", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 3, trendTxt + (trendStrong ? " ●" : trendWeak ? " ○" : ""), text_color=trendCol, text_size=size.tiny)
+
+    // ADX
+    table.cell(regimePanel, 0, 4, "ADX", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 4, str.tostring(adx, "#.0"), text_color=adx > 25 ? color.new(#4CAF50, 0) : color.new(#FFC107, 0), text_size=size.tiny)
+
+    // Structure
+    structTxt = structureBull ? "HH + HL" : structureBear ? "LH + LL" : "Mixed"
+    structCol = structureBull ? color.new(#4CAF50, 0) : structureBear ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+    table.cell(regimePanel, 0, 5, "Structure", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 5, structTxt, text_color=structCol, text_size=size.tiny)
+
+    // RSI
+    rsiCol = rsi > 60 ? color.new(#4CAF50, 0) : rsi < 40 ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+    table.cell(regimePanel, 0, 6, "RSI", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 6, str.tostring(rsi, "#.0"), text_color=rsiCol, text_size=size.tiny)
+
+    // MACD
+    table.cell(regimePanel, 0, 7, "MACD", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 7, macdTxt, text_color=macdCol, text_size=size.tiny)
+
+    // Distance from 52w High
+    distCol = distFromHigh < 10 ? color.new(#4CAF50, 0) : distFromHigh < 25 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+    table.cell(regimePanel, 0, 8, "vs 52wH", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 8, "-" + str.tostring(distFromHigh, "#.0") + "%", text_color=distCol, text_size=size.tiny)
+
+    // ATR %
+    table.cell(regimePanel, 0, 9, "ATR %", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 9, str.tostring(atrPct, "#.0") + "%", text_color=color.gray, text_size=size.tiny)
+
+    // Performance
+    table.cell(regimePanel, 0, 10, "─── PERF ───", text_color=color.new(#555555, 0), text_size=size.tiny)
+    table.cell(regimePanel, 1, 10, "", text_size=size.tiny)
+
+    table.cell(regimePanel, 0, 11, "1 mese", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 11, str.tostring(perf4w, "+#.0;-#.0") + "%", text_color=perfColor(perf4w), text_size=size.tiny)
+
+    table.cell(regimePanel, 0, 12, "3 mesi", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 12, str.tostring(perf13w, "+#.0;-#.0") + "%", text_color=perfColor(perf13w), text_size=size.tiny)
+
+    table.cell(regimePanel, 0, 13, "6 mesi", text_color=color.gray, text_size=size.tiny)
+    table.cell(regimePanel, 1, 13, str.tostring(perf26w, "+#.0;-#.0") + "%", text_color=perfColor(perf26w), text_size=size.tiny)
+
+
+// ─── MACD SUB-PANEL ─────────────────────────────────────────────────────────
+
+if showMACD
+    var table macdPanel = table.new(position.bottom_right, 2, 3, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
+
+    table.cell(macdPanel, 0, 0, "MACD", text_color=color.gray, text_size=size.tiny)
+    table.cell(macdPanel, 1, 0, str.tostring(macdLine, "#.##"), text_color=macdCol, text_size=size.tiny)
+
+    table.cell(macdPanel, 0, 1, "Signal", text_color=color.gray, text_size=size.tiny)
+    table.cell(macdPanel, 1, 1, str.tostring(signalLine, "#.##"), text_color=color.gray, text_size=size.tiny)
+
+    histCol = macdHist > 0 ? (macdHist > macdHist[1] ? color.new(#4CAF50, 0) : color.new(#8BC34A, 0)) : macdHist < macdHist[1] ? color.new(#F44336, 0) : color.new(#FF9800, 0)
+    table.cell(macdPanel, 0, 2, "Hist", text_color=color.gray, text_size=size.tiny)
+    table.cell(macdPanel, 1, 2, str.tostring(macdHist, "+#.##;-#.##"), text_color=histCol, text_size=size.tiny)
+
+
+// ─── ALERT ──────────────────────────────────────────────────────────────────
+
+alertcondition(regimeUpgrade, "REGIME UPGRADE", "REGIME UPGRADE: {{ticker}} regime migliorato — rivaluta per entry (weekly)")
+
+alertcondition(regimeDowngrade, "REGIME DOWNGRADE", "REGIME DOWNGRADE: {{ticker}} regime peggiorato — tighten stop o esci (weekly)")
+
+alertcondition(regime >= 4 and regime[1] < 4, "REGIME BULLISH", "BULLISH REGIME: {{ticker}} entra in regime bullish — daily entries abilitati (weekly)")
+
+alertcondition(regime <= 2 and regime[1] > 2, "REGIME BEARISH", "BEARISH REGIME: {{ticker}} entra in regime bearish — STOP daily entries (weekly)")
+
+alertcondition(close > high52w[1], "NUOVO 52w HIGH", "52w HIGH: {{ticker}} ha fatto un nuovo massimo a 52 settimane (weekly)")
+
+alertcondition(ta.cross(emaFast, emaSlow) and emaFast > emaSlow, "WEEKLY GOLDEN CROSS", "WEEKLY GOLDEN CROSS: {{ticker}} — segnale macro bullish forte (weekly)")
+
+alertcondition(ta.cross(emaFast, emaSlow) and emaFast < emaSlow, "WEEKLY DEATH CROSS", "WEEKLY DEATH CROSS: {{ticker}} — segnale macro bearish forte (weekly)")
+
+alertcondition(close < ema200d and close[1] >= ema200d, "SOTTO EMA 200d", "SOTTO 200d: {{ticker}} ha chiuso sotto la EMA 200 daily equiv — cautela (weekly)")

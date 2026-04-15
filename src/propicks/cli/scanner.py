@@ -1,0 +1,256 @@
+"""CLI thin wrapper per lo scoring tecnico.
+
+Esempi:
+    propicks-scan AAPL
+    propicks-scan AAPL MSFT NVDA --strategy TechTitans
+    propicks-scan AAPL --json
+    propicks-scan AAPL MSFT --brief
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+from tabulate import tabulate
+
+from propicks.domain.scoring import analyze_ticker
+
+
+def _fmt_pct(x: float | None) -> str:
+    return f"{x * 100:+.2f}%" if x is not None else "-"
+
+
+def print_analysis(r: dict) -> None:
+    """Output dettagliato per un singolo ticker."""
+    header = [
+        ["Ticker", r["ticker"]],
+        ["Strategia", r["strategy"] or "-"],
+        ["Prezzo", f"{r['price']:.2f}"],
+        ["EMA fast / slow", f"{r['ema_fast']:.2f} / {r['ema_slow']:.2f}"],
+        ["RSI(14)", f"{r['rsi']:.2f}"],
+        ["ATR(14)", f"{r['atr']:.2f}  ({(r['atr_pct'] or 0) * 100:.2f}% del prezzo)"],
+        [
+            "Volume corrente / medio",
+            f"{r['current_volume']:,} / {r['avg_volume']:,}  ({r['volume_ratio']}x)",
+        ],
+        [
+            "Massimo 52w",
+            f"{r['high_52w']:.2f}  ({(r['distance_from_high_pct'] or 0) * 100:.2f}% di distanza)",
+        ],
+        [
+            "Stop suggerito (-2 ATR)",
+            f"{r['stop_suggested']:.2f}  ({(r['stop_pct'] or 0) * 100:+.2f}%)",
+        ],
+        [
+            "Performance 1w / 1m / 3m",
+            f"{_fmt_pct(r['perf_1w'])}  /  {_fmt_pct(r['perf_1m'])}  /  {_fmt_pct(r['perf_3m'])}",
+        ],
+    ]
+    print(tabulate(header, tablefmt="simple"))
+    print()
+
+    s = r["scores"]
+    scores_rows = [
+        ["Trend        (peso 25%)", f"{s['trend']:.1f} / 100"],
+        ["Momentum     (peso 20%)", f"{s['momentum']:.1f} / 100"],
+        ["Volume       (peso 15%)", f"{s['volume']:.1f} / 100"],
+        ["Dist. high   (peso 15%)", f"{s['distance_high']:.1f} / 100"],
+        ["Volatilità   (peso 10%)", f"{s['volatility']:.1f} / 100"],
+        ["MA cross     (peso 15%)", f"{s['ma_cross']:.1f} / 100"],
+        ["─" * 24, "─" * 14],
+        ["SCORE COMPOSITO", f"{r['score_composite']:.1f} / 100"],
+        ["Classificazione", r["classification"]],
+    ]
+    print(tabulate(scores_rows, tablefmt="simple"))
+
+
+def print_summary_table(results: list[dict]) -> None:
+    """Tabella compatta per batch di ticker."""
+    headers = [
+        "Ticker",
+        "Prezzo",
+        "Score",
+        "Class.",
+        "Trend",
+        "Mom.",
+        "Vol.",
+        "Dist.H",
+        "Volat.",
+        "MA×",
+        "Stop",
+        "1m",
+    ]
+    rows = []
+    for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
+        s = r["scores"]
+        rows.append(
+            [
+                r["ticker"],
+                f"{r['price']:.2f}",
+                f"{r['score_composite']:.1f}",
+                r["classification"].split(" — ")[0],
+                f"{s['trend']:.0f}",
+                f"{s['momentum']:.0f}",
+                f"{s['volume']:.0f}",
+                f"{s['distance_high']:.0f}",
+                f"{s['volatility']:.0f}",
+                f"{s['ma_cross']:.0f}",
+                f"{r['stop_suggested']:.2f}",
+                _fmt_pct(r["perf_1m"]),
+            ]
+        )
+    print(tabulate(rows, headers=headers, tablefmt="github"))
+
+
+def print_ai_verdict(r: dict) -> None:
+    """Output del verdetto AI per un singolo ticker."""
+    v = r.get("ai_verdict")
+    if v is None:
+        return
+    print()
+    print("=" * 70)
+    tag = " (cache)" if v.get("_cache_hit") else ""
+    print(f"CLAUDE THESIS VALIDATION — {r['ticker']}{tag}")
+    print("=" * 70)
+
+    rr = v.get("reward_risk_ratio")
+    rr_str = f"{rr:.2f}:1" if isinstance(rr, (int, float)) else "-"
+    header = [
+        ["Verdict", v["verdict"]],
+        ["Conviction", f"{v['conviction_score']}/10"],
+        ["Reward / Risk", rr_str],
+        ["Entry tactic", v.get("entry_tactic", "-")],
+        ["Time horizon", v.get("time_horizon", "-")],
+        ["Invalidation deadline", v.get("invalidation_deadline", "-")],
+        ["Alignment w/ technicals", v.get("alignment_with_technicals", "-")],
+    ]
+    print(tabulate(header, tablefmt="simple"))
+    print()
+    print("Thesis:", v["thesis_summary"])
+    print()
+
+    cbd = v.get("confidence_by_dimension") or {}
+    if cbd:
+        rows = [[k.replace("_", " ").title(), f"{val}/10"] for k, val in cbd.items()]
+        print("Confidence by dimension:")
+        print(tabulate(rows, tablefmt="simple"))
+        print()
+
+    def _bullets(title: str, items: list[str]) -> None:
+        if not items:
+            return
+        print(f"{title}:")
+        for x in items:
+            print(f"  - {x}")
+
+    _bullets("Bull case", v.get("bull_case", []))
+    _bullets("Bear case", v.get("bear_case", []))
+    _bullets("Key catalysts", v.get("key_catalysts", []))
+    _bullets("Key risks", v.get("key_risks", []))
+    _bullets("Invalidation triggers", v.get("invalidation_triggers", []))
+
+    if v.get("stop_rationale") or v.get("target_rationale"):
+        print()
+        if v.get("stop_rationale"):
+            print(f"Stop rationale:   {v['stop_rationale']}")
+        if v.get("target_rationale"):
+            print(f"Target rationale: {v['target_rationale']}")
+
+    adj = v.get("suggested_adjustments") or {}
+    if any(adj.get(k) is not None for k in ("stop", "target", "size_multiplier")):
+        print()
+        print("Suggested adjustments:")
+        for k in ("stop", "target", "size_multiplier"):
+            if adj.get(k) is not None:
+                print(f"  - {k}: {adj[k]}")
+
+
+def print_copy_paste(results: list[dict]) -> None:
+    """Blocco pronto da incollare nel prompt Claude 3A."""
+    print()
+    print("=" * 70)
+    print("COPIA/INCOLLA per prompt Claude 3A")
+    print("=" * 70)
+    for r in results:
+        s = r["scores"]
+        strategy = r["strategy"] or "N/A"
+        print(
+            f"TICKER: {r['ticker']}  |  STRATEGIA: {strategy}\n"
+            f"PREZZO: {r['price']:.2f}  |  STOP SUGG: {r['stop_suggested']:.2f} "
+            f"({(r['stop_pct'] or 0) * 100:+.2f}%)\n"
+            f"SCORE TECNICO: {r['score_composite']:.1f}/100 ({r['classification']})\n"
+            f"  Trend {s['trend']:.0f} | Mom {s['momentum']:.0f} | "
+            f"Vol {s['volume']:.0f} | DistH {s['distance_high']:.0f} | "
+            f"Volat {s['volatility']:.0f} | MA× {s['ma_cross']:.0f}\n"
+            f"RSI {r['rsi']:.1f} | ATR {(r['atr_pct'] or 0) * 100:.2f}% | "
+            f"Vol×{r['volume_ratio']} | DistHigh {(r['distance_from_high_pct'] or 0) * 100:.2f}%\n"
+            f"Perf: 1w {_fmt_pct(r['perf_1w'])}  1m {_fmt_pct(r['perf_1m'])}  "
+            f"3m {_fmt_pct(r['perf_3m'])}"
+        )
+        print("-" * 70)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Scoring tecnico 0-100 per uno o più ticker (yfinance).",
+    )
+    parser.add_argument("tickers", nargs="+", help="Uno o più ticker (es. AAPL MSFT ENI.MI)")
+    parser.add_argument("--strategy", default=None, help="Nome della strategia Pro Picks")
+    parser.add_argument("--json", action="store_true", help="Output in formato JSON")
+    parser.add_argument("--brief", action="store_true", help="Solo tabella riassuntiva")
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Valida la tesi via Claude (richiede ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument(
+        "--force-validate",
+        action="store_true",
+        help="Come --validate, ma ignora cache e gate di score",
+    )
+    args = parser.parse_args()
+
+    results: list[dict] = []
+    for t in args.tickers:
+        r = analyze_ticker(t, strategy=args.strategy)
+        if r is not None:
+            results.append(r)
+
+    if not results:
+        return 1
+
+    if args.validate or args.force_validate:
+        from propicks.ai import validate_thesis
+
+        for r in results:
+            verdict = validate_thesis(
+                r,
+                force=args.force_validate,
+                gate=not args.force_validate,
+            )
+            if verdict is not None:
+                r["ai_verdict"] = verdict
+
+    if args.json:
+        print(json.dumps(results, indent=2, default=str))
+        return 0
+
+    if args.brief:
+        print_summary_table(results)
+        return 0
+
+    if len(results) == 1:
+        print_analysis(results[0])
+        print_ai_verdict(results[0])
+    else:
+        print_summary_table(results)
+        for r in results:
+            print_ai_verdict(r)
+    # print_copy_paste(results)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
