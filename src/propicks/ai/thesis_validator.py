@@ -25,12 +25,59 @@ from propicks.config import (
 )
 
 
-_CACHE_VERSION = "v2"
+_CACHE_VERSION = "v3"
+
+_RR_TOLERANCE = 0.05
+_RR_CONFIRM_FLOOR = 2.0
 
 
 def _cache_path(ticker: str, day: str) -> str:
     safe = ticker.upper().replace("/", "_")
     return os.path.join(AI_CACHE_DIR, f"{safe}_{_CACHE_VERSION}_{day}.json")
+
+
+def _enforce_reward_risk(analysis: dict, payload: dict) -> None:
+    """Recompute R/R from (price, stop, target) and enforce the CONFIRM floor.
+
+    The model occasionally reports a reward_risk_ratio inconsistent with its
+    own suggested stop/target. We overwrite with the arithmetic truth and,
+    if the true R/R is below the 2.0 floor, downgrade CONFIRM → CAUTION.
+    """
+    price = analysis.get("price")
+    adj = payload.get("suggested_adjustments") or {}
+
+    raw_stop = adj.get("stop")
+    stop = raw_stop if isinstance(raw_stop, (int, float)) else analysis.get("stop_suggested")
+
+    raw_target = adj.get("target")
+    target = raw_target if isinstance(raw_target, (int, float)) else None
+
+    if price is None or stop is None or target is None:
+        return
+    risk = price - stop
+    if risk <= 0:
+        return
+    reward = target - price
+    computed = round(reward / risk, 2) if reward > 0 else 0.0
+
+    reported = payload.get("reward_risk_ratio")
+    if not isinstance(reported, (int, float)) or abs(computed - reported) > _RR_TOLERANCE:
+        print(
+            f"[ai] R/R corrected for {analysis.get('ticker', '?')}: "
+            f"reported={reported}, computed={computed:.2f} "
+            f"(entry={price:.2f}, stop={stop:.2f}, target={target:.2f})",
+            file=sys.stderr,
+        )
+        payload["reward_risk_ratio"] = computed
+
+    if computed < _RR_CONFIRM_FLOOR and payload.get("verdict") == "CONFIRM":
+        print(
+            f"[ai] Verdict downgraded CONFIRM→CAUTION for "
+            f"{analysis.get('ticker', '?')}: computed R/R {computed:.2f} "
+            f"< floor {_RR_CONFIRM_FLOOR}",
+            file=sys.stderr,
+        )
+        payload["verdict"] = "CAUTION"
 
 
 def _load_cached(ticker: str, day: str) -> Optional[dict]:
@@ -94,6 +141,7 @@ def validate_thesis(
         return None
 
     payload = verdict.model_dump()
+    _enforce_reward_risk(analysis, payload)
     _save_cache(ticker, day, payload)
     payload["_cache_hit"] = False
     return payload

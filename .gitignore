@@ -29,3 +29,6 @@ reports/*.md
 
 .env
 .env.local
+
+
+data/

@@ -109,3 +109,81 @@ def test_force_bypasses_cache_and_gate(sample_analysis, mock_verdict, tmp_path, 
 
     assert result is not None
     assert result["verdict"] == "CONFIRM"
+
+
+def _verdict_with(
+    base: ThesisVerdict,
+    *,
+    verdict: str | None = None,
+    reward_risk_ratio: float | None = None,
+    suggested_adjustments: dict | None = None,
+) -> ThesisVerdict:
+    data = base.model_dump()
+    if verdict is not None:
+        data["verdict"] = verdict
+    if reward_risk_ratio is not None:
+        data["reward_risk_ratio"] = reward_risk_ratio
+    if suggested_adjustments is not None:
+        data["suggested_adjustments"] = suggested_adjustments
+    return ThesisVerdict.model_validate(data)
+
+
+def test_rr_overwritten_when_model_miscomputes(
+    sample_analysis, mock_verdict, tmp_path, monkeypatch
+):
+    """NEM-style bug: Claude reports 2.34 but (entry, stop, target) gives 1.61."""
+    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
+    nem = {**sample_analysis, "ticker": "NEM", "price": 119.30, "stop_suggested": 109.62}
+    bad = _verdict_with(
+        mock_verdict,
+        verdict="CONFIRM",
+        reward_risk_ratio=2.34,
+        suggested_adjustments={"stop": 109.62, "target": 134.88, "size_multiplier": 0.75},
+    )
+
+    with patch.object(thesis_validator, "call_validation", return_value=bad):
+        result = thesis_validator.validate_thesis(nem, force=True, gate=False)
+
+    assert result is not None
+    assert result["reward_risk_ratio"] == pytest.approx(1.61, abs=0.02)
+    assert result["verdict"] == "CAUTION"
+
+
+def test_rr_consistent_verdict_preserved(
+    sample_analysis, mock_verdict, tmp_path, monkeypatch
+):
+    """When R/R is correct and >= 2.0, CONFIRM must survive."""
+    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
+    good = _verdict_with(
+        mock_verdict,
+        verdict="CONFIRM",
+        reward_risk_ratio=2.5,
+        suggested_adjustments={"stop": 175.00, "target": 211.75, "size_multiplier": 1.0},
+    )
+
+    with patch.object(thesis_validator, "call_validation", return_value=good):
+        result = thesis_validator.validate_thesis(sample_analysis, force=True, gate=False)
+
+    assert result is not None
+    assert result["verdict"] == "CONFIRM"
+    assert result["reward_risk_ratio"] == pytest.approx(2.5, abs=0.02)
+
+
+def test_rr_guard_skips_when_target_missing(
+    sample_analysis, mock_verdict, tmp_path, monkeypatch
+):
+    """If Claude declines to set a target, guard leaves verdict untouched."""
+    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
+    no_target = _verdict_with(
+        mock_verdict,
+        verdict="CONFIRM",
+        reward_risk_ratio=2.3,
+        suggested_adjustments={"stop": None, "target": None, "size_multiplier": 1.0},
+    )
+
+    with patch.object(thesis_validator, "call_validation", return_value=no_target):
+        result = thesis_validator.validate_thesis(sample_analysis, force=True, gate=False)
+
+    assert result is not None
+    assert result["verdict"] == "CONFIRM"
+    assert result["reward_risk_ratio"] == pytest.approx(2.3, abs=0.001)
