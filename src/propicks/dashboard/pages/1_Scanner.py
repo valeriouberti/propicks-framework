@@ -8,11 +8,13 @@ from __future__ import annotations
 import streamlit as st
 
 from propicks.dashboard._shared import (
+    INDICATOR_HELP_STOCK,
     cached_analyze,
     fmt_pct,
     invariants_note,
     page_header,
     regime_badge,
+    render_indicator_legend,
     score_badge,
 )
 
@@ -82,6 +84,11 @@ for r in results:
         "Stop sugg.": f"{r['stop_suggested']:.2f}",
     })
 st.dataframe(rows, width="stretch", hide_index=True)
+st.caption(
+    "Colonne: **Score**=tecnico 0-100 · **Class**=A/B/C/D · **RSI**=14d · "
+    "**ATR%**=volatilità · **Dist52wH**=% dal max 52w · "
+    "**Perf**=performance a 5/21/63gg. Apri la legenda in fondo per il dettaglio."
+)
 
 # ---------------------------------------------------------------------------
 # Detail cards (expander per ticker)
@@ -94,8 +101,8 @@ for r in results:
     ):
         cols = st.columns([1, 1, 1, 2])
         cols[0].metric("Prezzo", f"{r['price']:.2f}")
-        cols[1].metric("Score", f"{r['score_composite']:.1f}")
-        cols[2].metric("RSI", f"{r['rsi']:.1f}")
+        cols[1].metric("Score", f"{r['score_composite']:.1f}", help=INDICATOR_HELP_STOCK["score"])
+        cols[2].metric("RSI", f"{r['rsi']:.1f}", help=INDICATOR_HELP_STOCK["rsi"])
         cols[3].markdown(
             "**Regime:** " + regime_badge(r.get("regime")), unsafe_allow_html=True
         )
@@ -104,7 +111,7 @@ for r in results:
         st.markdown("**Sub-score**")
         sub_cols = st.columns(len(scores))
         for col, (k, v) in zip(sub_cols, scores.items()):
-            col.metric(k, f"{v:.0f}")
+            col.metric(k, f"{v:.0f}", help=INDICATOR_HELP_STOCK.get(k))
 
         st.markdown("**Indicatori tecnici**")
         tech_cols = st.columns(4)
@@ -156,18 +163,20 @@ for r in results:
                 st.markdown(
                     f'<div style="background:{v_color};color:white;padding:8px 12px;'
                     f'border-radius:6px;display:inline-block;font-weight:600;">'
-                    f'Claude: {v_verdict} · conviction {verdict.get("conviction", "?")}/10'
+                    f'Claude: {v_verdict} · conviction {verdict.get("conviction_score", "?")}/10'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
                 st.caption(
                     f"R/R {verdict.get('reward_risk_ratio', '?')} · "
-                    f"horizon {verdict.get('time_horizon_days', '?')}gg · "
+                    f"horizon {verdict.get('time_horizon', '?')} · "
+                    f"alignment {verdict.get('alignment_with_technicals', '?')} · "
+                    f"tactic {verdict.get('entry_tactic', '?')} · "
                     f"cache: {'hit' if verdict.get('_cache_hit') else 'fresh'}"
                 )
 
-                if verdict.get("thesis"):
-                    st.markdown("**Tesi:** " + verdict["thesis"])
+                if verdict.get("thesis_summary"):
+                    st.markdown("**Tesi:** " + verdict["thesis_summary"])
                 if verdict.get("key_risks"):
                     st.markdown("**Rischi chiave:**")
                     for risk in verdict["key_risks"]:
@@ -175,3 +184,6 @@ for r in results:
                 if verdict.get("suggested_adjustments"):
                     st.markdown("**Aggiustamenti suggeriti:**")
                     st.json(verdict["suggested_adjustments"])
+
+st.divider()
+render_indicator_legend("stock")

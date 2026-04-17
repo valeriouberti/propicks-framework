@@ -30,6 +30,7 @@ dev = [
 dashboard = [
     "streamlit>=1.30",
     "plotly>=5.18",
+    "watchdog"
 ]
 
 [project.scripts]

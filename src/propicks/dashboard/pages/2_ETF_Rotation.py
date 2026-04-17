@@ -9,11 +9,13 @@ import streamlit as st
 
 from propicks.config import get_etf_benchmark
 from propicks.dashboard._shared import (
+    INDICATOR_HELP_ETF,
     cached_rank,
     fmt_pct,
     invariants_note,
     page_header,
     regime_badge,
+    render_indicator_legend,
 )
 from propicks.domain.etf_scoring import suggest_allocation
 
@@ -98,6 +100,12 @@ for r in ranked:
         "Cap?": "✓" if r.get("regime_cap_applied") else "",
     })
 st.dataframe(rows, width="stretch", hide_index=True)
+st.caption(
+    "Colonne: **Score**=composite 0-100 · **Class**=A/B/C/D · "
+    "**RS**=40% peso · **Regime fit**=30% · **Abs mom**=20% · **Trend**=10% · "
+    "**Cap?**=✓ se composite ridotto dal regime hard-gate. "
+    "Apri la legenda in fondo per il dettaglio delle formule."
+)
 
 # ---------------------------------------------------------------------------
 # Top pick detail
@@ -105,14 +113,24 @@ st.dataframe(rows, width="stretch", hide_index=True)
 top = ranked[0]
 st.subheader(f"Top pick: {top['ticker']} — {top['name']}")
 cols = st.columns(4)
-cols[0].metric("Score composite", f"{top['score_composite']:.1f}")
-cols[1].metric("Classification", top["classification"].split(" ")[0])
-cols[2].metric("Sector", top["sector_key"])
-cols[3].metric("Perf 3m", fmt_pct(top.get("perf_3m")))
+cols[0].metric(
+    "Score composite",
+    f"{top['score_composite']:.1f}",
+    help=INDICATOR_HELP_ETF["score_composite"],
+)
+cols[1].metric(
+    "Classification",
+    top["classification"].split(" ")[0],
+    help=INDICATOR_HELP_ETF["classification"],
+)
+cols[2].metric("Sector", top["sector_key"], help=INDICATOR_HELP_ETF["sector"])
+cols[3].metric(
+    "Perf 3m", fmt_pct(top.get("perf_3m")), help=INDICATOR_HELP_ETF["perf_3m"]
+)
 
 sub_cols = st.columns(4)
 for col, (k, v) in zip(sub_cols, top.get("scores", {}).items()):
-    col.metric(k, f"{v:.0f}")
+    col.metric(k, f"{v:.0f}", help=INDICATOR_HELP_ETF.get(k))
 
 # ---------------------------------------------------------------------------
 # Allocation proposal
@@ -181,12 +199,18 @@ if validate_ai:
             f'<div style="background:{v_color};color:white;padding:8px 12px;'
             f'border-radius:6px;display:inline-block;font-weight:600;">'
             f'Claude: {verdict.get("verdict", "?")} · '
+            f'conviction {verdict.get("conviction_score", "?")}/10 · '
             f'stage {verdict.get("stage", "?")} · '
             f'horizon {verdict.get("rebalance_horizon_weeks", "?")}w'
             f'</div>',
             unsafe_allow_html=True,
         )
-        st.caption(f"Cache: {'hit' if verdict.get('_cache_hit') else 'fresh'}")
+        st.caption(
+            f"Alignment: {verdict.get('alignment_with_ranking', '?')} · "
+            f"Cache: {'hit' if verdict.get('_cache_hit') else 'fresh'}"
+        )
+        if verdict.get("rotation_summary"):
+            st.markdown("**Sintesi:** " + verdict["rotation_summary"])
 
         if verdict.get("top_sector_verdict"):
             st.markdown("**Top sector:** " + verdict["top_sector_verdict"])
@@ -202,7 +226,18 @@ if validate_ai:
                     st.markdown(f"- {d}")
             else:
                 st.write(drivers)
-        if verdict.get("key_risks"):
-            st.markdown("**Rischi chiave:**")
-            for r in verdict["key_risks"]:
+        if verdict.get("breadth_read"):
+            st.markdown("**Breadth:** " + verdict["breadth_read"])
+        if verdict.get("positioning_read"):
+            st.markdown("**Positioning:** " + verdict["positioning_read"])
+        if verdict.get("bear_case"):
+            st.markdown("**Bear case:**")
+            for r in verdict["bear_case"]:
                 st.markdown(f"- {r}")
+        if verdict.get("invalidation_triggers"):
+            st.markdown("**Invalidation triggers:**")
+            for r in verdict["invalidation_triggers"]:
+                st.markdown(f"- {r}")
+
+st.divider()
+render_indicator_legend("etf")
