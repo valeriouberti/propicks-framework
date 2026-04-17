@@ -77,6 +77,8 @@ propicks-scan AAPL
 
 Stampa tabella con **regime macro weekly** (STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR), indicatori (EMA, RSI, ATR, volume), sei sub-score, score composito 0-100, classificazione A/B/C/D e un **blocco pronto da incollare negli input del Pine daily** (`tradingview/daily_signal_engine.pine`) con entry / stop / target.
 
+Per i **ticker US** l'output include anche una riga **RS vs settore**: forza relativa del titolo contro il proprio sector ETF (SPDR XL*), es. `AAPL vs XLK | ratio 1.042 | slope +0.012 | score 85/100`. È un campo **informativo** — non entra nel composite — che distingue i leader del settore dai passeggeri del trend. Per ticker non-US (.MI/.DE/.L/.PA/…) la riga è omessa: la rotazione geografica inquinerebbe il segnale peer-relative.
+
 Batch multi-ticker:
 
 ```bash

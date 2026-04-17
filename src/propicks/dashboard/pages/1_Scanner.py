@@ -113,6 +113,16 @@ for r in results:
         for col, (k, v) in zip(sub_cols, scores.items()):
             col.metric(k, f"{v:.0f}", help=INDICATOR_HELP_STOCK.get(k))
 
+        rs = r.get("rs_vs_sector")
+        if rs and rs.get("rs_ratio") is not None:
+            st.caption(
+                f"**RS vs settore** (informativo, non entra nel composite): "
+                f"{r['ticker']} vs {rs.get('peer_etf', '?')} — "
+                f"ratio {rs['rs_ratio']:.3f} · "
+                f"slope {rs.get('rs_slope', 0):+.3f} · "
+                f"score {rs.get('score', 0):.0f}/100"
+            )
+
         st.markdown("**Indicatori tecnici**")
         tech_cols = st.columns(4)
         tech_cols[0].write(f"EMA fast: {r['ema_fast']:.2f}")

@@ -33,12 +33,25 @@ def _regime_row(regime: dict | None) -> str:
     )
 
 
+def _rs_sector_row(rs: dict | None) -> str:
+    if not rs or rs.get("rs_ratio") is None:
+        return "n/a (solo US + settore mappato)"
+    ratio = rs["rs_ratio"]
+    slope = rs.get("rs_slope")
+    slope_str = f"{slope:+.3f}" if slope is not None else "-"
+    return (
+        f"vs {rs.get('peer_etf', '?')}  | ratio {ratio:.3f}  "
+        f"| slope {slope_str}  | score {rs.get('score', 0):.0f}/100  (informativo)"
+    )
+
+
 def print_analysis(r: dict) -> None:
     """Output dettagliato per un singolo ticker."""
     header = [
         ["Ticker", r["ticker"]],
         ["Strategia", r["strategy"] or "-"],
         ["Regime weekly", _regime_row(r.get("regime"))],
+        ["RS vs settore", _rs_sector_row(r.get("rs_vs_sector"))],
         ["Prezzo", f"{r['price']:.2f}"],
         ["EMA fast / slow", f"{r['ema_fast']:.2f} / {r['ema_slow']:.2f}"],
         ["RSI(14)", f"{r['rsi']:.2f}"],

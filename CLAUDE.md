@@ -25,6 +25,7 @@ propicks-ai-framework/
 │   │   ├── scoring.py         # 6 sub-score stock + classify + analyze_ticker
 │   │   ├── etf_scoring.py     # 4 sub-score ETF (RS/regime/mom/trend) + rank_universe + alloc
 │   │   ├── etf_universe.py    # Query helpers su SECTOR_ETFS_US/EU
+│   │   ├── stock_rs.py        # Peer RS stock vs sector ETF (solo US, campo informativo)
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
 │   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
 │   │   ├── validation.py      # validate_scores, validate_date
@@ -78,6 +79,7 @@ propicks-ai-framework/
 │       ├── test_sizing.py
 │       ├── test_verdict.py
 │       ├── test_regime.py
+│       ├── test_stock_rs.py        # Peer RS mapping + gate US-only
 │       └── test_thesis_validator.py # SDK Anthropic mockato
 ├── data/                      # Runtime state (gitignored)
 │   ├── portfolio.json         # Stato corrente del portafoglio
@@ -333,6 +335,36 @@ Pro Picks (mensile)
 - `tradingview/*.pine` hanno header che punta a `config.py` come source of truth per EMA/RSI/ATR/volume/soglie
 - `propicks-scan` stampa sempre il blocco Pine-ready a fine output così il trader copia-incolla i livelli invece di digitarli
 - Il gate regime in `validate_thesis` impedisce chiamate Claude quando il Pine weekly direbbe NO ENTRY
+
+## Peer Relative Strength (stock vs sector ETF)
+
+`analyze_ticker` arricchisce l'output con il campo **`rs_vs_sector`** (dict
+con `score`/`rs_ratio`/`rs_slope`/`peer_etf`) — la forza relativa del titolo
+contro il proprio Select Sector SPDR. Serve a distinguere i leader del
+settore dai passeggeri del trend: NVDA +40% YTD vs SPX dice poco se l'intero
+XLK ha fatto +35%.
+
+**Gating architetturale:**
+- **Solo US tickers** (`domain.stock_rs.is_us_ticker`). Per `.MI`/`.DE`/`.L`/`.PA`/...
+  il campo è `None`: la rotazione geografica inquinerebbe il segnale di peer
+  RS (es. ISP.MI vs XLF US mescola banche italiane e banche USA).
+- Mapping GICS via `yf.Ticker(t).info['sector']` → `SECTOR_KEY_TO_US_ETF`
+  (Technology→XLK, Energy→XLE, ecc.). La taxonomy Yahoo differisce da GICS
+  puro (es. "Consumer Cyclical" per "Consumer Discretionary"): vedi
+  `YF_SECTOR_TO_KEY` per le normalizzazioni.
+- Engine: riuso diretto di `etf_scoring.score_rs` (stessa formula level×slope
+  su 26w / EMA10w). Nessuna duplicazione di logica.
+
+**Informativo, non nel composite:** il campo **non** entra nello score
+tecnico 0-100 del titolo. Calibrare un 7° sub-score richiederebbe
+ri-validare i pesi esistenti sui trade storici. Se emerge correlazione
+forte tra `rs_vs_sector.score` alto e winner nel journal, si può
+promuovere a sub-score con reshuffling dei pesi.
+
+**Overhead:** aggiunge 2 chiamate yfinance per ticker US (`.info` + weekly
+del peer ETF). Su batch scan grandi ci sono ripetizioni — se diventa un
+collo di bottiglia, cache del weekly ETF al livello di CLI/dashboard (9
+download invece di N×9). Per ora non cachato: yfinance client resta thin.
 
 ## Strategia ETF Settoriali (parallela agli stock)
 

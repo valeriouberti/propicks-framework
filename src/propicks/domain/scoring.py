@@ -30,10 +30,17 @@ from propicks.config import (
 )
 from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi, pct_change
 from propicks.domain.regime import classify_regime
+from propicks.domain.stock_rs import (
+    is_us_ticker,
+    peer_etf_for,
+    score_rs_vs_sector,
+)
 from propicks.market.yfinance_client import (
     DataUnavailable,
+    download_benchmark_weekly,
     download_history,
     download_weekly_history,
+    get_ticker_sector,
 )
 
 
@@ -190,11 +197,23 @@ def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict
         return None
 
     regime: Optional[dict] = None
+    weekly: Optional[pd.DataFrame] = None
     try:
         weekly = download_weekly_history(ticker)
         regime = classify_regime(weekly)
     except DataUnavailable as err:
         print(f"[warning] regime weekly non disponibile per {ticker}: {err}", file=sys.stderr)
+
+    rs_vs_sector: Optional[dict] = None
+    if weekly is not None and is_us_ticker(ticker):
+        yf_sector = get_ticker_sector(ticker)
+        peer = peer_etf_for(yf_sector)
+        if peer is not None:
+            sector_weekly = download_benchmark_weekly(peer)
+            if sector_weekly is not None:
+                rs_vs_sector = score_rs_vs_sector(
+                    weekly["Close"], sector_weekly, peer_etf=peer
+                )
 
     close = hist["Close"]
     high = hist["High"]
@@ -262,4 +281,5 @@ def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict
         "perf_1m": pct_change(close, 21),
         "perf_3m": pct_change(close, 63),
         "regime": regime,
+        "rs_vs_sector": rs_vs_sector,
     }

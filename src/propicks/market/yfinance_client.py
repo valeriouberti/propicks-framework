@@ -100,6 +100,26 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> Optional[pd.Se
     return hist["Close"]
 
 
+def get_ticker_sector(ticker: str) -> Optional[str]:
+    """Sector GICS-like del ticker via ``yf.Ticker(t).info``, o None.
+
+    Yahoo Finance restituisce una taxonomy leggermente diversa da GICS puro
+    ("Consumer Cyclical" invece di "Consumer Discretionary", ecc.). Il mapping
+    verso i sector_key interni avviene in ``domain.stock_rs``.
+    """
+    try:
+        info = yf.Ticker(ticker).info
+    except Exception as exc:
+        print(f"[warning] sector non disponibile per {ticker}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(info, dict):
+        return None
+    sector = info.get("sector")
+    if not isinstance(sector, str) or not sector:
+        return None
+    return sector
+
+
 def get_current_prices(tickers: list[str]) -> dict[str, float]:
     """Ultimo close per ticker. Batch via yf.download, fallback per-ticker."""
     if not tickers:
