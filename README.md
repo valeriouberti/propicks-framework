@@ -65,6 +65,8 @@ L'install editable registra **5 comandi CLI** nel PATH del virtualenv:
 | `propicks-journal` | Registrazione trade (append-only), metriche |
 | `propicks-report` | Report markdown settimanali/mensili |
 
+In aggiunta, la **dashboard web** (Streamlit) espone gli stessi workflow via browser — installazione e launch sono documentati nella sezione [Dashboard](#dashboard) più avanti. CLI e dashboard operano sullo **stesso stato** (`data/portfolio.json`, `data/journal.json`), quindi si alternano liberamente.
+
 ## Quickstart
 
 ### 1. Analizzare un ticker
@@ -216,6 +218,55 @@ pytest
 
 I test unit sono puri (nessuna rete, nessun filesystem mutato) e coprono indicatori, scoring, sizing e verdict logic. Tempo di esecuzione: < 0.5s.
 
+## Dashboard
+
+UI web opzionale basata su **Streamlit** che espone gli stessi workflow della CLI via browser. **Non sostituisce la CLI** — i due layer condividono `domain/`, `io/`, `ai/` e `reports/` e operano sullo stesso `data/portfolio.json` e `data/journal.json`. Ogni pagina è il parallelo diretto di un gruppo di comandi:
+
+| Pagina | Equivalente CLI |
+|--------|-----------------|
+| **Overview** | `propicks-portfolio status` + `risk` + regime weekly |
+| **Scanner** | `propicks-scan [TICKER ...] [--validate]` |
+| **ETF Rotation** | `propicks-rotate --region <R> [--allocate] [--validate]` |
+| **Portfolio** | `propicks-portfolio size` + `add` + `update` + `remove` |
+| **Journal** | `propicks-journal add` + `close` + `list` + `stats` |
+| **Reports** | `propicks-report weekly` + `monthly` |
+
+### Installazione locale
+
+```bash
+pip install -e ".[dashboard]"
+propicks-dashboard                  # apre http://localhost:8501
+propicks-dashboard --server.port 8502    # override porta
+```
+
+### Docker
+
+Per un setup portatile (una immagine contiene package + CLI + dashboard):
+
+```bash
+# Build
+docker build -t propicks-dashboard .
+
+# Run con volumi persistenti (data/ e reports/ vivono sull'host)
+docker run --rm -p 8501:8501 \
+    -v "$(pwd)/data":/app/data \
+    -v "$(pwd)/reports":/app/reports \
+    --env-file .env \
+    propicks-dashboard
+
+# Oppure via docker-compose
+docker compose up --build
+```
+
+La CLI resta disponibile **dentro** il container:
+
+```bash
+docker compose exec dashboard propicks-scan AAPL --validate
+docker compose exec dashboard propicks-journal stats
+```
+
+I volumi `./data` e `./reports` sono montati sull'host — portfolio, journal, cache AI e report persistono tra ricreazioni del container. Il file `.env` (`ANTHROPIC_API_KEY` etc.) è letto runtime, non finisce nell'immagine.
+
 ## Struttura progetto
 
 ```
@@ -292,7 +343,9 @@ Entrambi restituiscono verdict strutturati JSON-validated via pydantic. Il promp
 
 ## Documentazione estesa
 
-Per contesto approfondito su convenzioni, roadmap, e note per future modifiche vedi **[CLAUDE.md](./CLAUDE.md)**.
+- **[CLAUDE.md](./CLAUDE.md)** — convenzioni del codebase, roadmap, note per future modifiche.
+- **[docs/Weekly_Operating_Framework.md](./docs/Weekly_Operating_Framework.md)** — framework operativo settimanale (allocazione capitale, cadenza lunedì/sabato/domenica, regole di disciplina cross-asset).
+- **[docs/Trading_System_Playbook.md](./docs/Trading_System_Playbook.md)** — workflow dettagliato + prompt Perplexity/Claude.
 
 ## Licenza
 

@@ -1,0 +1,49 @@
+# VCS
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+build/
+dist/
+
+# Virtual envs
+.venv
+venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime state — montato come volume, non deve finire nell'immagine
+data/
+reports/
+!data/.gitkeep
+!reports/.gitkeep
+
+# Secrets — NON devono mai finire nell'immagine. Passali via --env-file o -e.
+.env
+.env.*
+
+# Docs pesanti (non servono nel container)
+docs/
+
+# Pine scripts (non eseguibili dal container)
+tradingview/
+
+# Test artifacts
+.coverage
+htmlcov/
