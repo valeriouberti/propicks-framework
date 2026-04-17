@@ -58,6 +58,7 @@ with tab_gen:
                 data=content,
                 file_name=os.path.basename(path),
                 mime="text/markdown",
+                key="download_weekly_generated",
             )
 
     with col2:
@@ -75,6 +76,7 @@ with tab_gen:
                 data=content,
                 file_name=os.path.basename(path),
                 mime="text/markdown",
+                key="download_monthly_generated",
             )
 
 # ---------------------------------------------------------------------------
@@ -103,4 +105,5 @@ with tab_view:
                 data=content,
                 file_name=selected,
                 mime="text/markdown",
+                key=f"download_archive_{selected}",
             )
