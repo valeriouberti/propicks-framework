@@ -44,7 +44,7 @@ with tab_gen:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Genera weekly report", type="primary", use_container_width=True):
+        if st.button("Genera weekly report", type="primary", width="stretch"):
             with st.spinner("Genero report settimanale…"):
                 content = generate_weekly_report()
                 path = _save_report(
@@ -61,7 +61,7 @@ with tab_gen:
             )
 
     with col2:
-        if st.button("Genera monthly report", use_container_width=True):
+        if st.button("Genera monthly report", width="stretch"):
             with st.spinner("Genero report mensile…"):
                 content = generate_monthly_report()
                 path = _save_report(

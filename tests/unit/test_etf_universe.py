@@ -46,7 +46,7 @@ def test_world_sector_etf_detected():
     assert get_asset_type("XDW0.DE") == "SECTOR_ETF"  # Energy
     assert get_asset_type("xdwt.de") == "SECTOR_ETF"  # Technology (case-insensitive)
     assert get_asset_type("XWTS.DE") == "SECTOR_ETF"  # Communication Services (outlier)
-    assert get_asset_type("XZRE.DE") == "SECTOR_ETF"  # Real Estate (separate series)
+    assert get_asset_type("IQQ6.DE") == "SECTOR_ETF"  # Real Estate (separate series)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ def test_sector_key_for_world_etf():
     assert get_sector_key("XDW0.DE") == "energy"
     assert get_sector_key("XDWT.DE") == "technology"
     assert get_sector_key("XWTS.DE") == "communications"
-    assert get_sector_key("XZRE.DE") == "real_estate"
+    assert get_sector_key("IQQ6.DE") == "real_estate"
 
 
 def test_sector_key_none_for_stock():
@@ -77,18 +77,21 @@ def test_sector_key_none_for_stock():
 # ---------------------------------------------------------------------------
 # US ↔ EU mapping simmetrico
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("us_ticker,eu_ticker", [
-    ("XLK", "ZPDT.DE"),
-    ("XLF", "ZPDF.DE"),
-    ("XLE", "ZPDE.DE"),
-    ("XLV", "ZPDH.DE"),
-    ("XLI", "ZPDI.DE"),
-    ("XLY", "ZPDD.DE"),
-    ("XLP", "ZPDS.DE"),
-    ("XLU", "ZPDU.DE"),
-    ("XLB", "ZPDM.DE"),
-    ("XLC", "ZPDX.DE"),
-])
+@pytest.mark.parametrize(
+    "us_ticker,eu_ticker",
+    [
+        ("XLK", "ZPDT.DE"),
+        ("XLF", "ZPDF.DE"),
+        ("XLE", "ZPDE.DE"),
+        ("XLV", "ZPDH.DE"),
+        ("XLI", "ZPDI.DE"),
+        ("XLY", "ZPDD.DE"),
+        ("XLP", "ZPDS.DE"),
+        ("XLU", "ZPDU.DE"),
+        ("XLB", "ZPDM.DE"),
+        ("XLC", "ZPDX.DE"),
+    ],
+)
 def test_us_eu_mapping_roundtrip(us_ticker, eu_ticker):
     assert get_eu_equivalent(us_ticker) == eu_ticker
     assert get_us_equivalent(eu_ticker) == us_ticker
@@ -175,9 +178,9 @@ def test_stock_never_favored():
 def test_list_universe_all_contains_all_regions():
     rows = list_universe("ALL")
     tickers = {r["ticker"] for r in rows}
-    assert "XLK" in tickers           # US
-    assert "ZPDT.DE" in tickers       # EU
-    assert "XDWT.DE" in tickers       # WORLD
+    assert "XLK" in tickers  # US
+    assert "ZPDT.DE" in tickers  # EU
+    assert "XDWT.DE" in tickers  # WORLD
     expected = len(SECTOR_ETFS_US) + len(SECTOR_ETFS_EU) + len(SECTOR_ETFS_WORLD)
     assert len(rows) == expected
 
@@ -244,9 +247,17 @@ def test_world_universe_covers_all_11_gics_sectors():
     # completa inclusa real_estate (XZRE) e communications (XWTS).
     sectors = {meta["sector_key"] for meta in SECTOR_ETFS_WORLD.values()}
     expected = {
-        "technology", "financials", "energy", "healthcare", "industrials",
-        "consumer_discretionary", "consumer_staples", "utilities",
-        "real_estate", "materials", "communications",
+        "technology",
+        "financials",
+        "energy",
+        "healthcare",
+        "industrials",
+        "consumer_discretionary",
+        "consumer_staples",
+        "utilities",
+        "real_estate",
+        "materials",
+        "communications",
     }
     assert sectors == expected
 

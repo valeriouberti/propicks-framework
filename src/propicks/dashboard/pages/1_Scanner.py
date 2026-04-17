@@ -34,7 +34,7 @@ with st.form("scanner_form", border=True):
     strategy = col1.selectbox("Strategy (opzionale)", STRATEGIES, index=0)
     validate_ai = col2.checkbox("Valida con Claude", value=False)
     force_ai = col3.checkbox("Force (bypassa gate + cache)", value=False)
-    submitted = st.form_submit_button("Analizza", type="primary", use_container_width=True)
+    submitted = st.form_submit_button("Analizza", type="primary", width="stretch")
 
 if not submitted:
     st.stop()
@@ -81,7 +81,7 @@ for r in results:
         "Regime": regime.get("regime", "N/D"),
         "Stop sugg.": f"{r['stop_suggested']:.2f}",
     })
-st.dataframe(rows, use_container_width=True, hide_index=True)
+st.dataframe(rows, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Detail cards (expander per ticker)

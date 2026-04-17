@@ -48,7 +48,7 @@ with st.form("rotate_form", border=True):
     force_ai = st.checkbox(
         "Force validate (bypassa skip STRONG_BEAR + cache 48h)", value=False
     )
-    submitted = st.form_submit_button("Esegui ranking", type="primary", use_container_width=True)
+    submitted = st.form_submit_button("Esegui ranking", type="primary", width="stretch")
 
 if not submitted:
     st.stop()
@@ -97,7 +97,7 @@ for r in ranked:
         "Price": f"{r['price']:.2f}",
         "Cap?": "✓" if r.get("regime_cap_applied") else "",
     })
-st.dataframe(rows, use_container_width=True, hide_index=True)
+st.dataframe(rows, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Top pick detail
@@ -140,7 +140,7 @@ if allocate:
             }
             for p in positions
         ]
-        st.dataframe(alloc_rows, use_container_width=True, hide_index=True)
+        st.dataframe(alloc_rows, width="stretch", hide_index=True)
         agg = allocation.get("aggregate_pct", 0)
         st.caption(
             f"Aggregato: {fmt_pct(agg)} · Cash residuo ETF bucket: {fmt_pct(0.60 - agg)}"

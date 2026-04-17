@@ -101,7 +101,7 @@ with tab_list:
                 "Score T": t.get("score_tech") or "—",
                 "Catalyst": (t.get("catalyst") or "")[:40],
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Stats
@@ -156,7 +156,7 @@ with tab_stats:
                     "Best": f"{max(pls):+.2f}%",
                     "Worst": f"{min(pls):+.2f}%",
                 })
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(rows, width="stretch", hide_index=True)
 
         # Breakdown per score band
         st.subheader("Breakdown per score Claude")
@@ -183,7 +183,7 @@ with tab_stats:
                 "Avg P&L": f"{statistics.mean(pls):+.2f}%",
                 "Win rate": fmt_pct(wr_b),
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
         st.info(f"**Verdetto sintetico:** {verdict(wr, pf, len(scope))}")
 

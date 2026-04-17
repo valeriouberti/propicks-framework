@@ -146,7 +146,7 @@ else:
             "Stop dist": fmt_pct(stop_dist) if stop_dist is not None else "—",
             "Target": f"{p['target']:.2f}" if p.get("target") else "—",
         })
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Recent journal entries
@@ -170,7 +170,7 @@ else:
             "P&L %": fmt_pct((t.get("pnl_pct") or 0) / 100) if t.get("pnl_pct") is not None else "—",
             "Reason": t.get("exit_reason") or "—",
         })
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Watchlist scorer (top-N dal journal recent closed per strategy)
