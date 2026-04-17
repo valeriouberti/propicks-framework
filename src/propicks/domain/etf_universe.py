@@ -17,10 +17,11 @@ from propicks.config import (
     REGIME_FAVORED_SECTORS,
     SECTOR_ETFS_EU,
     SECTOR_ETFS_US,
+    SECTOR_ETFS_WORLD,
     AssetType,
 )
 
-Region = Literal["US", "EU", "ALL"]
+Region = Literal["US", "EU", "WORLD", "ALL"]
 
 
 def get_asset_type(ticker: str) -> AssetType:
@@ -30,7 +31,7 @@ def get_asset_type(ticker: str) -> AssetType:
     non viene aggiunto ``COMMODITY_ETFS`` in config (Fase commodity).
     """
     t = ticker.upper()
-    if t in SECTOR_ETFS_US or t in SECTOR_ETFS_EU:
+    if t in SECTOR_ETFS_US or t in SECTOR_ETFS_EU or t in SECTOR_ETFS_WORLD:
         return "SECTOR_ETF"
     return "STOCK"
 
@@ -42,6 +43,8 @@ def get_sector_key(ticker: str) -> str | None:
         return SECTOR_ETFS_US[t]["sector_key"]
     if t in SECTOR_ETFS_EU:
         return SECTOR_ETFS_EU[t]["sector_key"]
+    if t in SECTOR_ETFS_WORLD:
+        return SECTOR_ETFS_WORLD[t]["sector_key"]
     return None
 
 
@@ -52,6 +55,8 @@ def get_etf_info(ticker: str) -> dict | None:
         return {"ticker": t, "region": "US", **SECTOR_ETFS_US[t]}
     if t in SECTOR_ETFS_EU:
         return {"ticker": t, "region": "EU", **SECTOR_ETFS_EU[t]}
+    if t in SECTOR_ETFS_WORLD:
+        return {"ticker": t, "region": "WORLD", **SECTOR_ETFS_WORLD[t]}
     return None
 
 
@@ -96,9 +101,17 @@ def is_favored(ticker: str, regime_code: int) -> bool:
 def list_universe(region: Region = "ALL") -> list[dict]:
     """Elenca gli ETF dell'universo con metadata completo.
 
-    ``region`` filtra per listing: ``US`` = SPDR, ``EU`` = UCITS STOXX 600,
-    ``ALL`` = entrambi. Output ordinato per sector_key poi ticker per
-    output stabile in test e CLI.
+    ``region`` filtra per listing:
+        - ``US``     = Select Sector SPDR (XL*)
+        - ``EU``     = SPDR UCITS wrapper (ZPD*.DE), stesso indice US
+        - ``WORLD``  = Xtrackers MSCI World sector (XDW*.DE / XWTS / XZRE)
+        - ``ALL``    = tutti (attenzione: benchmark RS non uniforme)
+
+    Output ordinato per sector_key poi ticker per stabilità in test e CLI.
+
+    NOTA: mescolare US/EU con WORLD nello stesso ranking è sconsigliato —
+    il benchmark RS cambia per region (``^GSPC`` per US/EU, ``URTH`` per
+    WORLD). ``rank_universe`` gestisce la scelta automatica.
     """
     rows: list[dict] = []
     if region in ("US", "ALL"):
@@ -107,5 +120,8 @@ def list_universe(region: Region = "ALL") -> list[dict]:
     if region in ("EU", "ALL"):
         for ticker, meta in SECTOR_ETFS_EU.items():
             rows.append({"ticker": ticker, "region": "EU", **meta})
+    if region in ("WORLD", "ALL"):
+        for ticker, meta in SECTOR_ETFS_WORLD.items():
+            rows.append({"ticker": ticker, "region": "WORLD", **meta})
     rows.sort(key=lambda r: (r["sector_key"], r["ticker"]))
     return rows

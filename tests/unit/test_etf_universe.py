@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from propicks.config import SECTOR_ETFS_EU, SECTOR_ETFS_US
+from propicks.config import (
+    SECTOR_ETFS_EU,
+    SECTOR_ETFS_US,
+    SECTOR_ETFS_WORLD,
+    get_etf_benchmark,
+)
 from propicks.domain.etf_universe import (
     favored_sectors_for_regime,
     get_asset_type,
@@ -36,6 +41,14 @@ def test_eu_sector_etf_detected():
     assert get_asset_type("zpdt.de") == "SECTOR_ETF"
 
 
+def test_world_sector_etf_detected():
+    # Xtrackers MSCI World sector series
+    assert get_asset_type("XDW0.DE") == "SECTOR_ETF"  # Energy
+    assert get_asset_type("xdwt.de") == "SECTOR_ETF"  # Technology (case-insensitive)
+    assert get_asset_type("XWTS.DE") == "SECTOR_ETF"  # Communication Services (outlier)
+    assert get_asset_type("XZRE.DE") == "SECTOR_ETF"  # Real Estate (separate series)
+
+
 # ---------------------------------------------------------------------------
 # Sector key lookup
 # ---------------------------------------------------------------------------
@@ -48,6 +61,13 @@ def test_sector_key_for_us_etf():
 def test_sector_key_for_eu_etf():
     assert get_sector_key("ZPDT.DE") == "technology"
     assert get_sector_key("ZPDU.DE") == "utilities"
+
+
+def test_sector_key_for_world_etf():
+    assert get_sector_key("XDW0.DE") == "energy"
+    assert get_sector_key("XDWT.DE") == "technology"
+    assert get_sector_key("XWTS.DE") == "communications"
+    assert get_sector_key("XZRE.DE") == "real_estate"
 
 
 def test_sector_key_none_for_stock():
@@ -152,12 +172,14 @@ def test_stock_never_favored():
 # ---------------------------------------------------------------------------
 # list_universe
 # ---------------------------------------------------------------------------
-def test_list_universe_all_contains_us_and_eu():
+def test_list_universe_all_contains_all_regions():
     rows = list_universe("ALL")
     tickers = {r["ticker"] for r in rows}
-    assert "XLK" in tickers
-    assert "ZPDT.DE" in tickers
-    assert len(rows) == len(SECTOR_ETFS_US) + len(SECTOR_ETFS_EU)
+    assert "XLK" in tickers           # US
+    assert "ZPDT.DE" in tickers       # EU
+    assert "XDWT.DE" in tickers       # WORLD
+    expected = len(SECTOR_ETFS_US) + len(SECTOR_ETFS_EU) + len(SECTOR_ETFS_WORLD)
+    assert len(rows) == expected
 
 
 def test_list_universe_us_only():
@@ -170,6 +192,17 @@ def test_list_universe_eu_only():
     rows = list_universe("EU")
     assert all(r["region"] == "EU" for r in rows)
     assert len(rows) == len(SECTOR_ETFS_EU)
+
+
+def test_list_universe_world_only():
+    rows = list_universe("WORLD")
+    assert all(r["region"] == "WORLD" for r in rows)
+    assert len(rows) == len(SECTOR_ETFS_WORLD)
+    # World deve coprire tutti i 11 settori GICS (inclusa Real Estate via XZRE)
+    sectors = {r["sector_key"] for r in rows}
+    assert "real_estate" in sectors
+    assert "communications" in sectors
+    assert "technology" in sectors
 
 
 def test_list_universe_sorted_deterministically():
@@ -192,3 +225,54 @@ def test_etf_info_full_payload():
 
 def test_etf_info_none_for_stock():
     assert get_etf_info("AAPL") is None
+
+
+def test_etf_info_world_payload():
+    info = get_etf_info("XDW0.DE")
+    assert info is not None
+    assert info["ticker"] == "XDW0.DE"
+    assert info["region"] == "WORLD"
+    assert info["sector_key"] == "energy"
+    assert info["isin"] == "IE00BM67HM91"
+
+
+# ---------------------------------------------------------------------------
+# WORLD universe: coverage e ISIN
+# ---------------------------------------------------------------------------
+def test_world_universe_covers_all_11_gics_sectors():
+    # A differenza di US/EU (XLRE senza ZPD equivalente), WORLD ha copertura
+    # completa inclusa real_estate (XZRE) e communications (XWTS).
+    sectors = {meta["sector_key"] for meta in SECTOR_ETFS_WORLD.values()}
+    expected = {
+        "technology", "financials", "energy", "healthcare", "industrials",
+        "consumer_discretionary", "consumer_staples", "utilities",
+        "real_estate", "materials", "communications",
+    }
+    assert sectors == expected
+
+
+def test_world_etfs_all_have_isin():
+    # Gli world ETF sono identificati via ISIN (no equivalent US mapping,
+    # perché il perimetro MSCI World ≠ S&P 500).
+    for ticker, meta in SECTOR_ETFS_WORLD.items():
+        assert "isin" in meta, f"{ticker} manca ISIN"
+        assert meta["isin"].startswith("IE"), f"{ticker} ISIN non IE-domiciled"
+
+
+# ---------------------------------------------------------------------------
+# Benchmark per region
+# ---------------------------------------------------------------------------
+def test_us_and_eu_share_sp500_benchmark():
+    # ZPD* sono wrapper UCITS dello stesso Select Sector Index → stesso bench
+    assert get_etf_benchmark("US") == "^GSPC"
+    assert get_etf_benchmark("EU") == "^GSPC"
+
+
+def test_world_uses_msci_world_benchmark():
+    # URTH è iShares MSCI World — stesso perimetro degli Xtrackers XDW*
+    assert get_etf_benchmark("WORLD") == "URTH"
+
+
+def test_benchmark_case_insensitive():
+    assert get_etf_benchmark("world") == "URTH"
+    assert get_etf_benchmark("us") == "^GSPC"

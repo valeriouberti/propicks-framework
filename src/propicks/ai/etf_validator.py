@@ -32,7 +32,7 @@ from propicks.ai.claude_client import (
     call_etf_validation,
 )
 from propicks.ai.etf_prompts import render_etf_user_prompt
-from propicks.config import AI_CACHE_DIR, ETF_BENCHMARK
+from propicks.config import AI_CACHE_DIR, get_etf_benchmark
 
 
 _CACHE_VERSION = "etf-v1"
@@ -79,7 +79,7 @@ def validate_rotation(
     Args:
         ranked: output di ``domain.etf_scoring.rank_universe``, ordinato.
         allocation: output di ``suggest_allocation`` (opzionale ma consigliato).
-        region: "US" | "EU" | "ALL" — va in prompt per context.
+        region: "US" | "EU" | "WORLD" | "ALL" — va in prompt per context.
         force: ignora cache + skip in STRONG_BEAR.
         skip_in_strong_bear: in regime 1 la risposta è ovvia (flat). Default
             skippa per non spendere. ``force=True`` o questo flag = False
@@ -114,7 +114,7 @@ def validate_rotation(
         allocation=allocation,
         as_of_date=day,
         region=region,
-        benchmark=ETF_BENCHMARK,
+        benchmark=get_etf_benchmark(region),
     )
 
     try:

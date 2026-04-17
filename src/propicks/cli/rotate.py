@@ -1,9 +1,10 @@
 """CLI thin wrapper per la rotazione settoriale ETF.
 
 Esempi:
-    propicks-rotate                        # US universe, top 3
+    propicks-rotate                        # US universe (SPDR Select Sector), top 3
     propicks-rotate --top 5                # US, top 5
-    propicks-rotate --region EU            # UCITS su Xetra (ZPD*.DE)
+    propicks-rotate --region EU            # SPDR UCITS su Xetra (ZPD*.DE)
+    propicks-rotate --region WORLD         # Xtrackers MSCI World sector (XDW*/XWTS/XZRE)
     propicks-rotate --allocate             # include proposta allocazione
     propicks-rotate --validate             # validazione macro via Claude
     propicks-rotate --json                 # output JSON
@@ -196,9 +197,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--region",
-        choices=("US", "EU", "ALL"),
+        choices=("US", "EU", "WORLD", "ALL"),
         default="US",
-        help="Universo: SPDR US (XL*), UCITS EU (ZPD*.DE), o entrambi.",
+        help=(
+            "Universo: SPDR US (XL*), SPDR UCITS (ZPD*.DE), "
+            "Xtrackers MSCI World (XDW*/XWTS/XZRE), o ALL."
+        ),
     )
     parser.add_argument(
         "--top",

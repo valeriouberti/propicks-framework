@@ -99,17 +99,28 @@ Ticker italiani: usa il suffisso `.MI` (es. `ENI.MI`, `ISP.MI`).
 ### 2. Rotazione settoriale ETF
 
 ```bash
-propicks-rotate                        # US universe, top 3
+propicks-rotate                        # US universe (SPDR Select Sector), top 3
 propicks-rotate --top 5                # US, top 5
-propicks-rotate --region EU            # UCITS su Xetra (ZPD*.DE)
+propicks-rotate --region EU            # SPDR UCITS su Xetra (ZPD*.DE)
+propicks-rotate --region WORLD         # Xtrackers MSCI World (XDW*/XWTS/XZRE)
 propicks-rotate --allocate             # include proposta allocazione
 propicks-rotate --validate             # validazione macro via Claude
 propicks-rotate --json                 # output JSON
 ```
 
-Ranking dei Select Sector SPDR (XL*) o dei loro wrapper UCITS (ZPD*.DE) basato su uno score composito:
+Tre universi paralleli, selezionabili via `--region`:
 
-- **RS (40%)** — forza relativa vs `^GSPC` (ratio ETF/bench 26w + EMA10w slope)
+| Region | Tickers | Perimetro | Benchmark RS |
+|--------|---------|-----------|--------------|
+| `US` (default) | SPDR Select Sector (`XL*`) | S&P 500, 11 settori GICS | `^GSPC` |
+| `EU` | SPDR UCITS (`ZPD*.DE`) | Stesso Select Sector Index, wrapper UCITS | `^GSPC` |
+| `WORLD` | Xtrackers MSCI World (`XDW*.DE`, `XWTS.DE`, `XZRE.DE`) | MSCI World (~65% US + ~15% EU + ~6% JP) | `URTH` |
+
+L'universo `WORLD` **non è un mirror** dei SPDR: i settori world includono nomi europei/giapponesi con dinamica diversa (es. energy: Shell/TotalEnergies/BP accanto a Chevron/Exxon). Tesi di rotazione globale separata, utile per diversificazione geografica.
+
+Ranking basato su uno score composito (stesso per tutti gli universi):
+
+- **RS (40%)** — forza relativa vs benchmark per region (ratio ETF/bench 26w + EMA10w slope)
 - **Regime fit (30%)** — bonus/malus in base al regime weekly: favored=100, adjacent=60, not_favored=20
 - **Abs momentum (20%)** — performance 3 mesi
 - **Trend (10%)** — prezzo vs EMA30w + slope

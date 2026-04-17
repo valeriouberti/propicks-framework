@@ -41,6 +41,7 @@ from propicks.config import (
     ETF_WEIGHT_TREND,
     REGIME_FAVORED_SECTORS,
     REGIME_WEEKLY_EMA_SLOW,
+    get_etf_benchmark,
 )
 from propicks.domain.etf_universe import (
     favored_sectors_for_regime,
@@ -59,7 +60,7 @@ from propicks.market.yfinance_client import (
 )
 
 
-Region = Literal["US", "EU", "ALL"]
+Region = Literal["US", "EU", "WORLD", "ALL"]
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +294,15 @@ def analyze_etf(
     UNA volta, poi passa il risultato ad ogni analyze). Se non passati,
     vengono scaricati da yfinance qui.
 
+    Benchmark: deriva dal ``region`` dell'ETF (US/EU → ^GSPC, WORLD → URTH)
+    solo se ``benchmark_weekly`` non è iniettato. In batch via ``rank_universe``
+    il benchmark giusto viene già passato.
+
+    Il regime classifier resta su ^GSPC (US-based) anche per WORLD — la
+    correlazione S&P/MSCI World weekly è ≈0.95, la tabella REGIME_FAVORED_SECTORS
+    è calibrata sul ciclo US. Approssimazione accettabile, da rivedere se il
+    framework diventa multi-regime per region.
+
     Ritorna None con warning su stderr in caso di dati insufficienti.
     """
     ticker = ticker.upper()
@@ -302,6 +312,7 @@ def analyze_etf(
         return None
 
     sector_key = info["sector_key"]
+    region = info.get("region", "US")
 
     try:
         daily = download_history(ticker)
@@ -311,7 +322,7 @@ def analyze_etf(
         return None
 
     if benchmark_weekly is None:
-        benchmark_weekly = download_benchmark_weekly(ETF_BENCHMARK)
+        benchmark_weekly = download_benchmark_weekly(get_etf_benchmark(region))
 
     if regime_code is None:
         try:
@@ -381,12 +392,20 @@ def rank_universe(
     Il regime e il benchmark vengono fetchati UNA volta e propagati a tutti
     gli analyze — evita 11+ download del benchmark. Errori per singolo
     ticker non abortiscono il batch.
+
+    Il benchmark viene scelto automaticamente in base a ``region``:
+    US/EU → ``^GSPC``, WORLD → ``URTH``. Per ``region=ALL`` il benchmark è
+    ^GSPC (best-effort, ranking misto US+WORLD è rumoroso per definizione —
+    preferire run separate).
     """
+    benchmark_ticker = get_etf_benchmark(region)
     if benchmark_weekly is None:
-        benchmark_weekly = download_benchmark_weekly(ETF_BENCHMARK)
+        benchmark_weekly = download_benchmark_weekly(benchmark_ticker)
 
     regime: Optional[dict] = None
     if regime_code is None:
+        # Regime sempre su ^GSPC: la tabella REGIME_FAVORED_SECTORS è US-calibrata
+        # (correlazione S&P/MSCI World ≈ 0.95 giustifica l'approssimazione).
         try:
             bench_weekly_for_regime = download_weekly_history(ETF_BENCHMARK)
             regime = classify_regime(bench_weekly_for_regime)

@@ -275,15 +275,122 @@ SECTOR_ETFS_EU: dict[str, dict] = {
 }
 
 
+# WORLD: Xtrackers MSCI World Sector UCITS (serie XDW* / XWTS / XZRE su Xetra).
+# Esposizione ai settori GICS su scala MSCI World (developed markets) — tipicamente
+# ~65-70% US, ~15% Europa, ~6% Giappone, resto sviluppati. Serie Xtrackers (DWS),
+# NON iShares e NON SPDR. Accumulating, domicilio IE, TER 0.25% per tutta la serie.
+#
+# Differenze operative vs Select Sector SPDR:
+# - Composizione: settore world include europee/giapponesi (es. energy con
+#   Shell/TotalEnergies/BP, industrials con Siemens/ABB, financials con HSBC/UBS).
+#   Non è un sostituto 1:1 dei SPDR — è una tesi diversa (rotation globale).
+# - Benchmark: per RS va usato un benchmark WORLD (URTH iShares MSCI World o
+#   equivalente), NON ^GSPC. Mischiare i due confonde outperformance con
+#   differenze di perimetro geografico. Cfr. ``ETF_BENCHMARK_WORLD``.
+# - Real Estate: serie separata (XZRE) lanciata 2021 post-GICS reshuffle,
+#   ISIN diverso dalla serie XDW* core.
+# - Communication Services: ticker XWTS (outlier nella serie). Il fondo
+#   riflette il GICS 2018 reshuffle, include Meta/Alphabet/Netflix in linea
+#   con XLC US.
+#
+# IMPORTANTE: verificare ticker e ISIN sul proprio broker. Alcuni broker
+# retail EU non quotano XWTS o XZRE su Xetra — fallback su listing Milano
+# (.MI) se disponibile.
+
+SECTOR_ETFS_WORLD: dict[str, dict] = {
+    "XDWT.DE": {
+        "name": "Xtrackers MSCI World Information Technology UCITS",
+        "sector_key": "technology",
+        "isin": "IE00BM67HT60",
+    },
+    "XDWF.DE": {
+        "name": "Xtrackers MSCI World Financials UCITS",
+        "sector_key": "financials",
+        "isin": "IE00BM67HL84",
+    },
+    "XDW0.DE": {
+        "name": "Xtrackers MSCI World Energy UCITS",
+        "sector_key": "energy",
+        "isin": "IE00BM67HM91",
+    },
+    "XDWH.DE": {
+        "name": "Xtrackers MSCI World Health Care UCITS",
+        "sector_key": "healthcare",
+        "isin": "IE00BM67HK77",
+    },
+    "XDWI.DE": {
+        "name": "Xtrackers MSCI World Industrials UCITS",
+        "sector_key": "industrials",
+        "isin": "IE00BM67HV82",
+    },
+    "XDWC.DE": {
+        "name": "Xtrackers MSCI World Consumer Discretionary UCITS",
+        "sector_key": "consumer_discretionary",
+        "isin": "IE00BM67HP23",
+    },
+    "XDWS.DE": {
+        "name": "Xtrackers MSCI World Consumer Staples UCITS",
+        "sector_key": "consumer_staples",
+        "isin": "IE00BM67HN09",
+    },
+    "XDWU.DE": {
+        "name": "Xtrackers MSCI World Utilities UCITS",
+        "sector_key": "utilities",
+        "isin": "IE00BM67HQ30",
+    },
+    "XDWM.DE": {
+        "name": "Xtrackers MSCI World Materials UCITS",
+        "sector_key": "materials",
+        "isin": "IE00BM67HS53",
+    },
+    "XWTS.DE": {
+        "name": "Xtrackers MSCI World Communication Services UCITS",
+        "sector_key": "communications",
+        "isin": "IE00BM67HR47",
+    },
+    "IQQ6.DE": {
+        "name": "iShares Developed Markets Property Yield UCITS",
+        "sector_key": "real_estate",
+        "isin": "IE00B1FZS350",
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # ETF ROTATION — PARAMETRI STRATEGIA
 # ---------------------------------------------------------------------------
-# Benchmark contro cui misurare la Relative Strength dei settori. ^GSPC
-# (S&P 500 spot) è coerente con l'universo Select Sector SPDR US (stesso
-# perimetro GICS). Per l'universo UCITS EU il benchmark resta ^GSPC: i
-# ZPD*.DE tracciano gli stessi Select Sector Index, cambia solo il wrapper
-# — usare STOXX 600 confonderebbe currency effect e constituents diversi.
+# Benchmark contro cui misurare la Relative Strength dei settori. Il benchmark
+# dev'essere coerente col perimetro dell'universo — mischiare confonde RS con
+# differenze geografiche:
+#
+# - US / EU  → ^GSPC (S&P 500). Coerente con Select Sector SPDR (US) e con
+#              ZPD*.DE UCITS (stesso Select Sector Index, solo wrapper diverso).
+# - WORLD    → URTH (iShares MSCI World ETF). Stesso perimetro geografico dei
+#              settori Xtrackers XDW*/XWTS/XZRE. URTH è USD-denominated, liquido
+#              via yfinance. In alternativa XDWD.DE se preferisci il wrapper
+#              UCITS, ma URTH ha storia più lunga e pulita su yfinance.
+#
+# ``ETF_BENCHMARK`` resta come default US-centric (back-compat). Per il branch
+# WORLD, ``get_etf_benchmark(region)`` ritorna il benchmark corretto.
 ETF_BENCHMARK: str = "^GSPC"
+ETF_BENCHMARK_WORLD: str = "URTH"
+
+_ETF_BENCHMARK_BY_REGION: dict[str, str] = {
+    "US": ETF_BENCHMARK,
+    "EU": ETF_BENCHMARK,  # UCITS SPDR tracciano stesso Select Sector Index
+    "WORLD": ETF_BENCHMARK_WORLD,
+    "ALL": ETF_BENCHMARK,  # mixing → default US-centric (edge case, evitare)
+}
+
+
+def get_etf_benchmark(region: str) -> str:
+    """Ritorna il ticker benchmark yfinance per la region ETF data.
+
+    Sollevamento KeyError silenzioso → fallback US. Il chiamante può verificare
+    se region è valida consultando ``_ETF_BENCHMARK_BY_REGION``.
+    """
+    return _ETF_BENCHMARK_BY_REGION.get(region.upper(), ETF_BENCHMARK)
+
 
 # Finestra weekly per il calcolo RS vs benchmark. 26 settimane ≈ 6 mesi —
 # abbastanza lunga da smussare rumore, corta abbastanza da captare rotazioni.
@@ -318,9 +425,9 @@ ETF_MAX_AGGREGATE_EXPOSURE_PCT: float = 0.60  # lascia headroom per single-stock
 ETF_REBALANCE_THRESHOLD: float = 10.0  # delta score necessario per triggerare rotate
 
 # Classificazione ETF (parallela a ``classify`` degli stock).
-ETF_SCORE_OVERWEIGHT: float = 70.0   # A — allocare
-ETF_SCORE_HOLD: float = 55.0          # B — mantenere se già in portfolio
-ETF_SCORE_NEUTRAL: float = 40.0       # C — no action
+ETF_SCORE_OVERWEIGHT: float = 70.0  # A — allocare
+ETF_SCORE_HOLD: float = 55.0  # B — mantenere se già in portfolio
+ETF_SCORE_NEUTRAL: float = 40.0  # C — no action
 # sotto 40 → D AVOID
 
 # ETF stop: 5% hard stop (non ATR-based — ETF sono a bassa vol e ATR stop

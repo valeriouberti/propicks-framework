@@ -180,7 +180,8 @@ propicks-report monthly
 
 # Rotazione settoriale ETF — ranking dell'universo Select Sector SPDR / UCITS
 propicks-rotate                         # US universe, top 3
-propicks-rotate --region EU             # UCITS su Xetra (ZPD*.DE)
+propicks-rotate --region EU             # SPDR UCITS su Xetra (ZPD*.DE)
+propicks-rotate --region WORLD          # Xtrackers MSCI World sector (XDW*/XWTS/XZRE)
 propicks-rotate --top 5 --allocate      # top 5 + proposta allocazione
 propicks-rotate --validate              # validazione macro via Claude (on-demand)
 propicks-rotate --force-validate        # bypassa skip in STRONG_BEAR e cache 48h
@@ -290,21 +291,41 @@ divergono su scoring e validazione. Il branch è determinato dal ticker via
 
 ### Universo ETF (Fase 1 completata)
 
-Definito in `config.py::SECTOR_ETFS_US` e `SECTOR_ETFS_EU`. Select Sector SPDR
-US (11 settori GICS) mappati sui rispettivi **SPDR S&P U.S. Select Sector
-UCITS** (tickers `ZPD*.DE` su Xetra). Gli UCITS tracciano lo **stesso Select
-Sector Index** degli SPDR US — esposizione identica, solo wrapper irlandese
-per accesso da broker europei. Non sono sector europei: la tesi di rotazione
-è unica, il trader sceglie il listing in base a fiscalità e liquidità del
-proprio broker.
+Tre universi paralleli in `config.py`, selezionabili via `--region`:
 
-Eccezione: `XLRE` non ha un SPDR US Real Estate Select Sector UCITS
-equivalente — campo `eu_equivalent=None`, alternativa esterna documentata
-in `eu_equivalent_note` (IUSP.L traccia però un indice diverso).
+1. **US** — `SECTOR_ETFS_US`: Select Sector SPDR (11 settori GICS, tickers `XL*`)
+2. **EU** — `SECTOR_ETFS_EU`: SPDR S&P U.S. Select Sector UCITS (`ZPD*.DE` su
+   Xetra). Wrapper UCITS degli stessi Select Sector Index US — esposizione
+   identica, solo wrapper irlandese accumulating. Tesi di rotazione unica con
+   US; il trader sceglie il listing in base a fiscalità e liquidità.
+3. **WORLD** — `SECTOR_ETFS_WORLD`: Xtrackers MSCI World sector UCITS
+   (serie `XDW*.DE`, più `XWTS.DE` per communications e `XZRE.DE` per real
+   estate). Perimetro MSCI World (developed markets, ~65-70% US + ~15% Europa
+   + ~6% Giappone), non è un mirror dei SPDR — settori world includono nomi
+   europei/giapponesi con dinamica diversa (es. energy con Shell/TotalEnergies
+   vs Chevron/Exxon puri US). Tesi di rotazione globale separata.
 
-**Verifica ticker prima del primo uso**: i listing Xetra ZPD* sono
-accumulating (IE-domiciled). Varianti distributing su LSE (serie SXR*) hanno
-ticker diversi e non sono registrate qui.
+Eccezioni:
+- `XLRE` non ha SPDR US Real Estate Select Sector UCITS equivalente
+  (`eu_equivalent=None`). Serie WORLD invece copre real_estate via `XZRE.DE`
+  (lanciato 2021 post-GICS reshuffle, ISIN separato dalla serie XDW* core).
+- `XWTS.DE` è l'outlier naming della serie WORLD (communications); riflette
+  il GICS 2018 reshuffle, include Meta/Alphabet/Netflix come XLC US.
+
+**Verifica ticker prima del primo uso**: i listing Xetra `ZPD*` e `XDW*` sono
+accumulating (IE-domiciled). Alcuni broker retail EU non quotano `XWTS` o
+`XZRE` su Xetra — fallback su listing Milano (`.MI`) se disponibile. Varianti
+distributing su LSE hanno ticker diversi e non sono registrate qui.
+
+**Benchmark RS per region** (vedi `config.get_etf_benchmark`):
+- US/EU → `^GSPC` (coerente con Select Sector Index)
+- WORLD → `URTH` (iShares MSCI World ETF, stesso perimetro dei XDW*)
+
+Mischiare benchmark e universo confonde outperformance settoriale con
+differenze di perimetro geografico. `rank_universe` sceglie automaticamente
+il benchmark giusto. Il regime classifier resta sempre su `^GSPC` anche per
+WORLD (correlazione S&P/MSCI World ≈ 0.95 weekly giustifica l'approssimazione
+e `REGIME_FAVORED_SECTORS` è US-calibrata).
 
 ### Regime → Settori Favoriti
 
@@ -362,9 +383,10 @@ Entry point dedicato (non un branch di `propicks-scan`): la rotazione è un
 workflow diverso dal setup single-stock e merita un comando suo.
 
 ```bash
-propicks-rotate                        # US, top 3, solo ranking
+propicks-rotate                        # US (SPDR Select Sector), top 3
 propicks-rotate --top 5                # US, top 5
-propicks-rotate --region EU            # universo UCITS (ZPD*.DE)
+propicks-rotate --region EU            # SPDR UCITS (ZPD*.DE)
+propicks-rotate --region WORLD         # Xtrackers MSCI World (XDW*/XWTS/XZRE)
 propicks-rotate --allocate             # include proposta allocazione
 propicks-rotate --validate             # validazione macro via Claude
 propicks-rotate --json                 # output JSON
