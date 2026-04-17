@@ -18,9 +18,11 @@ propicks-ai-framework/
 │   ├── config.py              # Parametri operativi (capitale, regole, pesi, regime, contract Pine)
 │   ├── domain/                # Puro: nessun I/O, nessuna rete
 │   │   ├── indicators.py      # EMA, RSI, ATR, ADX, MACD, pct_change
-│   │   ├── scoring.py         # 6 sub-score + classify + analyze_ticker (orchestra regime)
+│   │   ├── scoring.py         # 6 sub-score stock + classify + analyze_ticker
+│   │   ├── etf_scoring.py     # 4 sub-score ETF (RS/regime/mom/trend) + rank_universe + alloc
+│   │   ├── etf_universe.py    # Query helpers su SECTOR_ETFS_US/EU
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
-│   │   ├── sizing.py          # calculate_position_size, portfolio_value
+│   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
 │   │   ├── validation.py      # validate_scores, validate_date
 │   │   └── verdict.py         # verdict qualitativo, max_drawdown
 │   ├── io/                    # Persistenza JSON (atomic writes)
@@ -30,9 +32,11 @@ propicks-ai-framework/
 │   ├── market/
 │   │   └── yfinance_client.py # Unico modulo che parla con yfinance
 │   ├── ai/                    # Adapter Anthropic (validazione tesi via Claude)
-│   │   ├── claude_client.py   # SDK anthropic + ThesisVerdict (pydantic)
-│   │   ├── prompts.py         # System prompt + user template (EN, professional)
-│   │   └── thesis_validator.py# Gate + cache giornaliera + orchestrazione
+│   │   ├── claude_client.py   # SDK anthropic + ThesisVerdict + ETFRotationVerdict
+│   │   ├── prompts.py         # System prompt stock (equity analyst)
+│   │   ├── etf_prompts.py     # System prompt ETF (macro strategist)
+│   │   ├── thesis_validator.py# Gate + cache 24h + orchestrazione stock
+│   │   └── etf_validator.py   # Skip STRONG_BEAR + cache 48h + orchestrazione rotation
 │   ├── reports/               # Markdown generators
 │   │   ├── benchmark.py       # get_benchmark_performance (^GSPC, FTSEMIB.MI)
 │   │   ├── common.py          # parse_date, trades_*_between, fmt_pct
@@ -42,7 +46,8 @@ propicks-ai-framework/
 │       ├── scanner.py         # propicks-scan
 │       ├── portfolio.py       # propicks-portfolio
 │       ├── journal.py         # propicks-journal
-│       └── report.py          # propicks-report
+│       ├── report.py          # propicks-report
+│       └── rotate.py          # propicks-rotate (sector rotation ETF)
 ├── tradingview/               # Pine script (contract con config.py)
 │   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
 │   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
@@ -53,6 +58,8 @@ propicks-ai-framework/
 │   └── unit/                  # Test puri su domain/ (no I/O, no rete)
 │       ├── test_indicators.py
 │       ├── test_scoring.py
+│       ├── test_etf_scoring.py     # Sub-score ETF, regime cap, allocation
+│       ├── test_etf_universe.py    # Query helpers universo ETF
 │       ├── test_sizing.py
 │       ├── test_verdict.py
 │       ├── test_regime.py
@@ -118,7 +125,7 @@ ogni chiamata fresca.
 
 ## Comandi Principali
 
-Quattro entry points CLI definiti in `pyproject.toml`. Funzionano da qualsiasi
+Cinque entry points CLI definiti in `pyproject.toml`. Funzionano da qualsiasi
 cwd dopo l'install editable: i path di `data/` e `reports/` sono ancorati alla
 root del progetto (ricerca `pyproject.toml`).
 
@@ -171,6 +178,14 @@ propicks-journal stats --strategy TechTitans
 propicks-report weekly
 propicks-report monthly
 
+# Rotazione settoriale ETF — ranking dell'universo Select Sector SPDR / UCITS
+propicks-rotate                         # US universe, top 3
+propicks-rotate --region EU             # UCITS su Xetra (ZPD*.DE)
+propicks-rotate --top 5 --allocate      # top 5 + proposta allocazione
+propicks-rotate --validate              # validazione macro via Claude (on-demand)
+propicks-rotate --force-validate        # bypassa skip in STRONG_BEAR e cache 48h
+propicks-rotate --json --allocate       # output JSON completo
+
 # Test unit (solo domain/, nessuna rete)
 pytest
 ```
@@ -180,14 +195,16 @@ pytest
 Queste regole sono hardcoded e NON devono essere aggirate:
 
 - **Max posizioni aperte**: 10
-- **Max size singola posizione**: 15% del capitale
+- **Max size singola posizione**: 15% del capitale (stock) / 20% (sector ETF)
+- **Max esposizione aggregata sector ETF**: 60% del capitale
 - **Min cash reserve**: 20% del capitale
-- **Max loss per trade**: 8% della posizione
+- **Max loss per trade**: 8% della posizione (stock) / 5% (sector ETF, via stop hard)
 - **Max loss settimanale**: 5% del capitale totale → blocco trading
 - **Max loss mensile**: 15% del capitale totale → blocco trading e revisione
 - **No entry se earnings entro 5 giorni** (warning, non blocco — il trader decide)
 - **Score minimo per entry**: Claude >= 6/10, Tecnico >= 60/100
-- **Regime weekly minimo per validazione AI**: NEUTRAL (code >= 3). BEAR/STRONG_BEAR skippano `--validate` senza spendere token (override con `--force-validate`).
+- **Regime weekly minimo per validazione AI stock**: NEUTRAL (code >= 3). BEAR/STRONG_BEAR skippano `--validate` senza spendere token (override con `--force-validate`).
+- **Regime hard gate ETF rotation**: in STRONG_BEAR (1) i settori non favoriti sono forzati a score 0; in BEAR (2) sono capped a 50. In NEUTRAL+ il ranking è libero.
 
 ## Convenzioni Codice
 
@@ -261,6 +278,145 @@ Pro Picks (mensile)
 - `tradingview/*.pine` hanno header che punta a `config.py` come source of truth per EMA/RSI/ATR/volume/soglie
 - `propicks-scan` stampa sempre il blocco Pine-ready a fine output così il trader copia-incolla i livelli invece di digitarli
 - Il gate regime in `validate_thesis` impedisce chiamate Claude quando il Pine weekly direbbe NO ENTRY
+
+## Strategia ETF Settoriali (parallela agli stock)
+
+Il framework supporta due strategie parallele che condividono `regime.py` ma
+divergono su scoring e validazione. Il branch è determinato dal ticker via
+`domain.etf_universe.get_asset_type`:
+
+- **STOCK** → flow esistente (`analyze_ticker` → tesi aziendale → Claude)
+- **SECTOR_ETF** → flow rotazione (RS vs benchmark + regime fit → Claude macro)
+
+### Universo ETF (Fase 1 completata)
+
+Definito in `config.py::SECTOR_ETFS_US` e `SECTOR_ETFS_EU`. Select Sector SPDR
+US (11 settori GICS) mappati sui rispettivi **SPDR S&P U.S. Select Sector
+UCITS** (tickers `ZPD*.DE` su Xetra). Gli UCITS tracciano lo **stesso Select
+Sector Index** degli SPDR US — esposizione identica, solo wrapper irlandese
+per accesso da broker europei. Non sono sector europei: la tesi di rotazione
+è unica, il trader sceglie il listing in base a fiscalità e liquidità del
+proprio broker.
+
+Eccezione: `XLRE` non ha un SPDR US Real Estate Select Sector UCITS
+equivalente — campo `eu_equivalent=None`, alternativa esterna documentata
+in `eu_equivalent_note` (IUSP.L traccia però un indice diverso).
+
+**Verifica ticker prima del primo uso**: i listing Xetra ZPD* sono
+accumulating (IE-domiciled). Varianti distributing su LSE (serie SXR*) hanno
+ticker diversi e non sono registrate qui.
+
+### Regime → Settori Favoriti
+
+Tabella opinabile in `config.py::REGIME_FAVORED_SECTORS` — view ciclica
+classica (early→late cycle → defensives → capital preservation). Va rivista
+a ogni regime change verificando che i leader reali confermino la tabella.
+
+| Regime | Settori favoriti |
+|--------|------------------|
+| 5 STRONG_BULL | tech, consumer disc., comms, financials, industrials |
+| 4 BULL        | tech, consumer disc., industrials, materials, financials |
+| 3 NEUTRAL     | healthcare, industrials, financials, tech |
+| 2 BEAR        | consumer staples, utilities, healthcare |
+| 1 STRONG_BEAR | consumer staples, utilities |
+
+### Scoring engine ETF (Fase 2 completata)
+
+`domain/etf_scoring.py` è il parallelo di `domain/scoring.py` ma con una
+formula diversa — il problema è diverso. Sugli ETF settoriali non ha senso
+cercare pullback vicino all'ATH di un single-name: si cerca *leadership
+relativa* e *fit col regime macro*.
+
+**Formula composite (0-100):**
+
+```
+composite_etf = RS * 0.40 + regime_fit * 0.30 + abs_momentum * 0.20 + trend * 0.10
+```
+
+- **RS vs benchmark (40%)** — `close(ETF)/close(^GSPC)` normalizzato su 26 weeks,
+  poi slope sulla EMA(10 weeks) della RS line. Leader in accelerazione = 100.
+  Ex-leader in distribuzione (RS alto ma slope negativo) = 55. Lagger in
+  distribuzione = 10.
+- **Regime fit (30%)** — lookup su `REGIME_FAVORED_SECTORS`. Favorito nel regime
+  corrente = 100, favorito nel regime adiacente (transizione) = 60, non
+  favorito = 20, regime ignoto = 50.
+- **Absolute momentum (20%)** — perf 3M del settore (non RS, assoluto).
+  +15%+ = 100, scala a step fino a -5%+ = 10.
+- **Trend (10%)** — price vs EMA30 weekly (stesso livello del regime classifier)
+  + slope EMA a 4 settimane. Price sopra EMA in salita = 100.
+
+**Regime hard-gate (architetturale):** oltre al peso 30% nella formula, il
+regime applica un cap superiore allo score dei settori non favoriti —
+`domain.etf_scoring.apply_regime_cap`:
+
+- STRONG_BEAR + non-favored → score forzato a **0** (no long ciclicali in crisi)
+- BEAR + non-favored → score capped a **50** (no overweight cicliche)
+- NEUTRAL+ → nessun cap, ranking libero
+
+Questo evita che un XLK con momentum forte esca top-ranked in un regime
+di drawdown — coerente col gate regime già usato in `validate_thesis`.
+
+### CLI `propicks-rotate`
+
+Entry point dedicato (non un branch di `propicks-scan`): la rotazione è un
+workflow diverso dal setup single-stock e merita un comando suo.
+
+```bash
+propicks-rotate                        # US, top 3, solo ranking
+propicks-rotate --top 5                # US, top 5
+propicks-rotate --region EU            # universo UCITS (ZPD*.DE)
+propicks-rotate --allocate             # include proposta allocazione
+propicks-rotate --validate             # validazione macro via Claude
+propicks-rotate --json                 # output JSON
+```
+
+**Output:** tabella ranking 11 settori con score + sub-score + RS ratio +
+perf 3M + classification (A OVERWEIGHT, B HOLD, C NEUTRAL, D AVOID) +
+dettaglio del top-pick. Con `--allocate`: proposta equal-weight 20% per
+ETF sui top-N, capped al 60% aggregato.
+
+### Portfolio construction ETF
+
+`suggest_allocation` codifica le regole di costruzione:
+
+- **NEUTRAL+**: top-N (default 3) equal-weight 20% ciascuno, cap aggregato 60%
+- **BEAR**: top-1 difensivo, 15% max (N ridotto automaticamente)
+- **STRONG_BEAR**: allocazione vuota (flat, cash)
+- Esclusi classi C (NEUTRAL) e D (AVOID) dalla selezione
+
+La rotazione a tranche su regime change (2-3 tranche su 5 sessioni) è una
+regola operativa manuale — non ancora codificata nello store.
+
+### AI validation ETF (on-demand, non default)
+
+Parallelo a `ai/thesis_validator.py` ma con assunzioni diverse:
+
+- **`ai/etf_prompts.py`** — `ETF_SYSTEM_PROMPT` da macro strategist, non da
+  equity analyst. Zero focus su earnings / moat / unit economics. Focus su
+  macro drivers (yields, DXY, commodities), breadth, positioning, rotation
+  stage, flows. Web search mirata: spot macro, ETF flows, sector breadth
+  — NON earnings date.
+- **`ai/etf_validator.py::validate_rotation`** — cache 48h (vs 24h stock: la
+  view macro si muove più lenta), chiave `(region, regime_code, YYYY-MM-DD)`.
+  Skip automatico in STRONG_BEAR (la risposta è ovvia: flat), override con
+  `--force-validate`.
+- **Schema verdict** — `ETFRotationVerdict` in `ai/claude_client.py` con
+  campi diversi: `top_sector_verdict`, `alternative_sector`, `stage`
+  (EARLY/MID/LATE), `rebalance_horizon_weeks`, `entry_tactic`
+  (ALLOCATE_NOW / STAGGER_3_TRANCHES / WAIT_PULLBACK / ...). Niente
+  `reward_risk_ratio`: su rotation settoriale non ha senso.
+- **Non default**: `--validate` su `propicks-rotate` è opt-in. La rotazione
+  weekly è meno sensibile al noise qualitativo — spendere token ogni
+  weekly rebalance è eccessivo. Usare quando c'è un regime change o una
+  decisione di entry con size rilevante.
+
+### Invarianti ETF
+
+- ETF settoriali: max 20% del capitale (vs 15% dei single-stock)
+- Rotazione graduale: cambio regime BULL→BEAR = uscita in 2-3 tranche su 5
+  sessioni per evitare whipsaw (regola operativa, non ancora codificata)
+- Nessun ETF futures-based (USO, UNG, DBC): contango decay incompatibile con
+  holding > 2 settimane — non verranno mai aggiunti all'universo
 
 ## Estensioni Future (Roadmap)
 

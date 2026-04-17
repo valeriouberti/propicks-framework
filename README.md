@@ -2,6 +2,11 @@
 
 Motore Python per un trading system AI-driven che combina segnali da Investing Pro Picks AI con analisi qualitativa (Claude/Perplexity) e tecnica (yfinance/TradingView). Gestisce il ciclo completo: **screening → scoring → sizing → execution → journaling → review**.
 
+Due strategie parallele condividono regime classifier, sizing e journal:
+
+- **Single-stock** (Pro Picks AI mensile + scoring tecnico + thesis validator Claude)
+- **Sector rotation** (SPDR Select Sector / UCITS ZPD*.DE, scoring RS + regime + momentum + trend + rotation validator Claude)
+
 ## Requisiti
 
 - Python **3.10+**
@@ -50,11 +55,12 @@ Il file `.env` viene caricato automaticamente all'import di `propicks.config` (l
 
 Il numero di ricerche effettuate per chiamata viene loggato su stderr, così da avere visibilità immediata sulla spesa.
 
-L'install editable registra **4 comandi CLI** nel PATH del virtualenv:
+L'install editable registra **5 comandi CLI** nel PATH del virtualenv:
 
 | Comando | Scopo |
 |---------|-------|
-| `propicks-scan` | Scoring tecnico 0-100 di uno o più ticker |
+| `propicks-scan` | Scoring tecnico 0-100 di uno o più ticker (single-stock) |
+| `propicks-rotate` | Rotazione settoriale ETF (RS + regime + momentum + trend) |
 | `propicks-portfolio` | Position sizing, stato portafoglio, rischio |
 | `propicks-journal` | Registrazione trade (append-only), metriche |
 | `propicks-report` | Report markdown settimanali/mensili |
@@ -90,7 +96,34 @@ Output: verdict (CONFIRM/CAUTION/REJECT), conviction 0-10, bull/bear case, catal
 
 Ticker italiani: usa il suffisso `.MI` (es. `ENI.MI`, `ISP.MI`).
 
-### 2. Calcolare la size di un nuovo trade
+### 2. Rotazione settoriale ETF
+
+```bash
+propicks-rotate                        # US universe, top 3
+propicks-rotate --top 5                # US, top 5
+propicks-rotate --region EU            # UCITS su Xetra (ZPD*.DE)
+propicks-rotate --allocate             # include proposta allocazione
+propicks-rotate --validate             # validazione macro via Claude
+propicks-rotate --json                 # output JSON
+```
+
+Ranking dei Select Sector SPDR (XL*) o dei loro wrapper UCITS (ZPD*.DE) basato su uno score composito:
+
+- **RS (40%)** — forza relativa vs `^GSPC` (ratio ETF/bench 26w + EMA10w slope)
+- **Regime fit (30%)** — bonus/malus in base al regime weekly: favored=100, adjacent=60, not_favored=20
+- **Abs momentum (20%)** — performance 3 mesi
+- **Trend (10%)** — prezzo vs EMA30w + slope
+
+**Regime hard-gate:** in STRONG_BEAR i settori non-favoriti vengono azzerati (score=0), in BEAR vengono cappati a 50. Impedisce che un settore con momentum forte ma controtrend macro finisca nei top pick.
+
+Proposta allocazione (`--allocate`):
+- STRONG_BEAR → flat (no ETF settoriali, cash)
+- BEAR → solo top-1 su difensivi
+- NEUTRAL/BULL/STRONG_BULL → top-N equal-weight (default N=3), cap 15% per ETF, 60% aggregato
+
+Validazione AI (`--validate`, richiede `ANTHROPIC_API_KEY`): macro strategist prompt (non equity analyst) — focus su macro drivers, breadth, positioning/flows, rotation stage, alternative, consistency con il regime. Cache 48h in `data/ai_cache/` (la view macro muove più lenta del setup single-stock).
+
+### 3. Calcolare la size di un nuovo trade
 
 ```bash
 propicks-portfolio size AAPL --entry 185.50 --stop 171.50 \
@@ -103,7 +136,7 @@ Calcola il numero di azioni rispettando:
 - Size differenziata per convinzione: HIGH (avg score ≥ 80) = 12%, MEDIUM (≥ 60) = 8%
 - Warning se lo stop è oltre l'**8%** di loss per trade
 
-### 3. Aprire la posizione
+### 4. Aprire la posizione
 
 ```bash
 propicks-portfolio add AAPL --entry 185.50 --shares 25 --stop 171.50 \
@@ -112,7 +145,7 @@ propicks-portfolio add AAPL --entry 185.50 --shares 25 --stop 171.50 \
 
 Hard validation: vengono rifiutate aperture che violano le regole di rischio (size > 15%, riserva cash < 20%, stop > 8%, score < soglie minime).
 
-### 4. Registrare il trade nel journal
+### 5. Registrare il trade nel journal
 
 ```bash
 propicks-journal add AAPL long --entry-price 185.50 --entry-date 2026-01-15 \
@@ -120,7 +153,7 @@ propicks-journal add AAPL long --entry-price 185.50 --entry-date 2026-01-15 \
   --strategy TechTitans --catalyst "Beat earnings Q4, guidance raised"
 ```
 
-### 5. Chiudere il trade
+### 6. Chiudere il trade
 
 Rimuovi la posizione dal portafoglio e registra la chiusura nel journal:
 
@@ -130,7 +163,7 @@ propicks-journal close AAPL --exit-price 208.30 --exit-date 2026-02-10 \
   --reason "Target raggiunto"
 ```
 
-### 6. Monitorare e riflettere
+### 7. Monitorare e riflettere
 
 ```bash
 # Stato portafoglio con P&L live
@@ -177,17 +210,17 @@ I test unit sono puri (nessuna rete, nessun filesystem mutato) e coprono indicat
 ```
 propicks-ai-framework/
 ├── src/propicks/
-│   ├── config.py         # Parametri operativi (invarianti + contract Pine)
-│   ├── domain/           # Logica pura (indicators, scoring, sizing, verdict, regime)
+│   ├── config.py         # Parametri operativi (invarianti + contract Pine + universo ETF)
+│   ├── domain/           # Logica pura (indicators, scoring, sizing, verdict, regime, etf_scoring, etf_universe)
 │   ├── io/               # Persistenza JSON atomica (portfolio, journal)
 │   ├── market/           # Adapter yfinance (unico punto che parla con la rete)
-│   ├── ai/               # Adapter Anthropic (validazione tesi via Claude)
+│   ├── ai/               # Adapter Anthropic: thesis_validator (stock) + etf_validator (rotation)
 │   ├── reports/          # Generatori markdown (weekly, monthly, benchmark)
-│   └── cli/              # Thin argparse wrappers (entry points)
+│   └── cli/              # Thin argparse wrappers (scanner, rotate, portfolio, journal, report)
 ├── tradingview/          # Pine scripts (daily_signal + weekly_regime)
 ├── docs/                 # Playbook operativo, prompt AI, note
-├── tests/unit/           # Test puri su domain/
-├── data/                 # Stato runtime (portfolio.json, journal.json)
+├── tests/unit/           # Test puri su domain/ (stock + ETF scoring)
+├── data/                 # Stato runtime (portfolio.json, journal.json, ai_cache/)
 └── reports/              # Report markdown generati
 ```
 
@@ -220,13 +253,15 @@ La cartella [`tradingview/`](./tradingview/) contiene due Pine script che affian
 Queste regole sono hardcoded e applicate dalla validazione di `add_position`:
 
 - Max posizioni aperte: **10**
-- Max size singola posizione: **15%** del capitale
+- Max size singola posizione: **15%** del capitale (single-stock), **20%** per sector ETF (diversificati)
+- Max esposizione aggregata su sector ETF: **60%** del capitale
 - Min cash reserve: **20%** del capitale
 - Max loss per trade: **8%** della posizione
 - Max loss settimanale: **5%** del capitale → stop trading
 - Max loss mensile: **15%** del capitale → stop trading + revisione
 - Score minimo per entry: Claude **≥ 6/10**, Tecnico **≥ 60/100**
 - Regime weekly minimo per validazione AI: **NEUTRAL** (code ≥ 3). BEAR/STRONG_BEAR blocca `--validate` (override con `--force-validate`).
+- Regime hard-gate ETF: in STRONG_BEAR i settori non-favoriti hanno score=0; in BEAR sono cappati a 50.
 
 ## Workflow con AI
 
@@ -237,7 +272,12 @@ Gli output CLI includono blocchi pronti da incollare nei prompt Claude:
 3. `propicks-journal stats` → **prompt Claude 3D** (post-trade analysis)
 4. `propicks-report weekly|monthly` → contesto per qualsiasi prompt
 
-In alternativa al copia/incolla manuale, `propicks-scan --validate` chiama direttamente l'API Anthropic (Claude Opus 4.6 di default) e restituisce un verdict strutturato JSON-validated con bull/bear case, catalizzatori e trigger di invalidazione.
+In alternativa al copia/incolla manuale, due validatori AI paralleli chiamano direttamente l'API Anthropic (Claude Opus 4.6 di default):
+
+- `propicks-scan --validate` → **thesis validator** (single-stock, prompt equity analyst, cache 24h, focus su earnings/catalyst/setup tecnico)
+- `propicks-rotate --validate` → **rotation validator** (macro strategist, cache 48h, focus su macro drivers/breadth/positioning/rotation stage, niente earnings)
+
+Entrambi restituiscono verdict strutturati JSON-validated via pydantic. Il prompt di sistema è statico (prompt caching lato Anthropic) e il contenuto dinamico vive nel user prompt.
 
 ## Documentazione estesa
 

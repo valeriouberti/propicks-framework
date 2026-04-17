@@ -71,3 +71,50 @@ def test_sizing_respects_cash_reserve():
     # target 1200 ma cash available 1000 → 10 shares
     assert r["ok"] is True
     assert r["shares"] == 10
+
+
+def test_sizing_stock_uses_15_pct_cap():
+    # Conviction HIGH normalmente userebbe 12% target, ma se lo alziamo
+    # al massimo dobbiamo vedere il cap stock al 15%.
+    r = calculate_position_size(
+        entry_price=100, stop_price=95, score_claude=10, score_tech=100,
+        portfolio=_empty_portfolio(10_000),
+        asset_type="STOCK",
+    )
+    assert r["ok"] is True
+    assert r["position_cap_pct"] == 0.15
+
+
+def test_sizing_etf_uses_20_pct_cap():
+    r = calculate_position_size(
+        entry_price=100, stop_price=95, score_claude=10, score_tech=100,
+        portfolio=_empty_portfolio(10_000),
+        asset_type="SECTOR_ETF",
+    )
+    assert r["ok"] is True
+    assert r["asset_type"] == "SECTOR_ETF"
+    assert r["position_cap_pct"] == 0.20
+    # target 12% = 1200, cap 20% = 2000 → target vince → 12 shares
+    assert r["shares"] == 12
+
+
+def test_sizing_etf_cap_larger_than_stock_under_pressure():
+    # Portfolio pieno di cash, conviction massima: il cap ETF deve permettere
+    # 20% = 2000, mentre lo stock sarebbe bloccato a 15% = 1500.
+    # Usiamo un prezzo che rende la differenza osservabile.
+    pf = _empty_portfolio(10_000)
+    r_stock = calculate_position_size(
+        entry_price=50, stop_price=47,
+        score_claude=10, score_tech=100,
+        portfolio=pf, asset_type="STOCK",
+    )
+    r_etf = calculate_position_size(
+        entry_price=50, stop_price=47,
+        score_claude=10, score_tech=100,
+        portfolio=pf, asset_type="SECTOR_ETF",
+    )
+    # Entrambi limitati dal target 12% = 1200 → 24 shares uguali.
+    # Il test serve a confermare che il cap non abbassa il target sotto 12%.
+    assert r_stock["shares"] == 24
+    assert r_etf["shares"] == 24
+    assert r_etf["max_value"] > r_stock["max_value"]

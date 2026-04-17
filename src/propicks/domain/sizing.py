@@ -6,9 +6,10 @@ di risultato. L'I/O è responsabilità di io/portfolio_store.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from propicks.config import (
+    ETF_MAX_POSITION_SIZE_PCT,
     HIGH_CONVICTION_SIZE_PCT,
     MAX_LOSS_PER_TRADE_PCT,
     MAX_POSITION_SIZE_PCT,
@@ -17,6 +18,8 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
 )
 from propicks.domain.validation import validate_scores
+
+AssetTypeLiteral = Literal["STOCK", "SECTOR_ETF"]
 
 
 def portfolio_value(portfolio: dict) -> float:
@@ -47,6 +50,7 @@ def calculate_position_size(
     score_claude: int = 7,
     score_tech: int = 70,
     portfolio: Optional[dict] = None,
+    asset_type: AssetTypeLiteral = "STOCK",
 ) -> dict:
     """Calcola quante azioni comprare dati entry, stop e score.
 
@@ -57,6 +61,10 @@ def calculate_position_size(
     - position_value = min(target_value, max_value, cash_disponibile)
     - Verifica MAX_POSITIONS e riserva cash MIN_CASH_RESERVE_PCT
     - Warning se risk_pct_trade > MAX_LOSS_PER_TRADE_PCT
+
+    ``asset_type=SECTOR_ETF`` → ``max_value`` usa ``ETF_MAX_POSITION_SIZE_PCT``
+    (20%) invece di ``MAX_POSITION_SIZE_PCT`` (15%): ETF settoriali sono
+    diversificati e tollerano un cap più alto del single-name.
     """
     if stop_price >= entry_price:
         return {"ok": False, "error": "Stop >= entry: invalido per long."}
@@ -92,8 +100,11 @@ def calculate_position_size(
         }
     conviction_level, conviction_pct = conv
 
+    position_cap_pct = (
+        ETF_MAX_POSITION_SIZE_PCT if asset_type == "SECTOR_ETF" else MAX_POSITION_SIZE_PCT
+    )
     target_value = total_capital * conviction_pct
-    max_value = total_capital * MAX_POSITION_SIZE_PCT
+    max_value = total_capital * position_cap_pct
     reserve = total_capital * MIN_CASH_RESERVE_PCT
     cash_available = max(0.0, cash - reserve)
 
@@ -129,6 +140,7 @@ def calculate_position_size(
     return {
         "ok": True,
         "shares": shares,
+        "asset_type": asset_type,
         "entry_price": round(entry_price, 2),
         "stop_price": round(stop_price, 2),
         "risk_per_share": round(risk_per_share, 2),
@@ -136,6 +148,7 @@ def calculate_position_size(
         "position_pct": round(actual_value / total_capital, 4) if total_capital else 0.0,
         "target_value": round(target_value, 2),
         "max_value": round(max_value, 2),
+        "position_cap_pct": position_cap_pct,
         "cash_available": round(cash_available, 2),
         "avg_score": round(avg_score, 1),
         "conviction": conviction_level,

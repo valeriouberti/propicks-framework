@@ -83,6 +83,23 @@ def download_benchmark(ticker: str, days: int) -> Optional[pd.Series]:
     return hist["Close"]
 
 
+def download_benchmark_weekly(ticker: str, period: str = "3y") -> Optional[pd.Series]:
+    """Close weekly del benchmark per calcoli RS su scala settimanale.
+
+    Ritorna None (non solleva) se i dati non sono disponibili: l'ETF scoring
+    deve poter fallback a RS = neutrale se il benchmark manca, invece di
+    abortire tutta la scan.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=False)
+    except Exception as exc:
+        print(f"[warning] benchmark weekly {ticker} non disponibile: {exc}", file=sys.stderr)
+        return None
+    if hist is None or hist.empty:
+        return None
+    return hist["Close"]
+
+
 def get_current_prices(tickers: list[str]) -> dict[str, float]:
     """Ultimo close per ticker. Batch via yf.download, fallback per-ticker."""
     if not tickers:

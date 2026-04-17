@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from propicks.ai.etf_prompts import ETF_SYSTEM_PROMPT
 from propicks.ai.prompts import SYSTEM_PROMPT
 from propicks.config import (
     AI_MAX_TOKENS,
@@ -59,6 +60,40 @@ class ThesisVerdict(BaseModel):
     target_rationale: str
     confidence_by_dimension: ConfidenceByDimension
     suggested_adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ETFConfidenceByDimension(BaseModel):
+    """Confidence per-dimensione (0-10) sulle 6 dimensioni del framework ETF."""
+
+    macro_fit: int = Field(ge=0, le=10)
+    breadth: int = Field(ge=0, le=10)
+    positioning_flows: int = Field(ge=0, le=10)
+    rotation_stage: int = Field(ge=0, le=10)
+    alternatives: int = Field(ge=0, le=10)
+    regime_consistency: int = Field(ge=0, le=10)
+
+
+class ETFRotationVerdict(BaseModel):
+    """Schema strutturato della risposta di Claude per la rotazione ETF."""
+
+    verdict: str = Field(description="CONFIRM | CAUTION | REJECT")
+    conviction_score: int = Field(ge=0, le=10)
+    rotation_summary: str
+    top_sector_verdict: str = Field(description="Ticker or 'FLAT'")
+    alternative_sector: str | None = None
+    stage: str = Field(description="EARLY | MID | LATE | UNKNOWN")
+    macro_drivers: list[str]
+    breadth_read: str
+    positioning_read: str
+    bull_case: list[str]
+    bear_case: list[str]
+    invalidation_triggers: list[str]
+    entry_tactic: str = Field(
+        description="ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH"
+    )
+    rebalance_horizon_weeks: int = Field(ge=2, le=12)
+    alignment_with_ranking: str = Field(description="STRONG | MIXED | CONTRADICTORY")
+    confidence_by_dimension: ETFConfidenceByDimension
 
 
 class AIValidationError(RuntimeError):
@@ -160,6 +195,73 @@ _JSON_SCHEMA = {
 }
 
 
+_ETF_CONFIDENCE_KEYS = (
+    "macro_fit",
+    "breadth",
+    "positioning_flows",
+    "rotation_stage",
+    "alternatives",
+    "regime_consistency",
+)
+
+_ETF_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["CONFIRM", "CAUTION", "REJECT"]},
+        "conviction_score": {"type": "integer"},
+        "rotation_summary": {"type": "string"},
+        "top_sector_verdict": {"type": "string"},
+        "alternative_sector": {"type": ["string", "null"]},
+        "stage": {"type": "string", "enum": ["EARLY", "MID", "LATE", "UNKNOWN"]},
+        "macro_drivers": {"type": "array", "items": {"type": "string"}},
+        "breadth_read": {"type": "string"},
+        "positioning_read": {"type": "string"},
+        "bull_case": {"type": "array", "items": {"type": "string"}},
+        "bear_case": {"type": "array", "items": {"type": "string"}},
+        "invalidation_triggers": {"type": "array", "items": {"type": "string"}},
+        "entry_tactic": {
+            "type": "string",
+            "enum": [
+                "ALLOCATE_NOW",
+                "STAGGER_3_TRANCHES",
+                "WAIT_PULLBACK",
+                "WAIT_CONFIRMATION",
+                "HOLD_CASH",
+            ],
+        },
+        "rebalance_horizon_weeks": {"type": "integer"},
+        "alignment_with_ranking": {
+            "type": "string",
+            "enum": ["STRONG", "MIXED", "CONTRADICTORY"],
+        },
+        "confidence_by_dimension": {
+            "type": "object",
+            "properties": {k: {"type": "integer"} for k in _ETF_CONFIDENCE_KEYS},
+            "required": list(_ETF_CONFIDENCE_KEYS),
+            "additionalProperties": False,
+        },
+    },
+    "required": [
+        "verdict",
+        "conviction_score",
+        "rotation_summary",
+        "top_sector_verdict",
+        "stage",
+        "macro_drivers",
+        "breadth_read",
+        "positioning_read",
+        "bull_case",
+        "bear_case",
+        "invalidation_triggers",
+        "entry_tactic",
+        "rebalance_horizon_weeks",
+        "alignment_with_ranking",
+        "confidence_by_dimension",
+    ],
+    "additionalProperties": False,
+}
+
+
 def _build_tools() -> list[dict] | None:
     """Tools passati a Claude. Attualmente: web_search (server-side Anthropic)."""
     if not AI_WEB_SEARCH_ENABLED:
@@ -185,11 +287,17 @@ def _log_web_search_usage(response: Any) -> None:
     print(f"[ai] {count} web search(es) ≈ ${cost:.2f}", file=sys.stderr)
 
 
-def call_validation(user_prompt: str) -> ThesisVerdict:
-    """Chiama Claude e ritorna un ``ThesisVerdict`` validato.
+def _call_claude_with_schema(
+    user_prompt: str,
+    system_prompt: str,
+    json_schema: dict,
+) -> dict:
+    """Chiama Claude con prompt caching + json_schema e ritorna il payload grezzo.
 
-    Raises:
-        AIValidationError: per problemi di config, rete, rate limit o parsing.
+    Helper interno: gestisce build client, tools, error mapping, parse JSON,
+    normalizzazione 0-10 degli score (Claude a volte ritorna 0-100). Il
+    chiamante è responsabile di validare il payload nello schema pydantic
+    corretto (ThesisVerdict per stock, ETFRotationVerdict per ETF).
     """
     import anthropic
 
@@ -201,12 +309,12 @@ def call_validation(user_prompt: str) -> ThesisVerdict:
         system=[
             {
                 "type": "text",
-                "text": SYSTEM_PROMPT,
+                "text": system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }
         ],
         messages=[{"role": "user", "content": user_prompt}],
-        output_config={"format": {"type": "json_schema", "schema": _JSON_SCHEMA}},
+        output_config={"format": {"type": "json_schema", "schema": json_schema}},
     )
     tools = _build_tools()
     if tools:
@@ -247,7 +355,22 @@ def call_validation(user_prompt: str) -> ThesisVerdict:
             if isinstance(val, (int, float)) and 10 < val <= 100:
                 cbd[k] = round(val / 10)
 
+    return payload
+
+
+def call_validation(user_prompt: str) -> ThesisVerdict:
+    """Chiama Claude per la validazione tesi stock e ritorna ``ThesisVerdict``."""
+    payload = _call_claude_with_schema(user_prompt, SYSTEM_PROMPT, _JSON_SCHEMA)
     try:
         return ThesisVerdict.model_validate(payload)
     except Exception as err:
-        raise AIValidationError(f"Schema mismatch: {err}") from err
+        raise AIValidationError(f"Schema mismatch (stock): {err}") from err
+
+
+def call_etf_validation(user_prompt: str) -> ETFRotationVerdict:
+    """Chiama Claude per la validazione rotazione ETF, ritorna ``ETFRotationVerdict``."""
+    payload = _call_claude_with_schema(user_prompt, ETF_SYSTEM_PROMPT, _ETF_JSON_SCHEMA)
+    try:
+        return ETFRotationVerdict.model_validate(payload)
+    except Exception as err:
+        raise AIValidationError(f"Schema mismatch (etf): {err}") from err
