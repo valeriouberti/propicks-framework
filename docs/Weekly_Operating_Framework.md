@@ -8,6 +8,13 @@ Budget tempo totale: ~3-4h/settimana attive + alerts Pine infrasettimana.
 Su 10k di capitale è il massimo sostenibile senza trasformare il trading in
 un secondo lavoro.
 
+> **Nota:** tutti i comandi `propicks-*` citati in questo documento hanno
+> equivalente UI nella dashboard Streamlit (`propicks-dashboard` oppure
+> `docker compose up -d`). Scanner, ETF Rotation, Portfolio, Journal e
+> Reports sono le pages corrispondenti. CLI e dashboard usano la stessa
+> business logic — scegli l'interfaccia che preferisci, lo stato su
+> `data/` è condiviso.
+
 ---
 
 ## Allocazione capitale di riferimento

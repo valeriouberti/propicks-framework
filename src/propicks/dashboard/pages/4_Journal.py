@@ -96,9 +96,9 @@ with tab_list:
                 "Exit date": t.get("exit_date") or "—",
                 "Exit": f"{t.get('exit_price'):.2f}" if t.get("exit_price") is not None else "—",
                 "P&L %": f"{pnl_pct:+.2f}%" if pnl_pct is not None else "—",
-                "Days": t.get("duration_days") or "—",
-                "Score C": t.get("score_claude") or "—",
-                "Score T": t.get("score_tech") or "—",
+                "Days": str(t.get("duration_days")) if t.get("duration_days") is not None else "—",
+                "Score C": str(t.get("score_claude")) if t.get("score_claude") is not None else "—",
+                "Score T": str(t.get("score_tech")) if t.get("score_tech") is not None else "—",
                 "Catalyst": (t.get("catalyst") or "")[:40],
             })
         st.dataframe(rows, width="stretch", hide_index=True)

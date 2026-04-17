@@ -89,7 +89,7 @@ for r in ranked:
         "Score": r["score_composite"],
         "Class": r["classification"].split(" ")[0],
         "RS": f"{rs.get('score', 0):.0f}",
-        "RS ratio": rs.get("rs_ratio") if rs.get("rs_ratio") is not None else "—",
+        "RS ratio": f"{rs['rs_ratio']:.3f}" if rs.get("rs_ratio") is not None else "—",
         "Regime fit": f"{r.get('regime_fit_score', 0):.0f}",
         "Abs mom": f"{r.get('abs_momentum_score', 0):.0f}",
         "Trend": f"{trend.get('score', 0):.0f}",

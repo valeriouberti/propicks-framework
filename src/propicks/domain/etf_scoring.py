@@ -97,9 +97,19 @@ def score_rs(
     if close_etf_weekly is None or close_benchmark_weekly is None:
         return {"score": 50.0, "rs_ratio": None, "rs_slope": None, "note": "no benchmark"}
 
+    # yfinance restituisce indici tz-aware nel fuso dell'exchange
+    # (NYSE → America/New_York, Xetra → Europe/Berlin). Senza strip, l'inner
+    # join tra un ETF EU e un benchmark US produce 0 righe anche a date uguali.
+    etf = close_etf_weekly.copy()
+    bench = close_benchmark_weekly.copy()
+    if etf.index.tz is not None:
+        etf.index = etf.index.tz_localize(None)
+    if bench.index.tz is not None:
+        bench.index = bench.index.tz_localize(None)
+
     # Allinea gli indici (intersezione date)
     joined = pd.concat(
-        [close_etf_weekly.rename("etf"), close_benchmark_weekly.rename("bench")],
+        [etf.rename("etf"), bench.rename("bench")],
         axis=1,
         join="inner",
     ).dropna()

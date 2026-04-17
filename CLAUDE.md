@@ -8,12 +8,16 @@ Motore Python per un trading system AI-driven che combina segnali da Investing P
 
 Pacchetto installabile (`pip install -e .`) con layout `src/`. Separazione
 netta tra logica pura (`domain/`), persistenza (`io/`), adapter di rete
-(`market/`), adapter AI (`ai/`), generatori di report (`reports/`) e CLI (`cli/`).
+(`market/`), adapter AI (`ai/`), generatori di report (`reports/`), CLI (`cli/`)
+e dashboard Streamlit (`dashboard/`).
 
 ```
 propicks-ai-framework/
 ├── CLAUDE.md                  # Questo file — contesto per Claude Code
 ├── pyproject.toml             # Deps, entry points CLI, tool config (ruff/pytest/mypy)
+├── Dockerfile                 # Immagine dashboard (python:3.12-slim + [dashboard] extra)
+├── docker-compose.yml         # Lancio con volumi persistenti data/ e reports/
+├── .dockerignore              # Esclude .git, .venv, data/, reports/, docs/, tradingview/
 ├── src/propicks/
 │   ├── config.py              # Parametri operativi (capitale, regole, pesi, regime, contract Pine)
 │   ├── domain/                # Puro: nessun I/O, nessuna rete
@@ -42,17 +46,28 @@ propicks-ai-framework/
 │   │   ├── common.py          # parse_date, trades_*_between, fmt_pct
 │   │   ├── weekly.py
 │   │   └── monthly.py
-│   └── cli/                   # Thin argparse wrappers (entry points)
-│       ├── scanner.py         # propicks-scan
-│       ├── portfolio.py       # propicks-portfolio
-│       ├── journal.py         # propicks-journal
-│       ├── report.py          # propicks-report
-│       └── rotate.py          # propicks-rotate (sector rotation ETF)
+│   ├── cli/                   # Thin argparse wrappers (entry points)
+│   │   ├── scanner.py         # propicks-scan
+│   │   ├── portfolio.py       # propicks-portfolio
+│   │   ├── journal.py         # propicks-journal
+│   │   ├── report.py          # propicks-report
+│   │   └── rotate.py          # propicks-rotate (sector rotation ETF)
+│   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
+│       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
+│       ├── _shared.py         # Cached readers, formatters, UI primitives
+│       ├── app.py             # Home / Portfolio Overview
+│       └── pages/             # Streamlit multi-page auto-routing
+│           ├── 1_Scanner.py           # ≡ propicks-scan [--validate]
+│           ├── 2_ETF_Rotation.py      # ≡ propicks-rotate [--region] [--allocate]
+│           ├── 3_Portfolio.py         # ≡ propicks-portfolio size/add/update/remove
+│           ├── 4_Journal.py           # ≡ propicks-journal add/close/list/stats
+│           └── 5_Reports.py           # ≡ propicks-report weekly/monthly + archive
 ├── tradingview/               # Pine script (contract con config.py)
 │   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
 │   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
 ├── docs/
-│   └── Trading_System_Playbook.md  # Workflow operativo + prompt Perplexity/Claude
+│   ├── Trading_System_Playbook.md  # Workflow operativo + prompt Perplexity/Claude
+│   └── Weekly_Operating_Framework.md # Cadenza weekly (Sab review, Dom plan, Lun-Ven exec)
 ├── tests/
 │   ├── conftest.py            # Fixture condivise
 │   └── unit/                  # Test puri su domain/ (no I/O, no rete)
@@ -84,8 +99,12 @@ propicks-ai-framework/
 - **anthropic** — SDK ufficiale per validazione tesi via Claude Opus 4.6
 - **pydantic** — validazione strutturata del verdict AI (`ThesisVerdict`)
 - **python-dotenv** — caricamento `.env` per `ANTHROPIC_API_KEY`
+- **streamlit** (extra `[dashboard]`) — UI multi-page parallela alla CLI
+- **plotly** (extra `[dashboard]`) — chart interattivi opzionali (placeholder)
 - **pytest** (dev) — test unit su `domain/` e `ai/` (SDK mockato)
 - **ruff + mypy** (dev) — lint e type check
+- **Docker** (opzionale) — immagine `python:3.12-slim-bookworm` con `[dashboard]`
+  preinstallato, volumi persistenti `data/` e `reports/`
 
 ## Filosofia di Design
 
@@ -102,6 +121,12 @@ pip install -e ".[dev]"
 
 # Solo runtime
 pip install -e .
+
+# Runtime + dashboard Streamlit (propicks-dashboard entry point)
+pip install -e ".[dashboard]"
+
+# Tutto (dev + dashboard)
+pip install -e ".[dev,dashboard]"
 ```
 
 Per la validazione AI crea un file `.env` in root (già in `.gitignore`):
@@ -125,9 +150,11 @@ ogni chiamata fresca.
 
 ## Comandi Principali
 
-Cinque entry points CLI definiti in `pyproject.toml`. Funzionano da qualsiasi
-cwd dopo l'install editable: i path di `data/` e `reports/` sono ancorati alla
-root del progetto (ricerca `pyproject.toml`).
+Sei entry points definiti in `pyproject.toml` (cinque CLI + dashboard).
+Funzionano da qualsiasi cwd dopo l'install editable: i path di `data/` e
+`reports/` sono ancorati alla root del progetto (ricerca `pyproject.toml`).
+La dashboard Streamlit è **parallela** alla CLI, non la sostituisce — stessa
+business logic, UI diversa.
 
 ```bash
 # Analisi tecnica di un ticker
@@ -189,7 +216,28 @@ propicks-rotate --json --allocate       # output JSON completo
 
 # Test unit (solo domain/, nessuna rete)
 pytest
+
+# Dashboard Streamlit (richiede `pip install -e ".[dashboard]"`)
+propicks-dashboard                         # apre http://localhost:8501
+# equivalente diretto:
+streamlit run src/propicks/dashboard/app.py
+
+# Docker — dashboard in container con volumi persistenti data/ e reports/
+docker compose up -d                       # build + start (dashboard su :8501)
+docker compose logs -f dashboard           # stream log
+docker compose down                        # stop (volumi preservati)
 ```
+
+### Mappatura CLI ↔ dashboard
+
+| CLI                              | Dashboard page                  |
+|----------------------------------|---------------------------------|
+| *(home — no CLI equivalent)*     | `app.py` Portfolio Overview     |
+| `propicks-scan [--validate]`     | `pages/1_Scanner.py`            |
+| `propicks-rotate [--region]`     | `pages/2_ETF_Rotation.py`       |
+| `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py`  |
+| `propicks-journal add/close/list/stats` | `pages/4_Journal.py`       |
+| `propicks-report weekly/monthly` | `pages/5_Reports.py` + archivio |
 
 ## Regole di Business (Invarianti)
 
@@ -234,6 +282,12 @@ Queste regole sono hardcoded e NON devono essere aggirate:
 - **`reports/`** può importare da tutti gli altri layer per comporre i markdown.
 - **`cli/`** è thin: parsing argparse + chiamata a funzioni di domain/io/ai/reports
   + formatting tabellare. Nessuna logica di business qui.
+- **`dashboard/`** è thin come `cli/`: UI Streamlit che chiama le stesse funzioni
+  di `domain/io/ai/reports`. Nessuna logica di business qui. Cached readers in
+  `_shared.py` (`cached_analyze`, `cached_rank`, `cached_current_prices`) per
+  evitare refetch yfinance a ogni rerun. Quando le colonne di un `st.dataframe`
+  possono contenere valori `None` o sentinel `"—"`, serializzarle come stringhe
+  omogenee (altrimenti PyArrow fallisce la conversione a double).
 - **`tradingview/`** NON è Python — sono Pine script che replicano visualmente
   il motore. Il Pine è il layer real-time (timing + alert) che yfinance (EOD)
   non copre. I parametri di default devono matchare `config.py` byte per byte.
@@ -459,10 +513,12 @@ Parallelo a `ai/thesis_validator.py` ma con assunzioni diverse:
 - [ ] TODO: integrazione in `propicks-portfolio add` (validazione pre-apertura)
 - [ ] TODO: salvataggio verdict nel journal al momento dell'entry
 
-### v1.4 — Dashboard Web
-- React/HTML dashboard per visualizzare portafoglio e metriche
-- Equity curve interattiva
-- Heatmap performance per strategia
+### v1.4 — Dashboard Web ✅ (completata via Streamlit)
+- [x] UI multi-page Streamlit (`src/propicks/dashboard/`) parallela alla CLI
+- [x] Entry point `propicks-dashboard` + immagine Docker con volumi persistenti
+- [x] 5 page: Overview, Scanner, ETF Rotation, Portfolio, Journal, Reports
+- [ ] TODO: equity curve interattiva (plotly — dep già in `[dashboard]` extra)
+- [ ] TODO: heatmap performance per strategia
 
 ### v1.5 — Automazione Completa
 - Orchestratore che combina scanner + Claude API + journal
@@ -474,6 +530,10 @@ Parallelo a `ai/thesis_validator.py` ma con assunzioni diverse:
 - Dopo modifiche a `domain/` esegui `pytest` — tutti i test girano senza rete
 - Per modifiche a `cli/` o `reports/`, smoke test con gli entry points
   (`propicks-portfolio status`, `propicks-report weekly`, ecc.)
+- Per modifiche a `dashboard/`, smoke test con `propicks-dashboard` o
+  `streamlit run src/propicks/dashboard/app.py` — verifica che ogni page
+  renda senza eccezioni e che i `st.dataframe` non rompano la serializzazione
+  Arrow (colonne con tipi misti `float`/`"—"` vanno tutte a string)
 - I file JSON in `data/` sono la source of truth — non cancellare mai, solo appendere
 - Il journal è append-only: i trade chiusi non vengono cancellati, viene aggiunto il campo `exit_*`
 - Nuove dipendenze → aggiungi in `[project.dependencies]` di `pyproject.toml`

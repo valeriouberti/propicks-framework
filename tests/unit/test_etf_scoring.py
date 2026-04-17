@@ -76,6 +76,29 @@ def test_rs_index_intersection_handles_misaligned():
     assert out["score"] != 50.0 or out.get("note", "").startswith("storia")
 
 
+def test_rs_cross_timezone_alignment():
+    # yfinance tz-localizza l'indice nel fuso dell'exchange: Xetra (Europe/Berlin)
+    # per gli ETF EU/WORLD, NYSE (America/New_York) per il benchmark ^GSPC/URTH.
+    # Senza strip del tz l'inner join produce 0 righe anche su date identiche.
+    etf = _geom_series(60, 0.005)
+    bench = _geom_series(60, 0.001)
+    etf.index = etf.index.tz_localize("Europe/Berlin")
+    bench.index = bench.index.tz_localize("America/New_York")
+    out = score_rs(etf, bench)
+    assert out["rs_ratio"] is not None
+    assert out["score"] == 100.0
+
+
+def test_rs_mixed_tz_naive_and_aware():
+    # Caso misto: ETF naïve, benchmark tz-aware. Deve comunque allineare.
+    etf = _geom_series(60, 0.005)
+    bench = _geom_series(60, 0.001)
+    bench.index = bench.index.tz_localize("America/New_York")
+    out = score_rs(etf, bench)
+    assert out["rs_ratio"] is not None
+    assert out["score"] == 100.0
+
+
 # ---------------------------------------------------------------------------
 # score_regime_fit
 # ---------------------------------------------------------------------------

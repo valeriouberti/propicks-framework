@@ -166,7 +166,7 @@ else:
             "Strategy": t.get("strategy") or "—",
             "Entry date": t["entry_date"],
             "Exit date": t.get("exit_date") or "—",
-            "Days": t.get("duration_days") or "—",
+            "Days": str(t.get("duration_days")) if t.get("duration_days") is not None else "—",
             "P&L %": fmt_pct((t.get("pnl_pct") or 0) / 100) if t.get("pnl_pct") is not None else "—",
             "Reason": t.get("exit_reason") or "—",
         })

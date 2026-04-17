@@ -278,12 +278,16 @@ propicks-ai-framework/
 │   ├── market/           # Adapter yfinance (unico punto che parla con la rete)
 │   ├── ai/               # Adapter Anthropic: thesis_validator (stock) + etf_validator (rotation)
 │   ├── reports/          # Generatori markdown (weekly, monthly, benchmark)
-│   └── cli/              # Thin argparse wrappers (scanner, rotate, portfolio, journal, report)
+│   ├── cli/              # Thin argparse wrappers (scanner, rotate, portfolio, journal, report)
+│   └── dashboard/        # UI Streamlit parallela alla CLI (app.py + pages/ + launcher)
 ├── tradingview/          # Pine scripts (daily_signal + weekly_regime)
-├── docs/                 # Playbook operativo, prompt AI, note
+├── docs/                 # Playbook + Weekly Operating Framework
 ├── tests/unit/           # Test puri su domain/ (stock + ETF scoring)
 ├── data/                 # Stato runtime (portfolio.json, journal.json, ai_cache/)
-└── reports/              # Report markdown generati
+├── reports/              # Report markdown generati
+├── Dockerfile            # Immagine dashboard (python:3.12-slim + [dashboard] extra)
+├── docker-compose.yml    # Lancio con volumi persistenti data/ e reports/
+└── .dockerignore
 ```
 
 La separazione dei layer è strict: `domain/` non importa da `io/market/cli/reports`. Questo consente:
