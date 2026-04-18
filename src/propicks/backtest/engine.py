@@ -156,6 +156,13 @@ def backtest_ticker(
             ticker, f"storia insufficiente per backtest: {len(hist)} bar"
         )
 
+    # yfinance ritorna DatetimeIndex tz-aware (US/Eastern). Lookup successivi
+    # via pd.Timestamp(date) sono tz-naive → KeyError. Normalizziamo qui una
+    # sola volta. Test sintetici (date_range tz-naive) restano compatibili.
+    if isinstance(hist.index, pd.DatetimeIndex) and hist.index.tz is not None:
+        hist = hist.copy()
+        hist.index = hist.index.tz_localize(None)
+
     close = hist["Close"]
     high = hist["High"]
     low = hist["Low"]

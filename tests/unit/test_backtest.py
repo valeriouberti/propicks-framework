@@ -122,6 +122,17 @@ def test_backtest_exit_reasons_in_known_set():
             assert t.exit_reason in valid
 
 
+def test_backtest_handles_tz_aware_index():
+    """yfinance ritorna DatetimeIndex tz-aware. L'engine deve normalizzarlo:
+    altrimenti hist.index.get_loc(pd.Timestamp(entry_date)) esplode con
+    KeyError perché entry_date round-trip via .date() è tz-naive."""
+    hist = _make_history(n_bars=400, trend="up", seed=7)
+    hist.index = hist.index.tz_localize("America/New_York")
+    # Non deve sollevare TypeError/KeyError
+    result = backtest_ticker("TST", history=hist, threshold=40.0)
+    assert result.ticker == "TST"
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
