@@ -19,18 +19,41 @@ import sys
 from tabulate import tabulate
 
 from propicks.config import (
+    ATR_PERIOD,
     MAX_LOSS_WEEKLY_PCT,
     MAX_POSITIONS,
     MIN_CASH_RESERVE_PCT,
 )
+from propicks.domain.exposure import (
+    compute_beta_weighted_exposure,
+    compute_concentration_warnings,
+    compute_correlation_matrix,
+    compute_sector_exposure,
+    find_correlated_pairs,
+)
+from propicks.domain.indicators import compute_atr
 from propicks.domain.sizing import calculate_position_size, portfolio_value
+from propicks.domain.stock_rs import YF_SECTOR_TO_KEY
+from propicks.domain.trade_mgmt import (
+    DEFAULT_FLAT_THRESHOLD_PCT,
+    DEFAULT_TIME_STOP_DAYS,
+    DEFAULT_TRAILING_ATR_MULT,
+    suggest_stop_update,
+)
 from propicks.io.portfolio_store import (
     add_position,
     load_portfolio,
     remove_position,
     update_position,
 )
-from propicks.market.yfinance_client import get_current_prices
+from propicks.market.yfinance_client import (
+    DataUnavailable,
+    download_history,
+    download_returns,
+    get_current_prices,
+    get_ticker_beta,
+    get_ticker_sector,
+)
 
 
 def show_status(portfolio: dict) -> None:
@@ -140,6 +163,68 @@ def show_risk(portfolio: dict) -> None:
     if risk_sum > weekly_limit:
         print("[warning] rischio aggregato oltre il limite settimanale.")
 
+    _show_exposure(positions, total)
+
+
+def _show_exposure(positions: dict, total_capital: float) -> None:
+    """Sezione esposizione: settori + beta-weighted + correlazioni pairwise.
+
+    Tutti i fetch (prezzi, sector, beta, returns) avvengono qui nella CLI.
+    Le funzioni di ``domain.exposure`` ricevono dati già materializzati.
+    """
+    tickers = list(positions.keys())
+    print()
+    print("=" * 70)
+    print("ESPOSIZIONE")
+    print("=" * 70)
+
+    prices = get_current_prices(tickers)
+    sector_map = {t: get_ticker_sector(t) for t in tickers}
+    sector_key_map = {
+        t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_map.items()
+    }
+    sector_exp = compute_sector_exposure(positions, prices, sector_key_map, total_capital)
+
+    if sector_exp:
+        rows = sorted(
+            ([k, f"{v * 100:.1f}%"] for k, v in sector_exp.items()),
+            key=lambda r: float(r[1].rstrip("%")),
+            reverse=True,
+        )
+        print()
+        print("Concentrazione settoriale (% capitale):")
+        print(tabulate(rows, headers=["Settore", "Esposizione"], tablefmt="github"))
+        for w in compute_concentration_warnings(sector_exp):
+            print(f"[warning] concentrazione: {w}")
+
+    betas = {t: get_ticker_beta(t) for t in tickers}
+    beta_info = compute_beta_weighted_exposure(positions, prices, betas, total_capital)
+    print()
+    print("Beta-weighted gross long exposure (vs SPX):")
+    print(f"  Gross long:           {beta_info['gross_long'] * 100:.1f}% del capitale")
+    print(f"  Beta-weighted:        {beta_info['beta_weighted'] * 100:.1f}% del capitale")
+    print(f"  Posizioni con beta:   {beta_info['n_positions_with_beta']}/{len(tickers)}")
+    if beta_info["default_used_for"]:
+        print(
+            f"  [info] beta=1.0 usato come fallback per: "
+            f"{', '.join(beta_info['default_used_for'])}"
+        )
+
+    if len(tickers) >= 2:
+        returns = download_returns(tickers, period="6mo")
+        corr = compute_correlation_matrix(returns)
+        if corr is None:
+            print("\n[info] correlazioni: dati insufficienti.")
+        else:
+            pairs = find_correlated_pairs(corr, threshold=0.7)
+            print()
+            if pairs:
+                print("Pair con |corr| >= 0.7 (rischio concentrato camuffato):")
+                rows = [[a, b, f"{c:+.2f}"] for a, b, c in pairs[:10]]
+                print(tabulate(rows, headers=["A", "B", "Corr"], tablefmt="github"))
+            else:
+                print("Nessuna pair sopra soglia |corr| >= 0.7 (diversificazione ok).")
+
 
 def _print_size_result(ticker: str, r: dict) -> None:
     if not r.get("ok"):
@@ -218,7 +303,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
         return 2
     print(
         f"Rimosso {args.ticker.upper()}: cash rimborsato al prezzo di entry "
-        f"({pos['shares']} × {pos['entry_price']:.2f})."
+        f"({pos['shares']} x {pos['entry_price']:.2f})."
     )
     print(
         "Promemoria: registra la chiusura nel journal con:\n"
@@ -239,6 +324,116 @@ def cmd_update(args: argparse.Namespace) -> int:
     print(
         f"Aggiornato {args.ticker.upper()}: stop {pos['stop_loss']:.2f}, target {target_str}"
     )
+    return 0
+
+
+def _fetch_current_atr(ticker: str) -> float | None:
+    """Scarica history e ritorna l'ATR(14) corrente. None su errore."""
+    try:
+        hist = download_history(ticker)
+    except DataUnavailable:
+        return None
+    atr = compute_atr(hist["High"], hist["Low"], hist["Close"], ATR_PERIOD)
+    val = float(atr.iloc[-1])
+    return val if val > 0 else None
+
+
+def cmd_manage(args: argparse.Namespace) -> int:
+    """Suggerisci trailing stop update e flagga time stop su posizioni aperte."""
+    portfolio = load_portfolio()
+    positions = portfolio.get("positions", {})
+    if not positions:
+        print("Nessuna posizione aperta.")
+        return 0
+
+    prices = get_current_prices(list(positions.keys()))
+    suggestions: list[tuple[str, dict, dict, float]] = []
+
+    for ticker, pos in positions.items():
+        cur_price = prices.get(ticker)
+        if cur_price is None:
+            print(f"[warning] {ticker}: prezzo non disponibile, skip", file=sys.stderr)
+            continue
+        cur_atr = _fetch_current_atr(ticker)
+        if cur_atr is None:
+            print(f"[warning] {ticker}: ATR non disponibile, skip", file=sys.stderr)
+            continue
+        suggestion = suggest_stop_update(
+            position=pos,
+            current_price=cur_price,
+            current_atr=cur_atr,
+            atr_mult=args.atr_mult,
+            max_days_flat=args.time_stop,
+            flat_threshold_pct=args.flat_threshold,
+        )
+        suggestions.append((ticker, pos, suggestion, cur_price))
+
+    if not suggestions:
+        return 1
+
+    rows = []
+    for ticker, pos, sug, cur in suggestions:
+        flags = []
+        if sug["stop_changed"]:
+            flags.append(f"trail→{sug['new_stop']:.2f}")
+        if sug["time_stop_triggered"]:
+            flags.append("TIME-STOP")
+        if not flags:
+            flags.append("hold")
+        rows.append([
+            ticker,
+            f"{pos['entry_price']:.2f}",
+            f"{cur:.2f}",
+            f"{(cur - pos['entry_price']) / pos['entry_price'] * 100:+.2f}%",
+            f"{pos['stop_loss']:.2f}",
+            f"{sug['highest_price']:.2f}",
+            "Y" if pos.get("trailing_enabled") else "N",
+            ", ".join(flags),
+        ])
+    print(tabulate(
+        rows,
+        headers=["Ticker", "Entry", "Current", "P&L%", "Stop", "Highest", "Trail?", "Action"],
+        tablefmt="github",
+    ))
+
+    for ticker, _, sug, _ in suggestions:
+        if sug["rationale"]:
+            print(f"\n{ticker}:")
+            for r in sug["rationale"]:
+                print(f"  - {r}")
+
+    if not args.apply:
+        print("\n(Run senza modifiche. Usa --apply per scrivere stop/highest_price su portfolio.json.)")
+        return 0
+
+    applied = 0
+    for ticker, _pos, sug, _cur in suggestions:
+        kwargs: dict = {"highest_price": sug["highest_price"]}
+        if sug["stop_changed"]:
+            kwargs["stop_loss"] = sug["new_stop"]
+        try:
+            update_position(portfolio, ticker, **kwargs)
+            applied += 1
+        except ValueError as exc:
+            print(f"[errore] {ticker}: {exc}", file=sys.stderr)
+    print(f"\nAggiornate {applied}/{len(suggestions)} posizioni.")
+    print("Nota: le posizioni con TIME-STOP devono essere chiuse manualmente:")
+    print("  propicks-portfolio remove <TICKER>")
+    print("  propicks-journal close <TICKER> --exit-price <X> --exit-date YYYY-MM-DD --reason 'time stop'")
+    return 0
+
+
+def cmd_trail(args: argparse.Namespace) -> int:
+    """Abilita/disabilita trailing su una posizione specifica."""
+    portfolio = load_portfolio()
+    enabled = args.action == "enable"
+    try:
+        pos = update_position(portfolio, args.ticker, trailing_enabled=enabled)
+    except ValueError as exc:
+        print(f"[errore] {exc}", file=sys.stderr)
+        return 2
+    state = "abilitato" if enabled else "disabilitato"
+    print(f"Trailing {state} su {args.ticker.upper()} (stop attuale {pos['stop_loss']:.2f}).")
     return 0
 
 
@@ -279,6 +474,40 @@ def main() -> int:
     p_rm = sub.add_parser("remove", help="Rimuove una posizione (non chiude il trade)")
     p_rm.add_argument("ticker")
     p_rm.set_defaults(func=cmd_remove)
+
+    p_mgmt = sub.add_parser(
+        "manage",
+        help="Suggerisci trailing stop update e flagga time stop su posizioni aperte",
+    )
+    p_mgmt.add_argument(
+        "--atr-mult",
+        type=float,
+        default=DEFAULT_TRAILING_ATR_MULT,
+        help=f"Trailing stop in multipli di ATR (default {DEFAULT_TRAILING_ATR_MULT})",
+    )
+    p_mgmt.add_argument(
+        "--time-stop",
+        type=int,
+        default=DEFAULT_TIME_STOP_DAYS,
+        help=f"Time stop in giorni (default {DEFAULT_TIME_STOP_DAYS})",
+    )
+    p_mgmt.add_argument(
+        "--flat-threshold",
+        type=float,
+        default=DEFAULT_FLAT_THRESHOLD_PCT,
+        help=f"Soglia |P&L%%| per considerare flat (default {DEFAULT_FLAT_THRESHOLD_PCT})",
+    )
+    p_mgmt.add_argument(
+        "--apply",
+        action="store_true",
+        help="Applica le modifiche a portfolio.json (default: dry-run)",
+    )
+    p_mgmt.set_defaults(func=cmd_manage)
+
+    p_trail = sub.add_parser("trail", help="Abilita/disabilita trailing su una posizione")
+    p_trail.add_argument("action", choices=["enable", "disable"])
+    p_trail.add_argument("ticker")
+    p_trail.set_defaults(func=cmd_trail)
 
     args = parser.parse_args()
     return args.func(args)

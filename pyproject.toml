@@ -39,6 +39,7 @@ propicks-portfolio = "propicks.cli.portfolio:main"
 propicks-journal   = "propicks.cli.journal:main"
 propicks-report    = "propicks.cli.report:main"
 propicks-rotate    = "propicks.cli.rotate:main"
+propicks-backtest  = "propicks.cli.backtest:main"
 propicks-dashboard = "propicks.dashboard.launcher:main"
 
 [tool.setuptools.packages.find]

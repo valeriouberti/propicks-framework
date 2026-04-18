@@ -178,17 +178,24 @@ def update_position(
     ticker: str,
     stop_loss: Optional[float] = None,
     target: Optional[float] = None,
+    highest_price: Optional[float] = None,
+    trailing_enabled: Optional[bool] = None,
 ) -> dict:
     ticker = ticker.upper()
     positions = portfolio.get("positions", {})
     if ticker not in positions:
         raise ValueError(f"Nessuna posizione aperta su {ticker}.")
-    if stop_loss is None and target is None:
-        raise ValueError("Specificare almeno uno tra --stop e --target.")
+    fields = (stop_loss, target, highest_price, trailing_enabled)
+    if all(f is None for f in fields):
+        raise ValueError("Specificare almeno un campo da aggiornare.")
     pos = positions[ticker]
     if stop_loss is not None:
         pos["stop_loss"] = round(stop_loss, 2)
     if target is not None:
         pos["target"] = round(target, 2)
+    if highest_price is not None:
+        pos["highest_price_since_entry"] = round(highest_price, 2)
+    if trailing_enabled is not None:
+        pos["trailing_enabled"] = bool(trailing_enabled)
     save_portfolio(portfolio)
     return pos

@@ -28,8 +28,13 @@ propicks-ai-framework/
 │   │   ├── stock_rs.py        # Peer RS stock vs sector ETF (solo US, campo informativo)
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
 │   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
+│   │   ├── trade_mgmt.py      # Trailing stop ATR-based + time stop (gestione in-vita)
+│   │   ├── exposure.py        # Concentrazione settoriale + beta-weighted + correlazioni
 │   │   ├── validation.py      # validate_scores, validate_date
 │   │   └── verdict.py         # verdict qualitativo, max_drawdown
+│   ├── backtest/              # Walk-forward backtest single-stock (puro su DataFrame)
+│   │   ├── engine.py          # backtest_ticker + Trade/BacktestResult dataclasses
+│   │   └── metrics.py         # win_rate/PF/CAGR/Sharpe/Sortino/DD + aggregate_metrics
 │   ├── io/                    # Persistenza JSON (atomic writes)
 │   │   ├── atomic.py
 │   │   ├── portfolio_store.py # load/save + add/remove/update_position
@@ -49,10 +54,11 @@ propicks-ai-framework/
 │   │   └── monthly.py
 │   ├── cli/                   # Thin argparse wrappers (entry points)
 │   │   ├── scanner.py         # propicks-scan
-│   │   ├── portfolio.py       # propicks-portfolio
+│   │   ├── portfolio.py       # propicks-portfolio (status/risk/size/add/manage/trail/...)
 │   │   ├── journal.py         # propicks-journal
 │   │   ├── report.py          # propicks-report
-│   │   └── rotate.py          # propicks-rotate (sector rotation ETF)
+│   │   ├── rotate.py          # propicks-rotate (sector rotation ETF)
+│   │   └── backtest.py        # propicks-backtest (walk-forward single-stock)
 │   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
 │       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
 │       ├── _shared.py         # Cached readers, formatters, UI primitives
@@ -80,6 +86,9 @@ propicks-ai-framework/
 │       ├── test_verdict.py
 │       ├── test_regime.py
 │       ├── test_stock_rs.py        # Peer RS mapping + gate US-only
+│       ├── test_trade_mgmt.py      # Trailing stop + time stop + suggest_stop_update
+│       ├── test_exposure.py        # Sector concentration + beta-weighted + correlazioni
+│       ├── test_backtest.py        # Engine su DataFrame sintetici + metrics
 │       └── test_thesis_validator.py # SDK Anthropic mockato
 ├── data/                      # Runtime state (gitignored)
 │   ├── portfolio.json         # Stato corrente del portafoglio
@@ -152,7 +161,7 @@ ogni chiamata fresca.
 
 ## Comandi Principali
 
-Sei entry points definiti in `pyproject.toml` (cinque CLI + dashboard).
+Sette entry points definiti in `pyproject.toml` (sei CLI + dashboard).
 Funzionano da qualsiasi cwd dopo l'install editable: i path di `data/` e
 `reports/` sono ancorati alla root del progetto (ricerca `pyproject.toml`).
 La dashboard Streamlit è **parallela** alla CLI, non la sostituisce — stessa
@@ -177,7 +186,8 @@ propicks-scan AAPL --force-validate   # bypassa gate (score + regime) e cache
 propicks-portfolio size AAPL --entry 185.50 --stop 171.50 \
   --score-claude 8 --score-tech 75
 
-# Stato del portafoglio e rischio aggregato
+# Stato del portafoglio e rischio aggregato (risk include esposizione settori,
+# beta-weighted vs SPX, top pair correlate >= 0.7)
 propicks-portfolio status
 propicks-portfolio risk
 
@@ -186,6 +196,12 @@ propicks-portfolio add AAPL --entry 185.50 --shares 25 --stop 171.50 \
   --target 210 --strategy TechTitans
 propicks-portfolio update AAPL --stop 180 --target 215
 propicks-portfolio remove AAPL
+
+# Trade management — trailing stop ATR-based + time stop su posizioni aperte
+propicks-portfolio trail enable AAPL          # abilita trailing su AAPL
+propicks-portfolio manage                     # dry-run: mostra suggerimenti
+propicks-portfolio manage --apply             # scrive nuovi stop su portfolio.json
+propicks-portfolio manage --atr-mult 2.5 --time-stop 20 --apply
 
 # Registrare un nuovo trade
 propicks-journal add AAPL long --entry-price 185.50 --entry-date 2026-01-15 \
@@ -216,7 +232,13 @@ propicks-rotate --validate              # validazione macro via Claude (on-deman
 propicks-rotate --force-validate        # bypassa skip in STRONG_BEAR e cache 48h
 propicks-rotate --json --allocate       # output JSON completo
 
-# Test unit (solo domain/, nessuna rete)
+# Backtest walk-forward (validazione storica strategia single-stock)
+propicks-backtest AAPL                          # default 5y, threshold 60
+propicks-backtest AAPL MSFT NVDA --period 3y    # multi-ticker + aggregate
+propicks-backtest AAPL --threshold 70 --json
+propicks-backtest AAPL --stop-atr 2 --target-atr 3 --time-stop 20
+
+# Test unit (solo domain/ + backtest, nessuna rete)
 pytest
 
 # Dashboard Streamlit (richiede `pip install -e ".[dashboard]"`)
@@ -526,12 +548,133 @@ Parallelo a `ai/thesis_validator.py` ma con assunzioni diverse:
 - Nessun ETF futures-based (USO, UNG, DBC): contango decay incompatibile con
   holding > 2 settimane — non verranno mai aggiunti all'universo
 
+## Backtest walk-forward (`propicks.backtest`)
+
+Subpackage dedicato (non in `domain/`) perché composto da engine **+** metrics
+e ha bisogno dell'adapter `market/yfinance_client` come fonte default —
+mentre il `domain/` puro non importa mai da `market/`. Quando il caller
+fornisce esplicitamente un `history` DataFrame, l'engine non tocca la rete:
+i test girano senza HTTP.
+
+**Engine** (`backtest/engine.py::backtest_ticker`) rigira **le stesse**
+funzioni `score_*` di `domain.scoring` su ogni bar storico, point-in-time:
+
+- Indicatori (EMA/RSI/ATR) calcolati una volta su tutta la storia, ma il
+  bar i accede solo a `iloc[i]` → no lookahead.
+- Composite ricalcolato bar-by-bar; sopra `threshold` (default 60) apre a
+  close della stessa bar (assunzione: ordine market on close).
+- Stop = entry − k×ATR, target = entry + k×ATR (default k=2 stop, k=4 target
+  → R:R teorico 2.0).
+- Exit priority sullo stesso bar: **stop > target** se entrambi toccati
+  intraday (assunzione conservativa worst-case).
+- Time stop: se trade flat (|P&L| < 2%) da `time_stop_bars` (default 30),
+  exit a close.
+- Posizione aperta a fine storia → forced close al last close (`exit_reason="eod"`).
+
+**Metrics** (`backtest/metrics.py`) produce dict pronto per CLI/JSON:
+win rate, profit factor, avg win/loss, expectancy per trade, max drawdown,
+CAGR, Sharpe (252 trading days/anno), Sortino, exit_reason breakdown,
+avg bars held. `aggregate_metrics(results)` poola i trade su batch
+multi-ticker (NON è un portfolio simulato — è la pool di trade
+indipendenti, utile per validare che la formula funzioni in media).
+
+**KNOWN_LIMITATIONS** (esplicite nel docstring di `engine.py`):
+- No slippage, no commissioni → fill esatto sui livelli teorici (ottimista).
+- No survivorship bias correction: ticker delisted/merged non sono nel set;
+  vivi sono visti come vivi anche durante drawdown storici.
+- Earnings gap non filtrati: stop gappato post-earnings viene compilato a
+  stop level invece che al gap-down reale → sottostima della loss.
+- Position sizing: full-cash ogni trade, 1 posizione/ticker. Niente
+  cross-ticker correlation budget.
+
+**CLI** (`propicks-backtest`): walk-forward su uno o più ticker, output
+tabellare + tabella trade-by-trade + ASCII equity curve, oppure `--json`.
+
+**Scopo dichiarato**: validare che il *segno* dei pesi e dei sub-score sia
+corretto (la strategia genera expectancy positiva su un universo di
+ticker liquidi), non produrre un'equity curve da prendere literally
+come previsione futura. Per la calibrazione fine dei pesi serve
+walk-forward con out-of-sample split + significance test (TODO v1.6).
+
+## Trade management (trailing + time stop)
+
+`domain/trade_mgmt.py` è puro: prende numeri/stringhe e ritorna dict di
+suggerimenti. L'applicazione (update di `portfolio.json`) è responsabilità
+della CLI (`propicks-portfolio manage --apply`).
+
+**Trailing stop ATR-based, ratchet-up only.** Logica:
+- Stop iniziale resta invariato finché `highest_price < entry + 1R`
+  (1R = `entry - initial_stop`). Rationale: muovere lo stop troppo presto
+  trasforma uno swing legittimo in stop-out rumoroso.
+- Sopra soglia: `proposed = highest - atr_mult * current_atr`
+  (default `atr_mult=2.0`). Il nuovo stop è `max(current, proposed)`:
+  **mai scende**.
+
+**Time stop**: se trade flat (`|P&L%| < flat_threshold_pct`, default 2%)
+da almeno `max_days_flat` giorni (default 30) → suggerisci chiusura.
+Rationale: il costo-opportunità di tenere capitale fermo è reale anche
+se il P&L mark-to-market è nullo.
+
+**Schema portfolio esteso (backward-compatible):**
+- `highest_price_since_entry: float | None` — tracking del massimo
+  raggiunto post-entry, aggiornato a ogni `manage` run
+- `trailing_enabled: bool` — opt-in esplicito tramite `propicks-portfolio
+  trail enable <TICKER>`. Default OFF: il trader decide caso per caso
+  quali setup meritano trailing (momentum) vs hard stop (mean-reversion).
+
+`suggest_stop_update(position, current_price, current_atr, ...)` orchestra
+trailing + time stop e ritorna `{new_stop, stop_changed, time_stop_triggered,
+highest_price, rationale: list[str]}`. Il `manage --apply` applica solo
+`stop_loss` e `highest_price`; le posizioni con `time_stop_triggered=True`
+vanno chiuse manualmente (l'engine non scrive il close per evitare
+chiusure accidentali su trade marginali — il trader vede il flag e decide).
+
+## Esposizione aggregata (settori, beta, correlazioni)
+
+`domain/exposure.py` è puro: prende `positions` + dati esterni iniettati
+(prezzi correnti, mappa sector, beta, returns DataFrame). I download
+yfinance (sector via `info`, beta via `info`, returns via `download`)
+vivono nella CLI che chiama queste funzioni — coerente con il pattern
+di separazione dei layer.
+
+**Tre dimensioni** misurate da `propicks-portfolio risk`:
+
+1. **Concentrazione settoriale (GICS)** — `compute_sector_exposure` somma
+   il % capitale per `sector_key` (mapping Yahoo→interno via
+   `domain.stock_rs.YF_SECTOR_TO_KEY`). Le regole single-name cappano la
+   posizione al 15%, ma due tech stock a 15% ciascuno = 30% effettivi su
+   technology. `compute_concentration_warnings` flagga sector > 30%
+   (default cap, opinabile). Cash NON è incluso (esposizione zero).
+
+2. **Beta-weighted gross long exposure** —
+   `compute_beta_weighted_exposure` calcola `sum(weight_i * beta_i)`.
+   Misura la sensibilità del portfolio al mercato (SPX): beta-weighted
+   0.78 con gross long 0.65 = portfolio 65% investito che si muove come
+   il 78% di SPX (ha titoli più volatili della media). Per ticker senza
+   beta noto (IPO recenti, ETF, ticker esteri illiquidi) usa
+   `default_beta=1.0` e ne logga l'elenco.
+
+3. **Matrice correlazioni pairwise** — `compute_correlation_matrix` su
+   daily returns (default 6 mesi via `download_returns`) +
+   `find_correlated_pairs` estrae upper-triangle con `|corr| >= 0.7`.
+   Pair sopra soglia sono effettivamente la stessa scommessa (rischio
+   concentrato camuffato da diversificazione). Limit interno della CLI:
+   top 10 pair per non saturare l'output.
+
+Tutte le funzioni gestiscono input degenere: `total_capital=0`, posizioni
+senza prezzo corrente (DataUnavailable), beta None, correlazioni con
+osservazioni < `min_observations` (default 30, ritorna None invece di
+una matrice rumorosa).
+
 ## Estensioni Future (Roadmap)
 
-### v1.1 — Backtest
-- Nuovo modulo `propicks.backtest` (puro, in `domain/` o subpackage dedicato)
-- Input: lista di trade ipotetici, regole stop/target
-- Output: equity curve, drawdown, win rate simulato
+### v1.1 — Backtest ✅ (completato)
+- [x] Subpackage `propicks.backtest` (`engine.py` + `metrics.py`)
+- [x] CLI `propicks-backtest` con `--json`, `--no-trades`, `--no-equity`
+- [x] Test su DataFrame sintetici (no rete)
+- [ ] TODO: walk-forward out-of-sample split + significance test (v1.6)
+- [ ] TODO: integrazione filtro regime weekly (`^GSPC` pre-caricato)
+- [ ] TODO: simulazione costi (slippage + commissioni broker)
 
 ### v1.2 — Webhook TradingView
 - Endpoint Flask/FastAPI in `propicks.server` che riceve webhook

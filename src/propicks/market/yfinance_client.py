@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Optional
 
 import pandas as pd
 import yfinance as yf
@@ -70,7 +69,7 @@ def download_weekly_history(ticker: str, period: str = "3y") -> pd.DataFrame:
     return hist
 
 
-def download_benchmark(ticker: str, days: int) -> Optional[pd.Series]:
+def download_benchmark(ticker: str, days: int) -> pd.Series | None:
     """Close series ≥ days giorni di calendario; None se dati insufficienti."""
     try:
         buffer = max(days + 10, 30)
@@ -83,7 +82,7 @@ def download_benchmark(ticker: str, days: int) -> Optional[pd.Series]:
     return hist["Close"]
 
 
-def download_benchmark_weekly(ticker: str, period: str = "3y") -> Optional[pd.Series]:
+def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | None:
     """Close weekly del benchmark per calcoli RS su scala settimanale.
 
     Ritorna None (non solleva) se i dati non sono disponibili: l'ETF scoring
@@ -100,7 +99,7 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> Optional[pd.Se
     return hist["Close"]
 
 
-def get_ticker_sector(ticker: str) -> Optional[str]:
+def get_ticker_sector(ticker: str) -> str | None:
     """Sector GICS-like del ticker via ``yf.Ticker(t).info``, o None.
 
     Yahoo Finance restituisce una taxonomy leggermente diversa da GICS puro
@@ -118,6 +117,65 @@ def get_ticker_sector(ticker: str) -> Optional[str]:
     if not isinstance(sector, str) or not sector:
         return None
     return sector
+
+
+def get_ticker_beta(ticker: str) -> float | None:
+    """Beta vs mercato (di norma S&P500) via ``yf.Ticker(t).info['beta']``.
+
+    Yahoo calcola il beta su 5 anni di dati mensili. Ritorna None se il dato
+    non è disponibile (ETF, ticker esteri illiquidi, IPO recenti).
+    """
+    try:
+        info = yf.Ticker(ticker).info
+    except Exception as exc:
+        print(f"[warning] beta non disponibile per {ticker}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(info, dict):
+        return None
+    beta = info.get("beta")
+    if beta is None:
+        return None
+    try:
+        return float(beta)
+    except (TypeError, ValueError):
+        return None
+
+
+def download_returns(tickers: list[str], period: str = "6mo") -> pd.DataFrame:
+    """Daily returns DataFrame (colonne = ticker) per il periodo dato.
+
+    Usa pct_change() su Close. Righe con tutti NaN (giorni di non-trading per
+    tutti i ticker) vengono rimosse. Ritorna DataFrame vuoto se nessun dato.
+    """
+    if not tickers:
+        return pd.DataFrame()
+    try:
+        data = yf.download(
+            tickers=" ".join(tickers),
+            period=period,
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=False,
+        )
+    except Exception as exc:
+        print(f"[warning] download returns fallito: {exc}", file=sys.stderr)
+        return pd.DataFrame()
+
+    if data is None or data.empty:
+        return pd.DataFrame()
+
+    closes = pd.DataFrame()
+    for t in tickers:
+        try:
+            series = data[t]["Close"] if len(tickers) > 1 else data["Close"]
+            closes[t] = series
+        except (KeyError, IndexError):
+            continue
+
+    if closes.empty:
+        return pd.DataFrame()
+    return closes.pct_change().dropna(how="all")
 
 
 def get_current_prices(tickers: list[str]) -> dict[str, float]:

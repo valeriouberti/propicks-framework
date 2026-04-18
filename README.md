@@ -55,15 +55,16 @@ Il file `.env` viene caricato automaticamente all'import di `propicks.config` (l
 
 Il numero di ricerche effettuate per chiamata viene loggato su stderr, così da avere visibilità immediata sulla spesa.
 
-L'install editable registra **5 comandi CLI** nel PATH del virtualenv:
+L'install editable registra **6 comandi CLI** nel PATH del virtualenv:
 
 | Comando | Scopo |
 |---------|-------|
 | `propicks-scan` | Scoring tecnico 0-100 di uno o più ticker (single-stock) |
 | `propicks-rotate` | Rotazione settoriale ETF (RS + regime + momentum + trend) |
-| `propicks-portfolio` | Position sizing, stato portafoglio, rischio |
+| `propicks-portfolio` | Position sizing, stato, rischio + esposizione, trailing/time stop |
 | `propicks-journal` | Registrazione trade (append-only), metriche |
 | `propicks-report` | Report markdown settimanali/mensili |
+| `propicks-backtest` | Walk-forward backtest single-stock (validazione storica strategia) |
 
 In aggiunta, la **dashboard web** (Streamlit) espone gli stessi workflow via browser — installazione e launch sono documentati nella sezione [Dashboard](#dashboard) più avanti. CLI e dashboard operano sullo **stesso stato** (`data/portfolio.json`, `data/journal.json`), quindi si alternano liberamente.
 
@@ -168,7 +169,25 @@ propicks-journal add AAPL long --entry-price 185.50 --entry-date 2026-01-15 \
   --strategy TechTitans --catalyst "Beat earnings Q4, guidance raised"
 ```
 
-### 6. Chiudere il trade
+### 6. Gestire il trade in vita (trailing + time stop)
+
+```bash
+# Abilita il trailing stop su una posizione (opt-in esplicito)
+propicks-portfolio trail enable AAPL
+
+# Suggerimenti dry-run: ATR trailing + flag time stop su tutte le aperte
+propicks-portfolio manage
+
+# Applica i nuovi stop a portfolio.json
+propicks-portfolio manage --apply
+
+# Personalizza moltiplicatore ATR e finestra time stop
+propicks-portfolio manage --atr-mult 2.5 --time-stop 20 --apply
+```
+
+Trailing **ratchet-up only**: il nuovo stop è `highest_price - k×ATR` ma non scende mai. Si attiva solo quando il prezzo supera `entry + 1R` (per evitare di stoppare swing legittimi nel rumore iniziale). Time stop: trade flat (|P&L| < 2%) da ≥ 30 giorni → flag `TIME-STOP` in tabella; il trader poi chiude manualmente con `remove` + `journal close` per evitare chiusure accidentali.
+
+### 7. Chiudere il trade
 
 Rimuovi la posizione dal portafoglio e registra la chiusura nel journal:
 
@@ -178,13 +197,13 @@ propicks-journal close AAPL --exit-price 208.30 --exit-date 2026-02-10 \
   --reason "Target raggiunto"
 ```
 
-### 7. Monitorare e riflettere
+### 8. Monitorare e riflettere
 
 ```bash
 # Stato portafoglio con P&L live
 propicks-portfolio status
 
-# Rischio aggregato a stop
+# Rischio aggregato a stop + esposizione (settori, beta-weighted, correlazioni)
 propicks-portfolio risk
 
 # Lista trade (tutti / aperti / chiusi per strategia)
@@ -200,6 +219,29 @@ propicks-journal stats --strategy TechTitans
 propicks-report weekly
 propicks-report monthly
 ```
+
+Il comando `risk` ora include tre dimensioni di esposizione oltre al rischio a stop: **concentrazione settoriale** (% capitale per settore GICS, warning > 30%), **beta-weighted gross long** vs SPX (sensibilità del portfolio al mercato), e **pair correlate** (`|corr| ≥ 0.7` su daily returns 6 mesi — pair sopra soglia sono effettivamente la stessa scommessa, anche se diversificate per ticker).
+
+### 9. Validare la strategia con un backtest
+
+```bash
+# Walk-forward su singolo ticker (default 5 anni, threshold 60)
+propicks-backtest AAPL
+
+# Multi-ticker con metriche aggregate (pool di tutti i trade)
+propicks-backtest AAPL MSFT NVDA --period 3y
+
+# Custom: soglia + livelli stop/target in multipli di ATR
+propicks-backtest AAPL --threshold 70 --stop-atr 2 --target-atr 3 --time-stop 20
+
+# Output JSON (per ulteriore analisi in Python/notebook)
+propicks-backtest AAPL --json
+
+# Solo summary (nasconde la tabella trade-by-trade e l'ASCII equity)
+propicks-backtest AAPL --no-trades --no-equity
+```
+
+Output: tabella riassuntiva (win rate, profit factor, expectancy, CAGR, Sharpe, Sortino, max drawdown, exit reason breakdown), tabella trade-by-trade e una equity curve ASCII. Nessuna calibrazione fine dei pesi: scopo dichiarato è validare il **segno** della strategia (genera expectancy positiva su un universo liquido), non produrre proiezioni di P&L. Limiti noti documentati nel docstring di `backtest/engine.py`: no slippage, no commissioni, no survivorship bias, no earnings gap.
 
 ## Configurazione
 
@@ -275,12 +317,13 @@ I volumi `./data` e `./reports` sono montati sull'host — portfolio, journal, c
 propicks-ai-framework/
 ├── src/propicks/
 │   ├── config.py         # Parametri operativi (invarianti + contract Pine + universo ETF)
-│   ├── domain/           # Logica pura (indicators, scoring, sizing, verdict, regime, etf_scoring, etf_universe)
+│   ├── domain/           # Logica pura (indicators, scoring, sizing, regime, etf_scoring, stock_rs, trade_mgmt, exposure, verdict)
+│   ├── backtest/         # Walk-forward engine + metrics (CAGR, Sharpe, profit factor, ...)
 │   ├── io/               # Persistenza JSON atomica (portfolio, journal)
 │   ├── market/           # Adapter yfinance (unico punto che parla con la rete)
 │   ├── ai/               # Adapter Anthropic: thesis_validator (stock) + etf_validator (rotation)
 │   ├── reports/          # Generatori markdown (weekly, monthly, benchmark)
-│   ├── cli/              # Thin argparse wrappers (scanner, rotate, portfolio, journal, report)
+│   ├── cli/              # Thin argparse wrappers (scanner, rotate, portfolio, journal, report, backtest)
 │   └── dashboard/        # UI Streamlit parallela alla CLI (app.py + pages/ + launcher)
 ├── tradingview/          # Pine scripts (daily_signal + weekly_regime)
 ├── docs/                 # Playbook + Weekly Operating Framework
