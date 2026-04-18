@@ -386,6 +386,90 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 
 ---
 
+## 5B. THEMATIC ETF — Bucket sperimentale (stock-like)
+
+I tematici (semis SMH/SOXX, biotech XBI/IBB, cybersecurity CIBR/BUG, AI &
+robotica ROBO/BOTZ, clean energy ICLN/TAN) **non passano da
+`propicks-rotate`**. L'engine sector rotation assume 11 settori GICS
+mutuamente esclusivi che sommano al mercato — i tematici violano questa
+invariante:
+
+- **Overlap pesante coi parent sector**: SMH ≈ 70% top-10 di XLK
+  (NVDA/AVGO/AMD), XBI ≈ 60% biotech-pesante di XLV. Doppio bet camuffato
+  da diversificazione.
+- **Non mappano su `REGIME_FAVORED_SECTORS`**: semis è sub-industry, non
+  GICS sector. Estendere la tabella a temi opinabili (early/late cycle?
+  secular?) introduce rumore, non segnale.
+- **RS vs `^GSPC` è la metrica sbagliata**: per un tematico l'asse vero è
+  RS vs parent sector (SMH vs XLK), non vs SPX.
+
+### Trattamento attuale: stock-like
+
+I tematici di interesse passano da `propicks-scan TICKER` come fossero
+single-stock e finiscono nel bucket satellite (max 15% per posizione).
+**Quattro regole auto-imposte** (manuali, non codate — vanno rispettate
+con disciplina):
+
+1. **Max 2 tematici aperti contemporaneamente.** Verifica con
+   `propicks-portfolio status` prima di ogni nuova entry tematica.
+2. **Nel campo `--catalyst` del journal scrivi sempre parent sector +
+   peso corrente nel portafoglio.** Esempio:
+   `--catalyst "Semis secular AI / parent=XLK at 18% / overlap alto"`.
+   Serve a forzarti a pensare l'overlap *prima* di entrare, non dopo.
+3. **Stop hard 10% invece di 8%.** SMH/SOXX hanno ATR% ~1.8x di XLK; lo
+   stop standard ti tira fuori sul rumore. Override manuale al sizing:
+   `propicks-portfolio size SMH --entry X --stop Y` con `Y ≈ entry*0.90`.
+4. **Hard rule overlap**: `weight(theme) + weight(parent_sector) ≤ 25%`.
+   Esempio: se hai XLK al 18% e vuoi aprire SMH, max size SMH = 7% (non 15%).
+
+### Universo curato (max 8-10 nomi considerati)
+
+| Tema | US ticker | UCITS Xetra | Parent sector |
+|------|-----------|-------------|---------------|
+| Semiconductors | SOXX, SMH | SXRV.DE | technology (XLK) |
+| Biotech | XBI, IBB | IS3N.DE | healthcare (XLV) |
+| Cybersecurity | CIBR, BUG | R2SC.DE | technology (XLK) |
+| AI / robotics | ROBO, BOTZ | XAIX.DE | technology (XLK) |
+| Clean energy | ICLN, TAN | IQQH.DE | utilities/industrials |
+| China internet | KWEB | (usa US) | discretionary (estero) |
+| Aerospace/defense | XAR, ITA | (usa US) | industrials (XLI) |
+
+**Verifica liquidità prima del primo uso.** Molti tematici Xtrackers UCITS
+hanno spread orribili su Xetra retail. Se lo spread quotato > 0.3% del
+prezzo, usa il listing US.
+
+### Gate quantitativo di promozione a satellite bucket dedicato
+
+Dopo **6 mesi** o **15 trade tematici chiusi** (whichever comes first),
+runna:
+
+```bash
+propicks-journal stats --strategy ThematicETF
+```
+
+Promuovi a subpackage dedicato (`propicks/thematic/` con scoring proprio
+RS-vs-parent, CLI `propicks-themes`, dashboard page) **solo se TUTTE** e
+quattro le condizioni sono vere:
+
+```
+n_trades_thematic                   ≥ 15
+win_rate_thematic                   ≥ win_rate_stock_baseline
+avg_pnl_thematic                    > avg_pnl_stock_baseline + 0.5%
+corr(thematic_ret, parent_sect_ret) < 0.85
+```
+
+L'ultima condizione è quella **critica**: se i tematici performano *come*
+i parent sector (corr ≥ 0.9), stai solo facendo leveraged sector bet
+senza alfa proprio — il satellite bucket dedicato non serve, basta size
+più aggressivo su `propicks-rotate`.
+
+**Se le condizioni NON sono soddisfatte:** killa l'esperimento, no sunk
+cost. Marca i trade come `--strategy ThematicETF_discontinued` nel journal
+e torna a XLK/XLV puri. Il framework vale come scartare un'ipotesi tanto
+quanto come confermarla.
+
+---
+
 ## 6. CALENDARIO OPERATIVO
 
 ### Giorno Update Pro Picks (mensile)

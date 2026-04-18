@@ -552,6 +552,42 @@ Parallelo a `ai/thesis_validator.py` ma con assunzioni diverse:
 - Nessun ETF futures-based (USO, UNG, DBC): contango decay incompatibile con
   holding > 2 settimane — non verranno mai aggiunti all'universo
 
+### Thematic ETF (fuori scope di `propicks-rotate`)
+
+I tematici (semis SMH/SOXX, biotech XBI/IBB, cybersecurity CIBR/BUG, AI &
+robotica ROBO/BOTZ, clean energy ICLN/TAN, KWEB, XAR/ITA) **non sono parte
+dell'universo ETF rotation** e non vanno aggiunti a `SECTOR_ETFS_*`. Tre
+ragioni architetturali:
+
+1. **Violano l'invariante GICS-mutuamente-esclusivi** della rotation:
+   SMH ≈ 70% top-10 di XLK, XBI ≈ 60% biotech-pesante di XLV. Inserirli
+   nello stesso universo significa avere doppio bet camuffato da
+   diversificazione, e l'allocator equal-weight non sa che due posizioni
+   diverse hanno la stessa scommessa sottostante.
+2. **Non mappano su `REGIME_FAVORED_SECTORS`**: semis è sub-industry, non
+   GICS sector. Estendere la tabella regime a temi opinabili (semis è
+   early-cycle? secular AI play? cyclical?) introduce rumore.
+3. **L'asse RS giusto è vs parent sector, non vs `^GSPC`**: SMH che batte
+   SPX è quasi tautologico in un mercato risk-on; SMH che batte XLK
+   discrimina davvero.
+
+**Approccio attuale (MVP)**: i tematici di interesse passano da
+`propicks-scan` come single-stock e finiscono nel bucket satellite
+(max 15%/posizione). Quattro regole auto-imposte manuali (non codate):
+max 2 tematici aperti, campo `catalyst` con parent sector + peso, stop
+hard 10% (non 8%, ATR% più alto), hard rule
+`weight(theme) + weight(parent_sector) ≤ 25%`.
+
+**Promozione a subpackage dedicato** (`propicks/thematic/` con scoring
+RS-vs-parent + CLI `propicks-themes`) **gated da journal evidence**: dopo
+15 trade tematici chiusi, promuovi solo se win rate ≥ baseline single-stock,
+avg P&L > baseline + 0.5%, **e** correlation con parent sector < 0.85.
+Se la corr è ≥ 0.85, sono solo leveraged sector bet senza alfa proprio →
+killa l'esperimento. Stesso pattern di `rs_vs_sector`: informativo finché
+i trade non giustificano la promozione.
+
+Documentazione operativa completa in `docs/Trading_System_Playbook.md` §5B.
+
 ## Backtest walk-forward (`propicks.backtest`)
 
 Subpackage dedicato (non in `domain/`) perché composto da engine **+** metrics

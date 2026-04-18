@@ -295,3 +295,28 @@ Fed emergency cut). In quel caso:
 
 Il journal è la **source of truth** per valutare la strategia. Se buchi
 le entry, le metriche `propicks-journal stats` diventano inutili.
+
+### 5. Thematic ETF — bucket sperimentale dentro il satellite single-stock
+
+I tematici (SMH/SOXX, XBI/IBB, CIBR, ROBO, ICLN, KWEB, XAR) **non passano
+da `propicks-rotate`**: l'engine rotation assume 11 GICS settori
+mutuamente esclusivi e i tematici overlap pesantemente coi parent sector
+(SMH ≈ 70% top-10 di XLK). Trattamento attuale **stock-like** via
+`propicks-scan` + `propicks-portfolio add`, dentro il budget satellite
+single-stock (max 15%/posizione).
+
+**Quattro regole auto-imposte** (manuali, da rispettare con disciplina):
+
+1. **Max 2 tematici aperti contemporaneamente** (`propicks-portfolio status`
+   per verifica).
+2. **Campo `--catalyst` del journal**: scrivi sempre parent sector + peso
+   corrente nel portafoglio. Es. `"Semis / parent=XLK at 18%"`.
+3. **Stop hard 10%** (vs 8% standard) — ATR% dei tematici è ~1.8x dei
+   parent sector, lo stop default ti stoppa sul rumore.
+4. **Hard rule overlap**: `weight(theme) + weight(parent_sector) ≤ 25%`.
+   Esempio: XLK al 18% → max SMH = 7%, non 15%.
+
+**Gate di promozione** a subpackage dedicato dopo 6 mesi / 15 trade
+tematici chiusi: vedi `Trading_System_Playbook.md` §5B per le 4 condizioni
+quantitative (win rate, avg P&L vs baseline, correlation < 0.85 col
+parent sector). Se non soddisfatte → killa l'esperimento, no sunk cost.
