@@ -43,6 +43,42 @@ def cached_current_prices(tickers: tuple[str, ...]) -> dict[str, float]:
     return get_current_prices(list(tickers))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_ticker_sectors(tickers: tuple[str, ...]) -> dict[str, str | None]:
+    """Sector GICS-like per ticker via yf.Ticker(t).info. TTL 1h: il sector cambia di rado."""
+    from propicks.market.yfinance_client import get_ticker_sector
+    return {t: get_ticker_sector(t) for t in tickers}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_ticker_betas(tickers: tuple[str, ...]) -> dict[str, float | None]:
+    """Beta vs SPX via yf.Ticker(t).info['beta']. TTL 1h."""
+    from propicks.market.yfinance_client import get_ticker_beta
+    return {t: get_ticker_beta(t) for t in tickers}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_returns(tickers: tuple[str, ...], period: str = "6mo"):
+    """Daily returns DataFrame per il calcolo correlazioni. TTL 10min."""
+    from propicks.market.yfinance_client import download_returns
+    return download_returns(list(tickers), period=period)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_current_atr(ticker: str) -> float | None:
+    """ATR(14) corrente del ticker. TTL 5min. None se dati non disponibili."""
+    from propicks.config import ATR_PERIOD
+    from propicks.domain.indicators import compute_atr
+    from propicks.market.yfinance_client import DataUnavailable, download_history
+    try:
+        hist = download_history(ticker)
+    except DataUnavailable:
+        return None
+    atr = compute_atr(hist["High"], hist["Low"], hist["Close"], ATR_PERIOD)
+    val = float(atr.iloc[-1])
+    return val if val > 0 else None
+
+
 def load_portfolio() -> dict:
     from propicks.io.portfolio_store import load_portfolio as _load
     return _load()
@@ -234,11 +270,96 @@ INDICATOR_HELP_STOCK: dict[str, str] = {
     "ma_cross": "Sub-score 15%: EMA fast × EMA slow — golden / death cross recente.",
 }
 
+# Tooltip per il tab Risk & Esposizione + Trade management del Portfolio.
+INDICATOR_HELP_PORTFOLIO: dict[str, str] = {
+    # ---- Risk per posizione ----
+    "risk_eur": (
+        "Rischio in euro se lo stop viene colpito: (entry - stop) x shares. "
+        "Assume fill esatto allo stop level (no slippage)."
+    ),
+    "risk_pct": (
+        "Rischio della posizione come % del capitale totale (cash + invested). "
+        "Regola interna: max 1-2% per trade su singola posizione."
+    ),
+    "risk_aggregato": (
+        "Somma del rischio a stop di tutte le posizioni aperte. Misura la "
+        "perdita massima teorica del portfolio se TUTTI gli stop venissero "
+        "colpiti contemporaneamente."
+    ),
+    "weekly_limit": (
+        "Limite settimanale hardcoded: 5% del capitale (MAX_LOSS_WEEKLY_PCT). "
+        "Sopra → blocco trading e revisione setup."
+    ),
+    # ---- Concentrazione settoriale ----
+    "sector_exposure": (
+        "% del capitale investita per settore GICS. Mapping da Yahoo "
+        "(Consumer Cyclical → consumer_discretionary, ecc.). Cash NON incluso."
+    ),
+    "sector_cap": (
+        "Cap consigliato per settore: 30% del capitale. Le regole single-name "
+        "cappano al 15% per posizione, ma 2 stock dello stesso settore al 15% "
+        "ciascuno = 30% effettivo → questo lo rende visibile."
+    ),
+    # ---- Beta-weighted ----
+    "gross_long": (
+        "Esposizione lorda nominale = sum(weight_i). 0.65 = 65% del capitale "
+        "investito long, 35% in cash. Non considera il beta."
+    ),
+    "beta_weighted": (
+        "Esposizione pesata per beta = sum(weight_i x beta_i). Misura quanto "
+        "il portfolio si muove in % per ogni 1% di SPX. 0.78 = portfolio si "
+        "muove come il 78% di SPX (beta medio della parte investita > 1.0 "
+        "se beta_weighted > gross_long)."
+    ),
+    "beta_known": (
+        "Quante posizioni hanno un beta reale da Yahoo (5y monthly vs SPX). "
+        "Per ETF / IPO recenti / esteri illiquidi viene usato beta=1.0 come "
+        "fallback (vedi caption sotto)."
+    ),
+    # ---- Correlazioni ----
+    "corr_pair": (
+        "Pair con |correlazione daily returns| ≥ 0.7 su 6 mesi. Sopra soglia "
+        "i due ticker sono effettivamente la stessa scommessa: rischio "
+        "concentrato camuffato da diversificazione."
+    ),
+    # ---- Trade management ----
+    "trailing_stop": (
+        "Trailing ATR-based, ratchet-up only. Si attiva quando highest_price "
+        "supera entry + 1R (1R = entry - initial_stop). Nuovo stop = "
+        "highest - atr_mult x current_ATR. MAI scende, solo sale."
+    ),
+    "time_stop": (
+        "Trade flat (|P&L| < flat_threshold) da N giorni → suggerisci chiusura. "
+        "Rationale: il costo-opportunità di tenere capitale fermo è reale "
+        "anche se il P&L mark-to-market è nullo."
+    ),
+    "atr_mult": (
+        "Moltiplicatore ATR per il trailing stop. Default 2.0 = stop a "
+        "highest - 2x ATR. Più alto = trailing più largo (meno stop-out "
+        "rumorosi ma più profit lasciato sul tavolo)."
+    ),
+    "flat_threshold": (
+        "Soglia |P&L%| sotto la quale il trade è considerato flat. "
+        "Default 0.02 = 2%. Un trade a -1% da 40 giorni è flat; "
+        "uno a +5% non lo è anche se vecchio."
+    ),
+    "highest_price": (
+        "Massimo prezzo raggiunto post-entry. Aggiornato a ogni run di "
+        "manage. Base di calcolo del trailing stop."
+    ),
+    "trail_toggle": (
+        "Trailing è opt-in per posizione (default OFF). Il trader decide "
+        "caso per caso quali setup meritano trailing (momentum) vs hard "
+        "stop (mean-reversion)."
+    ),
+}
+
 
 def render_indicator_legend(scope: str = "etf") -> None:
     """Expander collassato con spiegazione completa degli indicatori.
 
-    ``scope``: ``"etf"`` per ETF Rotation, ``"stock"`` per Scanner.
+    ``scope``: ``"etf"`` per ETF Rotation, ``"stock"`` per Scanner,
+    ``"portfolio"`` per Portfolio risk + trade management.
     """
     if scope == "etf":
         with st.expander("ℹ️ Legenda indicatori ETF", expanded=False):
@@ -348,5 +469,82 @@ Entry long abilitato da NEUTRAL in su.
 
 **Stop suggerito** = livello calcolato dal motore (struttura + ATR),
 da copiare nei settings del Pine script daily come `stop_suggest`.
+"""
+            )
+    elif scope == "portfolio":
+        with st.expander("Legenda rischio & trade management", expanded=False):
+            st.markdown(
+                """
+### Rischio per posizione (a stop)
+
+| Metrica | Formula | Cosa dice |
+|---------|---------|-----------|
+| **Rischio €** | `(entry - stop) x shares` | Perdita se lo stop viene colpito (no slippage) |
+| **% capitale** | `Rischio € / portfolio_value` | Quanto pesa quella perdita sul totale |
+| **Rischio aggregato** | somma di tutti i Rischio € | Worst case se TUTTI gli stop scattano insieme |
+| **Limite settimanale** | `5% x portfolio_value` | Hardcoded `MAX_LOSS_WEEKLY_PCT`. Sopra → blocco trading |
+
+Una buona regola operativa: ogni singola posizione 1-2% del capitale, rischio aggregato sotto il limite settimanale.
+
+### Concentrazione settoriale (GICS)
+
+Somma il `% capitale` per settore aggregando tutte le posizioni dello stesso GICS sector.
+Mapping da Yahoo a tassonomia interna in `domain/stock_rs.py::YF_SECTOR_TO_KEY`
+(`Consumer Cyclical` → `consumer_discretionary`, `Communication Services` → `communications`, ecc.).
+
+- Cap consigliato per settore: **30%** del capitale.
+- Le regole single-name cappano al 15% per posizione, ma 2 stock dello stesso settore al 15% ciascuno = 30% effettivo: questa tabella lo rende visibile.
+- Cash NON è incluso (è esposizione zero per definizione).
+- Posizioni con sector ignoto finiscono in `unknown` (ETF esteri, IPO recenti).
+
+### Beta-weighted gross long (vs SPX)
+
+Tre numeri da leggere insieme:
+
+| Metrica | Cosa misura |
+|---------|-------------|
+| **Gross long** | Esposizione lorda nominale `sum(weight_i)`. 0.65 = 65% investito, 35% cash. |
+| **Beta-weighted** | `sum(weight_i x beta_i)`. Sensibilità al mercato. |
+| **Beta noto** | Quante posizioni hanno beta reale da Yahoo (vs fallback 1.0). |
+
+Esempio: gross 0.65 / beta-weighted 0.78 → portfolio investito al 65% che si muove come il 78% di SPX. Significa che la parte investita ha beta medio > 1 (titoli più volatili della media).
+
+Beta proviene da `yf.Ticker(t).info['beta']` (calcolato da Yahoo su 5y monthly returns). Per ETF / IPO recenti / esteri illiquidi viene usato `beta=1.0` come fallback — la lista è mostrata sotto la tabella.
+
+### Correlazioni pairwise
+
+Matrice di correlazione su daily returns degli ultimi 6 mesi. Estraiamo solo l'**upper triangle** (no diagonale, no duplicati) e teniamo le pair con `|corr| ≥ 0.7`.
+
+- **Significato**: due ticker con corr ≥ 0.7 si muovono insieme la grande maggioranza del tempo. Sono effettivamente la stessa scommessa.
+- **Implicazione**: avere AAPL + MSFT + GOOGL non è 3 posizioni indipendenti su tech, è 1 posizione tech con sizing 3x. Il rischio è camuffato.
+- Servono ≥ 30 osservazioni per pair (giorni con dati su entrambi). Sotto soglia ritorna None invece di una matrice rumorosa.
+
+### Trade management — trailing stop
+
+ATR-based, **ratchet-up only**. Logica:
+
+1. Lo stop iniziale resta invariato finché `highest_price < entry + 1R` (1R = `entry - initial_stop`). Rationale: muovere lo stop troppo presto trasforma uno swing legittimo in stop-out rumoroso.
+2. Sopra soglia: `proposed = highest_price - atr_mult x current_ATR`. Il nuovo stop è `max(current_stop, proposed)` — **mai scende**.
+3. **Trailing è opt-in per posizione** (default OFF). Il trader decide caso per caso quali setup meritano trailing (momentum / breakout) vs hard stop fisso (mean-reversion).
+
+Parametri:
+
+| Parametro | Default | Effetto |
+|-----------|---------|---------|
+| **ATR multiplier** | 2.0 | Stop a `highest - 2x ATR`. Più alto = trailing più largo (meno stop-out rumorosi, più profit lasciato sul tavolo). |
+| **Highest price** | tracked | Massimo raggiunto post-entry; aggiornato a ogni `manage` run. |
+
+### Trade management — time stop
+
+Se trade flat (`|P&L%| < flat_threshold`) da almeno N giorni → suggerisci chiusura.
+
+| Parametro | Default | Effetto |
+|-----------|---------|---------|
+| **Time stop (giorni)** | 30 | Soglia di pazienza. Sotto = trade troppo recente per giudicare. |
+| **Flat threshold** | 0.02 (2%) | Sotto questa soglia il trade è "flat". Un -1% da 40gg è flat; un +5% non lo è. |
+
+Rationale: il costo-opportunità di tenere capitale fermo su un trade che non va da nessuna parte è reale, anche se il P&L mark-to-market è nullo. Quel cash potrebbe essere su un setup migliore.
+
+**Importante:** la dashboard NON chiude automaticamente le posizioni con TIME-STOP. Mostra il flag e lascia decisione + esecuzione al trader (tab **Chiudi posizione** + Journal close).
 """
             )

@@ -66,9 +66,10 @@ propicks-ai-framework/
 │       └── pages/             # Streamlit multi-page auto-routing
 │           ├── 1_Scanner.py           # ≡ propicks-scan [--validate]
 │           ├── 2_ETF_Rotation.py      # ≡ propicks-rotate [--region] [--allocate]
-│           ├── 3_Portfolio.py         # ≡ propicks-portfolio size/add/update/remove
+│           ├── 3_Portfolio.py         # ≡ propicks-portfolio size/add/update/remove + risk + manage
 │           ├── 4_Journal.py           # ≡ propicks-journal add/close/list/stats
-│           └── 5_Reports.py           # ≡ propicks-report weekly/monthly + archive
+│           ├── 5_Reports.py           # ≡ propicks-report weekly/monthly + archive
+│           └── 6_Backtest.py          # ≡ propicks-backtest
 ├── tradingview/               # Pine script (contract con config.py)
 │   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
 │   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
@@ -259,9 +260,12 @@ docker compose down                        # stop (volumi preservati)
 | *(home — no CLI equivalent)*     | `app.py` Portfolio Overview     |
 | `propicks-scan [--validate]`     | `pages/1_Scanner.py`            |
 | `propicks-rotate [--region]`     | `pages/2_ETF_Rotation.py`       |
-| `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py`  |
+| `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py` (tabs base) |
+| `propicks-portfolio risk` (rischio + esposizione) | `pages/3_Portfolio.py` → tab "Rischio & esposizione" |
+| `propicks-portfolio manage [--apply]` / `trail enable\|disable` | `pages/3_Portfolio.py` → tab "Trade management" |
 | `propicks-journal add/close/list/stats` | `pages/4_Journal.py`       |
 | `propicks-report weekly/monthly` | `pages/5_Reports.py` + archivio |
+| `propicks-backtest`              | `pages/6_Backtest.py`           |
 
 ## Regole di Business (Invarianti)
 
