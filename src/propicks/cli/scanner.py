@@ -16,6 +16,7 @@ import sys
 from tabulate import tabulate
 
 from propicks.domain.scoring import analyze_ticker
+from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -244,6 +245,40 @@ def print_copy_paste(results: list[dict]) -> None:
         print("-" * 70)
 
 
+def _auto_watchlist_class_b(results: list[dict]) -> None:
+    """Aggiunge i ticker classe B alla watchlist e stampa le modifiche su stderr.
+
+    Policy: classe B (score 60-74) è per definizione "WATCHLIST — aspetta setup
+    migliore". Invece di far digitare il comando al trader, lo fa qui.
+    Classe A entra diretta al sizing, C/D sono skip. Per disabilitare: --no-watchlist.
+    """
+    class_b = [r for r in results if r.get("classification", "").startswith("B")]
+    if not class_b:
+        return
+
+    wl = load_watchlist()
+    added: list[str] = []
+    updated: list[str] = []
+    for r in class_b:
+        regime = r.get("regime") or {}
+        _, is_new = add_to_watchlist(
+            wl,
+            r["ticker"],
+            score_at_add=r.get("score_composite"),
+            regime_at_add=regime.get("regime"),
+            classification_at_add=r.get("classification"),
+            source="auto_scan",
+        )
+        (added if is_new else updated).append(r["ticker"])
+
+    msg_parts = []
+    if added:
+        msg_parts.append(f"aggiunti {', '.join(added)}")
+    if updated:
+        msg_parts.append(f"aggiornati {', '.join(updated)}")
+    print(f"[watchlist] auto-update classe B: {'; '.join(msg_parts)}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Scoring tecnico 0-100 per uno o più ticker (yfinance).",
@@ -261,6 +296,11 @@ def main() -> int:
         "--force-validate",
         action="store_true",
         help="Come --validate, ma ignora cache e gate di score",
+    )
+    parser.add_argument(
+        "--no-watchlist",
+        action="store_true",
+        help="Non aggiungere automaticamente i ticker classe B alla watchlist",
     )
     args = parser.parse_args()
 
@@ -284,6 +324,9 @@ def main() -> int:
             )
             if verdict is not None:
                 r["ai_verdict"] = verdict
+
+    if not args.no_watchlist:
+        _auto_watchlist_class_b(results)
 
     if args.json:
         print(json.dumps(results, indent=2, default=str))

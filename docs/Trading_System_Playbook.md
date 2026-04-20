@@ -422,21 +422,151 @@ con disciplina):
 4. **Hard rule overlap**: `weight(theme) + weight(parent_sector) ≤ 25%`.
    Esempio: se hai XLK al 18% e vuoi aprire SMH, max size SMH = 7% (non 15%).
 
-### Universo curato (max 8-10 nomi considerati)
+### Universo completo (whitelist)
 
-| Tema | US ticker | UCITS Xetra | Parent sector |
-|------|-----------|-------------|---------------|
-| Semiconductors | SOXX, SMH | SXRV.DE | technology (XLK) |
-| Biotech | XBI, IBB | IS3N.DE | healthcare (XLV) |
-| Cybersecurity | CIBR, BUG | R2SC.DE | technology (XLK) |
-| AI / robotics | ROBO, BOTZ | XAIX.DE | technology (XLK) |
-| Clean energy | ICLN, TAN | IQQH.DE | utilities/industrials |
-| China internet | KWEB | (usa US) | discretionary (estero) |
-| Aerospace/defense | XAR, ITA | (usa US) | industrials (XLI) |
+L'universo è **curato**, non dinamico: circa 35 ETF tematici "istituzionalizzati"
+raggruppati per parent sector GICS. Il filtro d'ingresso è hard e non negoziabile
+per swing 4-12w:
 
-**Verifica liquidità prima del primo uso.** Molti tematici Xtrackers UCITS
-hanno spread orribili su Xetra retail. Se lo spread quotato > 0.3% del
-prezzo, usa il listing US.
+| Filtro liquidità/maturità | Soglia |
+|---------------------------|--------|
+| AUM | ≥ $500M (meglio $1B+) |
+| Avg daily volume ($) | ≥ $10M/day |
+| Bid/ask spread medio | < 0.15% |
+| Età fondo | ≥ 3 anni |
+| Expense ratio | < 0.75% |
+| Top-10 concentration | 40-65% (evita index-hugger e over-concentrati) |
+
+**Non metto in watchlist attiva tutti 35 contemporaneamente** — vedi sezione
+*Selezione attiva* più sotto. Ma tutti quelli in tabella sono ammissibili
+quando regime + rotation settoriale li giustifica.
+
+#### Technology (parent XLK)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Semiconductors | **SOXX**, SMH, SOXQ | SXRV.DE, SMGB.DE | SMH più concentrato (top-10 ~70%); SOXX più diversificato |
+| Software | IGV, XSW | XSDW.DE | IGV top-heavy (MSFT/ORCL/CRM); XSW equal-weight |
+| Cybersecurity | **CIBR**, BUG, HACK | R2SC.DE | CIBR più liquido; HACK alternativa storica |
+| AI / machine learning | AIQ, IRBO, ARTY | XAIX.DE | Attento a overlap con semis |
+| Robotics / automation | **ROBO**, BOTZ, ARKQ | 2B76.DE | ROBO più globale, BOTZ più US |
+| Cloud computing | **SKYY**, CLOU, WCLD | FSKY | Overlap alto con IGV |
+| FinTech | **FINX**, IPAY, ARKF | XFNT.DE | ARKF ha turnover alto (discrezionale) |
+| Blockchain (equity-based) | BLOK, BKCH | BCHN | Solo equity, NO futures-crypto; volatilità estrema |
+
+#### Healthcare (parent XLV)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Biotech | **XBI**, IBB | IS3N.DE | XBI equal-weight (mid-small), IBB cap-weighted (large) — comportamento molto diverso |
+| Medical devices | **IHI** | U5MD | Meno volatile dei biotech, defensive-like |
+| Genomics | ARKG, GNOM | GNOM | Volatilità alta, selettivo post-2021 bear |
+| Pharma | PJP, IHE | BIOT | Difensivo, sub-industry di XLV |
+| Cannabis | MSOS, MJ | — | Regolatorio-sensitive, spread larghi — escludere se AUM < $500M |
+
+#### Industrials (parent XLI)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Aerospace / defense | **ITA**, XAR, PPA | DFND  | ITA cap-weighted (BA/RTX/LMT), XAR equal-weight — scegli in base a momentum leader |
+| Infrastructure | **PAVE**, IFRA, GRID | INFR | PAVE il più liquido; catalyst da fiscal policy |
+| Transport | IYT, XTN | — | Proxy economia reale (railroad, trucking, air freight) |
+| Global water | PHO, FIW, CGW | IH2O | Secular ma flow-sensitive |
+
+#### Energy & Materials (parent XLE / XLB)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Clean energy | **ICLN**, TAN, QCLN, PBW | IQQH.DE, INRG.L | TAN è solar-puro (narrow); ICLN diversificato |
+| Uranium / nuclear | **URA**, URNM, NLR | NUCL | Catalyst narrativo forte, illiquido fuori US |
+| Battery / EV | LIT, DRIV, KARS | BATT | Overlap forte con semis (chip nei veicoli) |
+| Rare earth / strategic metals | **REMX**, COPX | REMX | Catalyst geopolitico (Cina supply chain) |
+| Gold miners | **GDX**, GDXJ | GDX | GDXJ è junior (2x beta di GDX), hedge inflazione |
+| Silver miners | SIL, SILJ | SILV | Volatilità molto alta |
+
+#### Financials (parent XLF)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Regional banks | **KRE**, KBE, IAT | — | Rate-sensitive, attenzione a stress events (SVB 2023) |
+| Insurance | KIE, IAK | — | Sub-industry, meno "tematico" ma categoria distinta |
+| Capital markets / brokers | IAI, KCE | — | Beta alto su volumi di trading |
+
+#### Communications (parent XLC)
+
+| Sub-tema | US ticker(s) | UCITS Xetra / LSE | Note |
+|----------|--------------|-------------------|------|
+| Video games / esports | **ESPO**, GAMR, HERO | XGMD.DE | Ciclico, ma catalyst da release major (NVDA GTC, console cycle) |
+| Social media | SOCL | — | Overlap pesante con META/GOOGL |
+
+#### Country / regional equity (non GICS, ma bet tematici single-country)
+
+| Sub-tema | US ticker(s) | Note |
+|----------|--------------|------|
+| China internet / tech | **KWEB**, CQQQ | KWEB è il più puro; regulatory risk sempre latente |
+| China broad | FXI, MCHI, ASHR | ASHR = A-shares on-shore |
+| India | **INDA**, INDY, SMIN | Secular demographics; premium di valutazione |
+| Korea | EWY | Concentration su Samsung (~20%); proxy semis globali |
+| Taiwan | EWT | Concentration su TSMC (~20%); duplica semis bet |
+| Japan (hedged) | DXJ, HEWJ | DXJ cap copertura FX ¥, utile se dollaro forte |
+
+**Verifica liquidità e wrapper prima del primo uso.** Molti tematici
+Xtrackers/UCITS hanno spread orribili su Xetra retail. Se lo spread
+quotato > 0.3% del prezzo o lo volume giornaliero < €500k, usa il listing
+US. Per i country ETF (KWEB, INDA, EWY, EWT, DXJ) NON esistono equivalenti
+UCITS equivalenti 1:1 — usa il listing US direttamente.
+
+### Esclusioni hard (non entrano mai nell'universo)
+
+- **Leveraged/inverse** (SOXL, LABU, TECL, SQQQ, SPXU, ...): path-dependency
+  distrugge il rendimento su holding > pochi giorni. Incompatibili con swing 4-12w.
+- **Futures-based commodity** (USO, UNG, DBC, DBA, BNO, UGA): contango decay
+  erode la performance indipendentemente dal movimento spot. Se vuoi esposizione
+  commodity, passa da equity miners (GDX, URA, COPX).
+- **Single-currency FX ETF** (UUP, FXE, FXY): non sono tematici, sono
+  speculazione FX pura. Fuori dal framework equity.
+- **ETF con AUM < $500M o lanciati < 3 anni fa**: lo spread e lo storico
+  per RS sono inaffidabili. ES: il "metaverse ETFs" cycle 2021-2022 è
+  documentato come top-of-cycle indicator.
+- **"Single-stock ETFs"** (NVDL, TSLL, ...): leveraged single-stock,
+  path-dependency massima, concettualmente fuori scope.
+
+### Selezione attiva (max 8-10 in watchlist, scelti contestualmente)
+
+L'universo completo ha 30+ nomi, ma la watchlist tematica **attiva** non
+dovrebbe mai eccedere 8-10. Il metodo di selezione è **regime-aware** e
+**sector-rotation-aware**:
+
+1. **Parti dalla rotation**: esegui `propicks-rotate` e guarda quali parent
+   sector sono classe A (OVERWEIGHT) o B (HOLD). Solo i tematici con parent
+   in A/B entrano in watchlist attiva.
+2. **Regola regime**:
+   - **STRONG_BULL / BULL**: considera disruption + high-beta (semis, clean
+     energy, fintech, gaming, battery, rare earth, KWEB, biotech small-cap XBI)
+   - **NEUTRAL**: preferisci secular + quality (AI, cybersecurity, medical
+     devices IHI, infrastructure PAVE, pharma IHE)
+   - **BEAR**: solo defensive themes (defense ITA/XAR, cybersecurity CIBR,
+     pharma IHE, gold miners GDX come hedge)
+   - **STRONG_BEAR**: **nessun tematico aperto**, coerente con la regola
+     `suggest_allocation` che va flat.
+3. **RS vs parent sector**: per i tematici che superano gli step 1-2,
+   controlla manualmente su TradingView il ratio `THEME/PARENT` (es. `SMH/XLK`)
+   su weekly. Cerca accelerazione (breakout della RS line sopra l'EMA10w) —
+   NON performance assoluta vs SPX, che è tautologica in risk-on.
+4. **Cap di diversificazione tematica**: max 2 tematici aperti, con sub-tema
+   diverso. ES: se hai SMH aperto (semis), non aprire SOXX in contemporanea
+   né IGV (software) se il parent XLK è già sovrappesato.
+
+### Aggiornamento della whitelist
+
+Rivaluta l'universo **ogni 6 mesi** (Jan/Jul):
+- Rimuovi ETF che hanno perso AUM sotto $300M o ADV sotto $5M (drift di liquidità).
+- Aggiungi nuovi tematici che hanno maturato 3 anni di storia e soddisfano i
+  filtri hard.
+- Documenta le modifiche nel commit message (`docs: thematic universe review YYYY-H1`).
+
+Non aggiungere tematici "perché stanno performando" — il performance chase
+nei tematici è il modo più affidabile per comprare il top del ciclo.
 
 ### Gate quantitativo di promozione a satellite bucket dedicato
 
@@ -467,6 +597,86 @@ più aggressivo su `propicks-rotate`.
 cost. Marca i trade come `--strategy ThematicETF_discontinued` nel journal
 e torna a XLK/XLV puri. Il framework vale come scartare un'ipotesi tanto
 quanto come confermarla.
+
+---
+
+## 5C. WATCHLIST — Incubatrice di idee
+
+La watchlist è lo spazio tra lo scanner e l'entry. Non impegna capitale,
+non ha regole di sizing, serve a tenere in coda setup che non sono ancora
+maturi ma meritano di essere monitorati.
+
+### Popolamento automatico (classe B)
+
+`propicks-scan` aggiunge **automaticamente** alla watchlist ogni ticker
+classificato **B** (score 60-74, `"B — WATCHLIST"`). Il comportamento è:
+
+- `source="auto_scan"`, `added_date` = oggi
+- snapshot di `score_at_add`, `regime_at_add`, `classification_at_add`
+- re-scan dello stesso ticker **aggiorna** i metadati, NON duplica né
+  azzera `added_date` / `source` originali
+- disabilitabile con `propicks-scan TICKER --no-watchlist`
+
+Classe A (≥75) e classe C/D (<60) non vengono aggiunte: A entra diretta
+al sizing, C/D sono skip.
+
+### Popolamento manuale
+
+```bash
+propicks-watchlist add AAPL --target 185.50 --note "pullback EMA20"
+propicks-watchlist update AAPL --target 190
+propicks-watchlist remove AAPL
+```
+
+Usa `--target` per registrare il livello di entry atteso (breakout,
+pullback su EMA, support level). La nota è testo libero per il catalyst
+o la ragione dell'attesa.
+
+### Ready signal
+
+```bash
+propicks-watchlist status
+```
+
+Mostra per ogni entry: prezzo corrente, distanza % dal target, score
+live, regime corrente. Un entry è **READY** quando:
+
+- Score corrente ≥ 60 (setup ancora valido, non è decaduto)
+- `|current − target| / target ≤ 2%` (prezzo arrivato al livello)
+
+Il flag READY **non** apre la posizione. È segnale visivo che invita a:
+
+1. `propicks-scan TICKER --validate` (re-analisi completa + Claude)
+2. Verifica regime weekly (entry gate)
+3. `propicks-portfolio size` + `propicks-portfolio add`
+
+### Pulizia (stale cleanup)
+
+`propicks-watchlist list --stale` (o tab **Stale** nella dashboard) mostra
+entry da più di **60 giorni**. Regola operativa: se un setup non si è
+materializzato in 2 mesi, la tesi era sbagliata o il regime è cambiato.
+Rimuovi in blocco dalla dashboard o via CLI.
+
+### Workflow integrato
+
+```
+propicks-scan TICKER                   → se classe B: auto-add a watchlist
+  ↓
+(aspetti giorni/settimane)
+  ↓
+propicks-watchlist status              → vedi flag READY su TICKER
+  ↓
+propicks-scan TICKER --validate        → re-analisi completa + Claude
+  ↓
+propicks-portfolio size + add          → apertura
+  ↓
+propicks-watchlist remove TICKER       → rimozione manuale post-entry
+propicks-journal add TICKER ...        → log del trade
+```
+
+La rimozione dalla watchlist **non** è automatica quando apri la
+posizione: è un'azione esplicita del trader per evitare stati inconsistenti
+se decidi di chiudere la posizione e volerla tenere ancora monitorata.
 
 ---
 

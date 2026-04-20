@@ -38,7 +38,8 @@ propicks-ai-framework/
 │   ├── io/                    # Persistenza JSON (atomic writes)
 │   │   ├── atomic.py
 │   │   ├── portfolio_store.py # load/save + add/remove/update_position
-│   │   └── journal_store.py   # load + add_trade/close_trade (append-only)
+│   │   ├── journal_store.py   # load + add_trade/close_trade (append-only)
+│   │   └── watchlist_store.py # load/save + add/remove/update (dedup per ticker)
 │   ├── market/
 │   │   └── yfinance_client.py # Unico modulo che parla con yfinance
 │   ├── ai/                    # Adapter Anthropic (validazione tesi via Claude)
@@ -58,7 +59,8 @@ propicks-ai-framework/
 │   │   ├── journal.py         # propicks-journal
 │   │   ├── report.py          # propicks-report
 │   │   ├── rotate.py          # propicks-rotate (sector rotation ETF)
-│   │   └── backtest.py        # propicks-backtest (walk-forward single-stock)
+│   │   ├── backtest.py        # propicks-backtest (walk-forward single-stock)
+│   │   └── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
 │   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
 │       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
 │       ├── _shared.py         # Cached readers, formatters, UI primitives
@@ -69,7 +71,8 @@ propicks-ai-framework/
 │           ├── 3_Portfolio.py         # ≡ propicks-portfolio size/add/update/remove + risk + manage
 │           ├── 4_Journal.py           # ≡ propicks-journal add/close/list/stats
 │           ├── 5_Reports.py           # ≡ propicks-report weekly/monthly + archive
-│           └── 6_Backtest.py          # ≡ propicks-backtest
+│           ├── 6_Backtest.py          # ≡ propicks-backtest
+│           └── 7_Watchlist.py         # ≡ propicks-watchlist (live score + READY flag)
 ├── tradingview/               # Pine script (contract con config.py)
 │   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
 │   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
@@ -90,7 +93,8 @@ propicks-ai-framework/
 │       ├── test_trade_mgmt.py      # Trailing stop + time stop + suggest_stop_update
 │       ├── test_exposure.py        # Sector concentration + beta-weighted + correlazioni
 │       ├── test_backtest.py        # Engine su DataFrame sintetici + metrics
-│       └── test_thesis_validator.py # SDK Anthropic mockato
+│       ├── test_thesis_validator.py # SDK Anthropic mockato
+│       └── test_watchlist_store.py # CRUD + migrazione schema legacy
 ├── data/                      # Runtime state (gitignored)
 │   ├── portfolio.json         # Stato corrente del portafoglio
 │   ├── journal.json           # Storico completo dei trade
@@ -239,6 +243,16 @@ propicks-backtest AAPL MSFT NVDA --period 3y    # multi-ticker + aggregate
 propicks-backtest AAPL --threshold 70 --json
 propicks-backtest AAPL --stop-atr 2 --target-atr 3 --time-stop 20
 
+# Watchlist (incubatrice idee tra scan e entry)
+propicks-watchlist add AAPL --target 185.50 --note "pullback EMA20"
+propicks-watchlist update AAPL --target 190
+propicks-watchlist remove AAPL
+propicks-watchlist list                         # tabella completa
+propicks-watchlist list --stale                 # solo entry > 60gg
+propicks-watchlist status                       # score live + distanza target + flag READY
+# NB: propicks-scan aggiunge automaticamente i ticker classe B (score 60-74)
+#     alla watchlist. Usa `propicks-scan TICKER --no-watchlist` per disabilitare.
+
 # Test unit (solo domain/ + backtest, nessuna rete)
 pytest
 
@@ -266,6 +280,7 @@ docker compose down                        # stop (volumi preservati)
 | `propicks-journal add/close/list/stats` | `pages/4_Journal.py`       |
 | `propicks-report weekly/monthly` | `pages/5_Reports.py` + archivio |
 | `propicks-backtest`              | `pages/6_Backtest.py`           |
+| `propicks-watchlist add/remove/update/list/status` | `pages/7_Watchlist.py` |
 
 ## Regole di Business (Invarianti)
 
@@ -706,39 +721,59 @@ senza prezzo corrente (DataUnavailable), beta None, correlazioni con
 osservazioni < `min_observations` (default 30, ritorna None invece di
 una matrice rumorosa).
 
-## Estensioni Future (Roadmap)
+## Watchlist (incubatrice idee tra scan e entry)
 
-### v1.1 — Backtest ✅ (completato)
-- [x] Subpackage `propicks.backtest` (`engine.py` + `metrics.py`)
-- [x] CLI `propicks-backtest` con `--json`, `--no-trades`, `--no-equity`
-- [x] Test su DataFrame sintetici (no rete)
-- [ ] TODO: walk-forward out-of-sample split + significance test (v1.6)
-- [ ] TODO: integrazione filtro regime weekly (`^GSPC` pre-caricato)
-- [ ] TODO: simulazione costi (slippage + commissioni broker)
+`io/watchlist_store.py` è il parallelo di `portfolio_store.py` ma con
+semantica diversa: la watchlist **non impegna capitale**, non ha regole
+di sizing, non blocca l'entry. È l'incubatrice dove i setup attendono il
+loro momento (pullback, breakout, catalyst, rerating di regime).
 
-### v1.2 — Webhook TradingView
-- Endpoint Flask/FastAPI in `propicks.server` che riceve webhook
-- Salva alert in `data/alerts.json`
-- Opzionale: notifica Telegram
+**Schema per entry:**
 
-### v1.3 — API Anthropic Integration ✅ (parziale)
-- [x] Adapter `propicks.ai.claude_client` parallelo a `market/yfinance_client`
-- [x] Pipeline: `analyze_ticker` → `validate_thesis` → verdict strutturato
-- [x] Gate su score tecnico + cache giornaliera on-disk
-- [ ] TODO: integrazione in `propicks-portfolio add` (validazione pre-apertura)
-- [ ] TODO: salvataggio verdict nel journal al momento dell'entry
+```json
+{
+  "AAPL": {
+    "added_date": "2026-04-20",
+    "target_entry": 185.50,
+    "note": "pullback EMA20 post earnings beat",
+    "score_at_add": 72.3,
+    "regime_at_add": "BULL",
+    "classification_at_add": "B — WATCHLIST",
+    "source": "manual" | "auto_scan"
+  }
+}
+```
 
-### v1.4 — Dashboard Web ✅ (completata via Streamlit)
-- [x] UI multi-page Streamlit (`src/propicks/dashboard/`) parallela alla CLI
-- [x] Entry point `propicks-dashboard` + immagine Docker con volumi persistenti
-- [x] 5 page: Overview, Scanner, ETF Rotation, Portfolio, Journal, Reports
-- [ ] TODO: equity curve interattiva (plotly — dep già in `[dashboard]` extra)
-- [ ] TODO: heatmap performance per strategia
+**Auto-populate da `propicks-scan`:** lo scanner aggiunge automaticamente
+i ticker **classe B** (score 60-74, `"B — WATCHLIST"`) alla watchlist,
+con `source="auto_scan"` e snapshot di score/regime/classification al
+momento dello scan. Disabilitabile con `--no-watchlist`. La dashboard
+Scanner page fa lo stesso con un toast di conferma. Coerente con la
+semantica di `classify()` in `domain/scoring.py`: classe B è per
+definizione "setup valido ma non immediato".
 
-### v1.5 — Automazione Completa
-- Orchestratore che combina scanner + Claude API + journal
-- Input: basket Pro Picks mensile
-- Output: lista ordinata di trade raccomandati con size e livelli
+**Ready signal** (`propicks-watchlist status` / tab Attiva della dashboard):
+- Score corrente ≥ 60 **E**
+- `|current_price − target_entry| / target_entry ≤ 2%`
+
+Un entry READY **non** apre la posizione automaticamente: è flag visivo che
+invita a passare da `propicks-scan` (re-analisi completa con regime + AI)
+e `propicks-portfolio size/add` con sizing esplicito.
+
+**Dedup e update-on-add:** `add_to_watchlist` normalizza il ticker a
+uppercase e se esiste già aggiorna solo i campi non-None, preservando
+`added_date` e `source` originali. Questo permette a `propicks-scan` di
+girare ripetutamente su un ticker senza azzerare i metadati della prima
+aggiunta.
+
+**Stale entries:** `is_stale(entry, days=60)` marca come stale le entry
+da più di 60 giorni. La dashboard ha un tab dedicato con multi-select per
+pulizia in blocco. Rationale operativo: se un setup non si è materializzato
+in 2 mesi, probabilmente la tesi era sbagliata o il regime è cambiato.
+
+**Schema legacy:** `load_watchlist` migra automaticamente
+`{"tickers": []}` e `{"tickers": ["AAPL", "MSFT"]}` (lista di stringhe)
+a dict con campi default. Nessuna azione manuale richiesta.
 
 ## Note per Claude Code
 

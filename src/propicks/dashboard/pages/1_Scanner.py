@@ -63,6 +63,33 @@ if not results:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# Auto-add classe B alla watchlist (coerente col CLI propicks-scan)
+# ---------------------------------------------------------------------------
+class_b = [r for r in results if r.get("classification", "").startswith("B")]
+if class_b:
+    from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
+
+    wl = load_watchlist()
+    added, updated = [], []
+    for r in class_b:
+        regime = r.get("regime") or {}
+        _, is_new = add_to_watchlist(
+            wl,
+            r["ticker"],
+            score_at_add=r.get("score_composite"),
+            regime_at_add=regime.get("regime"),
+            classification_at_add=r.get("classification"),
+            source="auto_scan",
+        )
+        (added if is_new else updated).append(r["ticker"])
+    parts = []
+    if added:
+        parts.append(f"nuovi: {', '.join(added)}")
+    if updated:
+        parts.append(f"aggiornati: {', '.join(updated)}")
+    st.toast(f"Watchlist (classe B) — {' · '.join(parts)}", icon="📋")
+
+# ---------------------------------------------------------------------------
 # Summary table
 # ---------------------------------------------------------------------------
 st.subheader("Risultati")
