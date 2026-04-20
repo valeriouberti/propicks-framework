@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from propicks.domain.sizing import calculate_position_size, portfolio_value
+from propicks.domain.sizing import (
+    calculate_position_size,
+    portfolio_market_value,
+    portfolio_value,
+)
 
 
 def _empty_portfolio(cash: float = 10_000.0) -> dict:
@@ -21,6 +25,29 @@ def test_portfolio_value_with_positions():
     assert portfolio_value(pf) == 10_000.0
 
 
+def test_portfolio_market_value_uses_current_prices():
+    pf = {
+        "positions": {"AAPL": {"shares": 10, "entry_price": 100.0}},
+        "cash": 0.0,
+    }
+    # Winner: cost-basis = 1000, mark-to-market = 1200
+    assert portfolio_value(pf) == 1_000.0
+    assert portfolio_market_value(pf, {"AAPL": 120.0}) == 1_200.0
+
+
+def test_portfolio_market_value_skips_missing_prices():
+    # Ticker senza prezzo corrente → escluso dal totale (match con exposure).
+    pf = {
+        "positions": {
+            "AAPL": {"shares": 10, "entry_price": 100.0},
+            "XYZ": {"shares": 5, "entry_price": 50.0},  # no price
+        },
+        "cash": 500.0,
+    }
+    total = portfolio_market_value(pf, {"AAPL": 110.0})
+    assert total == 500.0 + 1100.0  # solo AAPL + cash
+
+
 def test_sizing_rejects_stop_above_entry():
     r = calculate_position_size(
         entry_price=100, stop_price=105, portfolio=_empty_portfolio()
@@ -35,6 +62,28 @@ def test_sizing_rejects_low_score():
         portfolio=_empty_portfolio(),
     )
     assert r["ok"] is False
+
+
+def test_sizing_rejects_low_score_claude_high_tech():
+    # Media = (30+90)/2 = 60 passerebbe un gate su media, ma score_claude=3
+    # viola MIN_SCORE_CLAUDE=6 (add_position fallirebbe). Sizing deve bloccare
+    # qui per coerenza, così il trader non vede "ok" per poi fallire su add.
+    r = calculate_position_size(
+        entry_price=100, stop_price=95, score_claude=3, score_tech=90,
+        portfolio=_empty_portfolio(),
+    )
+    assert r["ok"] is False
+    assert "score_claude" in r["error"]
+
+
+def test_sizing_rejects_high_claude_low_tech():
+    # Analogo simmetrico: score_tech=50 < MIN_SCORE_TECH=60 → blocco.
+    r = calculate_position_size(
+        entry_price=100, stop_price=95, score_claude=8, score_tech=50,
+        portfolio=_empty_portfolio(),
+    )
+    assert r["ok"] is False
+    assert "score_tech" in r["error"]
 
 
 def test_sizing_high_conviction_uses_12_pct():

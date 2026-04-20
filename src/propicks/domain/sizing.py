@@ -16,6 +16,8 @@ from propicks.config import (
     MAX_POSITIONS,
     MEDIUM_CONVICTION_SIZE_PCT,
     MIN_CASH_RESERVE_PCT,
+    MIN_SCORE_CLAUDE,
+    MIN_SCORE_TECH,
 )
 from propicks.domain.validation import validate_scores
 
@@ -26,13 +28,44 @@ def portfolio_value(portfolio: dict) -> float:
     """Valore totale del portafoglio = cash + sum(shares * entry_price).
 
     Usa i prezzi di entry (non i correnti): è una misura contabile,
-    non di mark-to-market.
+    non di mark-to-market. Usata come base per i gate di sizing (15% cap,
+    20% riserva) perché l'invariante è "% del capitale impegnato", non
+    "% del P&L corrente".
     """
     cash = float(portfolio.get("cash") or 0)
     invested = sum(
-        float(p.get("shares", 0)) * float(p.get("entry_price", 0))
+        float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
         for p in portfolio.get("positions", {}).values()
     )
+    return cash + invested
+
+
+def portfolio_market_value(
+    portfolio: dict,
+    current_prices: dict[str, float | None],
+) -> float:
+    """Valore mark-to-market = cash + sum(shares * current_price).
+
+    Usare come denominatore per i calcoli di **esposizione** (sector/beta/
+    correlation): i numeratori in ``domain.exposure`` sono mark-to-market,
+    quindi anche il denominatore deve esserlo — altrimenti i weight non
+    sommano a 1 quando ci sono P&L unrealized (un portfolio +20% gonfia
+    i numeratori senza toccare il cost-basis del denominatore).
+
+    **Semantica skip-on-None**: i ticker senza prezzo corrente vengono
+    esclusi dal totale, coerente con ``compute_sector_exposure`` e
+    ``compute_beta_weighted_exposure`` che li skippano anch'esse. Risultato:
+    un ticker senza prezzo sparisce da numeratore E denominatore — il peso
+    degli altri resta corretto tra loro, cash incluso.
+    """
+    cash = float(portfolio.get("cash") or 0)
+    invested = 0.0
+    for ticker, p in portfolio.get("positions", {}).items():
+        cur = current_prices.get(ticker)
+        if cur is None:
+            continue
+        shares = float(p.get("shares") or 0)
+        invested += shares * float(cur)
     return cash + invested
 
 
@@ -90,14 +123,24 @@ def calculate_position_size(
             "error": f"Portafoglio pieno: {len(positions)}/{MAX_POSITIONS} posizioni aperte.",
         }
 
-    avg_score = (score_claude * 10 + score_tech) / 2
-    conv = _convictions_level(avg_score)
-    if conv is None:
+    # Gate allineato con add_position: i due minimi sono check separati,
+    # non una media (altrimenti score_claude=3 + score_tech=90 passerebbe qui
+    # ma fallirebbe in add_position). Vedi CLAUDE.md §Regole di Business.
+    if score_claude < MIN_SCORE_CLAUDE:
         return {
             "ok": False,
-            "error": f"Score troppo basso (avg {avg_score:.1f}, minimo 60).",
-            "avg_score": avg_score,
+            "error": f"score_claude {score_claude} < soglia minima {MIN_SCORE_CLAUDE}.",
         }
+    if score_tech < MIN_SCORE_TECH:
+        return {
+            "ok": False,
+            "error": f"score_tech {score_tech} < soglia minima {MIN_SCORE_TECH}.",
+        }
+
+    avg_score = (score_claude * 10 + score_tech) / 2
+    conv = _convictions_level(avg_score)
+    # Entrambi i minimi passati → avg_score >= 60 garantito → conv != None
+    assert conv is not None, "invariant: min gates passed implies MEDIUM or HIGH"
     conviction_level, conviction_pct = conv
 
     position_cap_pct = (

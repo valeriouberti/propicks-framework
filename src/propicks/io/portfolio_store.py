@@ -66,7 +66,11 @@ def save_portfolio(portfolio: dict) -> None:
 
 
 def unrealized_pl(portfolio: dict) -> tuple[float, dict[str, float]]:
-    """Ritorna (P&L unrealized totale, mappa ticker→prezzo corrente)."""
+    """Ritorna (P&L unrealized totale, mappa ticker→prezzo corrente).
+
+    Le posizioni senza ``shares`` (legacy pre-sync) o senza prezzo corrente
+    vengono skippate senza contribuire al totale.
+    """
     from propicks.market.yfinance_client import get_current_prices
 
     positions = portfolio.get("positions", {})
@@ -76,8 +80,10 @@ def unrealized_pl(portfolio: dict) -> tuple[float, dict[str, float]]:
     total = 0.0
     for ticker, p in positions.items():
         cur = prices.get(ticker)
-        if cur is not None:
-            total += (cur - p["entry_price"]) * p["shares"]
+        shares = p.get("shares")
+        if cur is None or shares is None:
+            continue
+        total += (cur - p["entry_price"]) * shares
     return total, prices
 
 
@@ -215,9 +221,21 @@ def update_position(
     if all(f is None for f in fields):
         raise ValueError("Specificare almeno un campo da aggiornare.")
     pos = positions[ticker]
+    entry = float(pos["entry_price"])
+    # Validazione difensiva contro data-entry errata. Lo stop può legittimamente
+    # finire SOPRA entry quando il trailing ratchet-up ha bloccato profitto (è
+    # lo scopo del trailing), quindi NON enforciamo stop < entry. Ma stop <= 0
+    # o target <= entry sono solo typo.
     if stop_loss is not None:
+        if stop_loss <= 0:
+            raise ValueError(f"stop_loss deve essere > 0 (ricevuto {stop_loss}).")
         pos["stop_loss"] = round(stop_loss, 2)
     if target is not None:
+        if target <= entry:
+            raise ValueError(
+                f"target {target:.2f} <= entry {entry:.2f}: un long con target "
+                f"sotto entry non ha senso. Correggi o usa `remove`."
+            )
         pos["target"] = round(target, 2)
     if highest_price is not None:
         pos["highest_price_since_entry"] = round(highest_price, 2)

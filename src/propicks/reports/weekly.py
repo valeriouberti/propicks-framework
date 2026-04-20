@@ -61,11 +61,13 @@ def generate_weekly_report() -> str:
         lines.append("|--------|--------|-------|---------|-------|-------|------|--------|-----------|")
         for ticker, p in open_positions.items():
             cur = prices.get(ticker)
-            pl_abs = (cur - p["entry_price"]) * p["shares"] if cur else None
+            shares = p.get("shares")
+            # shares=None su posizioni legacy pre-sync: P&L € non calcolabile.
+            pl_abs = (cur - p["entry_price"]) * shares if (cur and shares is not None) else None
             pl_pct = (cur - p["entry_price"]) / p["entry_price"] * 100 if cur else None
             target = p.get("target")
             lines.append(
-                f"| {ticker} | {p['shares']} | {p['entry_price']:.2f} | "
+                f"| {ticker} | {shares if shares is not None else '-'} | {p['entry_price']:.2f} | "
                 f"{(f'{cur:.2f}' if cur else 'N/A')} | "
                 f"{(f'{pl_abs:+.2f}' if pl_abs is not None else 'N/A')} | "
                 f"{(fmt_pct(pl_pct))} | "

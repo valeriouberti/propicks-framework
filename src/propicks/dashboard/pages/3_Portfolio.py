@@ -34,7 +34,11 @@ from propicks.domain.exposure import (
     compute_sector_exposure,
     find_correlated_pairs,
 )
-from propicks.domain.sizing import calculate_position_size, portfolio_value
+from propicks.domain.sizing import (
+    calculate_position_size,
+    portfolio_market_value,
+    portfolio_value,
+)
 from propicks.domain.stock_rs import YF_SECTOR_TO_KEY
 from propicks.domain.trade_mgmt import (
     DEFAULT_FLAT_THRESHOLD_PCT,
@@ -164,7 +168,11 @@ with tab_risk:
         sector_key_map = {
             t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_yf.items()
         }
-        sector_exp = compute_sector_exposure(positions, prices_map, sector_key_map, total)
+        # Esposizione: denominatore mark-to-market per match coi numeratori
+        # (shares × current_price). Il `total` cost-basis resta corretto per
+        # il % capitale a rischio nella sezione sopra.
+        total_market = portfolio_market_value(portfolio, prices_map)
+        sector_exp = compute_sector_exposure(positions, prices_map, sector_key_map, total_market)
         if sector_exp:
             sector_rows = sorted(
                 ([{"Settore": k, "Esposizione": fmt_pct(v), "_pct": v}
@@ -191,7 +199,7 @@ with tab_risk:
 
         # Beta-weighted gross long
         st.subheader("Beta-weighted gross long (vs SPX)")
-        beta_info = compute_beta_weighted_exposure(positions, prices_map, betas, total)
+        beta_info = compute_beta_weighted_exposure(positions, prices_map, betas, total_market)
         b1, b2, b3 = st.columns(3)
         b1.metric(
             "Gross long",

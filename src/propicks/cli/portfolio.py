@@ -32,7 +32,11 @@ from propicks.domain.exposure import (
     find_correlated_pairs,
 )
 from propicks.domain.indicators import compute_atr
-from propicks.domain.sizing import calculate_position_size, portfolio_value
+from propicks.domain.sizing import (
+    calculate_position_size,
+    portfolio_market_value,
+    portfolio_value,
+)
 from propicks.domain.stock_rs import YF_SECTOR_TO_KEY
 from propicks.domain.trade_mgmt import (
     DEFAULT_FLAT_THRESHOLD_PCT,
@@ -163,14 +167,18 @@ def show_risk(portfolio: dict) -> None:
     if risk_sum > weekly_limit:
         print("[warning] rischio aggregato oltre il limite settimanale.")
 
-    _show_exposure(positions, total)
+    _show_exposure(portfolio, positions)
 
 
-def _show_exposure(positions: dict, total_capital: float) -> None:
+def _show_exposure(portfolio: dict, positions: dict) -> None:
     """Sezione esposizione: settori + beta-weighted + correlazioni pairwise.
 
     Tutti i fetch (prezzi, sector, beta, returns) avvengono qui nella CLI.
     Le funzioni di ``domain.exposure`` ricevono dati già materializzati.
+
+    Il totale qui è **mark-to-market** (``portfolio_market_value``), non
+    cost-basis (``portfolio_value``): i numeratori sector/beta sono
+    mark-to-market, denominatore deve matchare. Vedi CLAUDE.md.
     """
     tickers = list(positions.keys())
     print()
@@ -179,6 +187,7 @@ def _show_exposure(positions: dict, total_capital: float) -> None:
     print("=" * 70)
 
     prices = get_current_prices(tickers)
+    total_capital = portfolio_market_value(portfolio, prices)
     sector_map = {t: get_ticker_sector(t) for t in tickers}
     sector_key_map = {
         t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_map.items()
