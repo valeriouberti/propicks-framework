@@ -108,6 +108,34 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
+# Watchlist quick-add (manuale, nessun auto-add: la rotation è rank→alloc,
+# la watchlist serve solo per monitorare ETF che vuoi tenere d'occhio)
+# ---------------------------------------------------------------------------
+wl_col1, wl_col2, wl_col3 = st.columns([2, 1, 2])
+wl_pick = wl_col1.selectbox(
+    "Aggiungi ETF a watchlist",
+    options=[""] + [r["ticker"] for r in ranked],
+    key="rotate_wl_pick",
+    help="Selezione manuale: la rotation non fa auto-add, gli ETF top vanno ad allocazione diretta.",
+)
+if wl_col2.button("📋 Watchlist", type="secondary", disabled=not wl_pick):
+    from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
+
+    picked = next((r for r in ranked if r["ticker"] == wl_pick), None)
+    if picked:
+        wl = load_watchlist()
+        _, is_new = add_to_watchlist(
+            wl,
+            picked["ticker"],
+            score_at_add=picked.get("score_composite"),
+            regime_at_add=picked.get("regime"),
+            classification_at_add=picked.get("classification"),
+            source="manual",
+        )
+        verb = "Aggiunto" if is_new else "Aggiornato"
+        wl_col3.success(f"{verb} {picked['ticker']} in watchlist.")
+
+# ---------------------------------------------------------------------------
 # Top pick detail
 # ---------------------------------------------------------------------------
 top = ranked[0]

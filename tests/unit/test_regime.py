@@ -60,6 +60,27 @@ def test_regime_neutral_on_mixed_tape():
     assert result["entry_allowed"] is True
 
 
+def test_regime_drops_trailing_nan_bar():
+    """Bug LTMC.MI (2026-04-20): yfinance ritorna la barra in corso con
+    Close=NaN su ticker thin pre-market. Le comparazioni con NaN sono
+    silenziosamente False, trend_bull e trend_bear entrambi falsi →
+    fallback errato a NEUTRAL invece del vero STRONG_BULL.
+    """
+    n = 120
+    close = pd.Series(np.linspace(80, 180, n))
+    ohlc = _ohlc(close)
+    # Appendi una barra parziale con Close=NaN come farebbe yfinance lunedì mattina
+    nan_row = pd.DataFrame(
+        {"High": [np.nan], "Low": [np.nan], "Close": [np.nan]},
+        index=[ohlc.index[-1] + 1],
+    )
+    with_nan = pd.concat([ohlc, nan_row])
+    result = classify_regime(with_nan)
+    assert result is not None
+    assert result["regime_code"] == 5
+    assert result["regime"] == "STRONG_BULL"
+
+
 def test_regime_reports_expected_fields():
     n = max(REGIME_MIN_WEEKLY_BARS, 100)
     close = pd.Series(np.linspace(100, 130, n))

@@ -61,6 +61,13 @@ def classify_regime(weekly: pd.DataFrame) -> dict | None:
     if weekly is None or len(weekly) < REGIME_MIN_WEEKLY_BARS:
         return None
 
+    # Difesa in profondità: se il caller non ha già droppato la barra parziale
+    # (Close=NaN su ticker thin pre-market), comparazioni con NaN falliscono
+    # silenziosamente e il bucket match collassa a NEUTRAL.
+    weekly = weekly.dropna(subset=["Close"])
+    if len(weekly) < REGIME_MIN_WEEKLY_BARS:
+        return None
+
     close = weekly["Close"]
     high = weekly["High"]
     low = weekly["Low"]

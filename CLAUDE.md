@@ -250,8 +250,10 @@ propicks-watchlist remove AAPL
 propicks-watchlist list                         # tabella completa
 propicks-watchlist list --stale                 # solo entry > 60gg
 propicks-watchlist status                       # score live + distanza target + flag READY
-# NB: propicks-scan aggiunge automaticamente i ticker classe B (score 60-74)
-#     alla watchlist. Usa `propicks-scan TICKER --no-watchlist` per disabilitare.
+# NB: propicks-scan aggiunge automaticamente i ticker classe A (score ≥75)
+#     e classe B (60-74) alla watchlist. Per la classe A il target entry è
+#     impostato al prezzo corrente (preserva target esistenti su re-scan).
+#     Usa `propicks-scan TICKER --no-watchlist` per disabilitare l'auto-add.
 
 # Test unit (solo domain/ + backtest, nessuna rete)
 pytest
@@ -745,12 +747,27 @@ loro momento (pullback, breakout, catalyst, rerating di regime).
 ```
 
 **Auto-populate da `propicks-scan`:** lo scanner aggiunge automaticamente
-i ticker **classe B** (score 60-74, `"B — WATCHLIST"`) alla watchlist,
-con `source="auto_scan"` e snapshot di score/regime/classification al
-momento dello scan. Disabilitabile con `--no-watchlist`. La dashboard
-Scanner page fa lo stesso con un toast di conferma. Coerente con la
-semantica di `classify()` in `domain/scoring.py`: classe B è per
-definizione "setup valido ma non immediato".
+i ticker **classe A** (score ≥75, `"A — AZIONE IMMEDIATA"`) e **classe B**
+(60-74, `"B — WATCHLIST"`) alla watchlist, con `source="auto_scan"` e
+snapshot di score/regime/classification al momento dello scan. Policy per
+il `target_entry`:
+
+- **Classe A nuove entry**: `target_entry = current_price` (distanza 0% →
+  immediatamente READY al prossimo `status`). Rationale: un setup A è
+  tradable *ora*, ha senso che la watchlist lo flaggi come tale senza
+  forzare il trader a settare un target manualmente.
+- **Classe A entry esistenti con target già settato**: target preservato
+  (non sovrascriviamo né input manuali del trader né target di scan
+  precedenti quando il prezzo è salito).
+- **Classe B**: senza target — il trader lo imposta manualmente quando
+  individua il livello (pullback EMA20, breakout, catalyst date).
+- **Classe C/D**: skip dell'auto-add (rumore). Restano disponibili via
+  bottone manuale "→ Aggiungi a watchlist" nella dashboard Scanner.
+
+Disabilitabile con `--no-watchlist`. La dashboard Scanner page replica la
+stessa policy A+B con toast di conferma, più un bottone manuale per
+ticker di qualunque classe (utile quando *sai* che vuoi tenerlo d'occhio
+nonostante il setup non sia pronto).
 
 **Ready signal** (`propicks-watchlist status` / tab Attiva della dashboard):
 - Score corrente ≥ 60 **E**

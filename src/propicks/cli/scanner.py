@@ -245,28 +245,48 @@ def print_copy_paste(results: list[dict]) -> None:
         print("-" * 70)
 
 
-def _auto_watchlist_class_b(results: list[dict]) -> None:
-    """Aggiunge i ticker classe B alla watchlist e stampa le modifiche su stderr.
+def _auto_watchlist_actionable(results: list[dict]) -> None:
+    """Aggiunge i ticker classe A e B alla watchlist e stampa le modifiche su stderr.
 
-    Policy: classe B (score 60-74) è per definizione "WATCHLIST — aspetta setup
-    migliore". Invece di far digitare il comando al trader, lo fa qui.
-    Classe A entra diretta al sizing, C/D sono skip. Per disabilitare: --no-watchlist.
+    Policy:
+    - Classe A (≥75, AZIONE IMMEDIATA): target_entry = current_price per le
+      nuove entry → distanza 0% → immediatamente READY quando ricontrolli status.
+      Per entry già esistenti con target, il target viene preservato (non
+      sovrascriviamo né input manuali né target settati da scan precedenti).
+    - Classe B (60-74, WATCHLIST): aggiunta senza target, il trader lo imposta
+      manualmente quando ha un livello preciso (pullback/breakout).
+    - Classe C/D: skip per design — rumore se entrassero.
+
+    Disabilitabile con --no-watchlist.
     """
-    class_b = [r for r in results if r.get("classification", "").startswith("B")]
-    if not class_b:
+    actionable = [
+        r for r in results
+        if r.get("classification", "").startswith(("A", "B"))
+    ]
+    if not actionable:
         return
 
     wl = load_watchlist()
     added: list[str] = []
     updated: list[str] = []
-    for r in class_b:
+    for r in actionable:
+        classification = r.get("classification", "")
+        is_class_a = classification.startswith("A")
+        existing = wl.get("tickers", {}).get(r["ticker"].upper())
+        # Solo per classe A nuove (o classe A senza target già settato):
+        # target = current price. Per entry esistenti con target → preserva.
+        if is_class_a and not (existing and existing.get("target_entry")):
+            target = round(r["price"], 2)
+        else:
+            target = None  # add_to_watchlist preserva l'esistente se None
         regime = r.get("regime") or {}
         _, is_new = add_to_watchlist(
             wl,
             r["ticker"],
+            target_entry=target,
             score_at_add=r.get("score_composite"),
             regime_at_add=regime.get("regime"),
-            classification_at_add=r.get("classification"),
+            classification_at_add=classification,
             source="auto_scan",
         )
         (added if is_new else updated).append(r["ticker"])
@@ -276,7 +296,7 @@ def _auto_watchlist_class_b(results: list[dict]) -> None:
         msg_parts.append(f"aggiunti {', '.join(added)}")
     if updated:
         msg_parts.append(f"aggiornati {', '.join(updated)}")
-    print(f"[watchlist] auto-update classe B: {'; '.join(msg_parts)}", file=sys.stderr)
+    print(f"[watchlist] auto-update classe A+B: {'; '.join(msg_parts)}", file=sys.stderr)
 
 
 def main() -> int:
@@ -300,7 +320,7 @@ def main() -> int:
     parser.add_argument(
         "--no-watchlist",
         action="store_true",
-        help="Non aggiungere automaticamente i ticker classe B alla watchlist",
+        help="Non aggiungere automaticamente i ticker classe A/B alla watchlist",
     )
     args = parser.parse_args()
 
@@ -326,7 +346,7 @@ def main() -> int:
                 r["ai_verdict"] = verdict
 
     if not args.no_watchlist:
-        _auto_watchlist_class_b(results)
+        _auto_watchlist_actionable(results)
 
     if args.json:
         print(json.dumps(results, indent=2, default=str))

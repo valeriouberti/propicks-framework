@@ -606,10 +606,11 @@ La watchlist è lo spazio tra lo scanner e l'entry. Non impegna capitale,
 non ha regole di sizing, serve a tenere in coda setup che non sono ancora
 maturi ma meritano di essere monitorati.
 
-### Popolamento automatico (classe B)
+### Popolamento automatico (classe A+B)
 
 `propicks-scan` aggiunge **automaticamente** alla watchlist ogni ticker
-classificato **B** (score 60-74, `"B — WATCHLIST"`). Il comportamento è:
+classificato **A** (score ≥75, `"A — AZIONE IMMEDIATA"`) o **B** (60-74,
+`"B — WATCHLIST"`). Il comportamento è:
 
 - `source="auto_scan"`, `added_date` = oggi
 - snapshot di `score_at_add`, `regime_at_add`, `classification_at_add`
@@ -617,8 +618,23 @@ classificato **B** (score 60-74, `"B — WATCHLIST"`). Il comportamento è:
   azzera `added_date` / `source` originali
 - disabilitabile con `propicks-scan TICKER --no-watchlist`
 
-Classe A (≥75) e classe C/D (<60) non vengono aggiunte: A entra diretta
-al sizing, C/D sono skip.
+**Policy target_entry:**
+
+- **Classe A, nuova entry** → `target_entry = prezzo corrente` (distanza
+  0% → il ticker appare subito come **READY** al prossimo `status`). Senso
+  operativo: un setup A è tradable ora, la watchlist lo riflette senza
+  forzare il trader a settare un target manuale.
+- **Classe A, entry già esistente con target** → target preservato. Non
+  sovrascriviamo un target impostato manualmente dal trader né un target
+  auto-generato da uno scan precedente (il prezzo potrebbe essere salito
+  e non vogliamo perdere il livello originale di validazione).
+- **Classe B** → senza target. Sta al trader impostarlo quando individua
+  il livello specifico (pullback EMA20, breakout di resistenza, gap-fill,
+  earnings pullback).
+- **Classe C/D** → skip auto-add (sarebbero rumore in watchlist). Restano
+  aggiungibili manualmente via `propicks-watchlist add` o via il bottone
+  "📋 Aggiungi a watchlist" nella dashboard Scanner per i casi in cui
+  *sai* che vuoi tenerlo d'occhio nonostante lo score basso.
 
 ### Popolamento manuale
 
@@ -660,9 +676,9 @@ Rimuovi in blocco dalla dashboard o via CLI.
 ### Workflow integrato
 
 ```
-propicks-scan TICKER                   → se classe B: auto-add a watchlist
-  ↓
-(aspetti giorni/settimane)
+propicks-scan TICKER                   → se classe A o B: auto-add a watchlist
+  ↓                                      (A con target=price → subito READY)
+(aspetti giorni/settimane)               (B senza target → setti manualmente)
   ↓
 propicks-watchlist status              → vedi flag READY su TICKER
   ↓

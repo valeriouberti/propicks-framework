@@ -39,6 +39,7 @@ def download_history(ticker: str, period: str = "1y") -> pd.DataFrame:
         raise DataUnavailable(ticker, f"errore yfinance: {exc}") from exc
     if hist is None or hist.empty:
         raise DataUnavailable(ticker, "nessun dato disponibile (ticker non trovato?)")
+    hist = hist.dropna(subset=["Close"])
     min_bars = EMA_SLOW * 3 + 5
     if len(hist) < min_bars:
         raise DataUnavailable(
@@ -60,6 +61,9 @@ def download_weekly_history(ticker: str, period: str = "3y") -> pd.DataFrame:
         raise DataUnavailable(ticker, f"errore yfinance (weekly): {exc}") from exc
     if hist is None or hist.empty:
         raise DataUnavailable(ticker, "nessun dato weekly disponibile")
+    # Droppa la barra parziale del lunedì (Close=NaN su ticker thin pre-market):
+    # le comparazioni con NaN sono silenziosamente False → fallback errato a NEUTRAL.
+    hist = hist.dropna(subset=["Close"])
     if len(hist) < REGIME_MIN_WEEKLY_BARS:
         raise DataUnavailable(
             ticker,
@@ -79,7 +83,7 @@ def download_benchmark(ticker: str, days: int) -> pd.Series | None:
         return None
     if hist is None or hist.empty:
         return None
-    return hist["Close"]
+    return hist["Close"].dropna()
 
 
 def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | None:
@@ -96,7 +100,7 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | No
         return None
     if hist is None or hist.empty:
         return None
-    return hist["Close"]
+    return hist["Close"].dropna()
 
 
 def get_ticker_sector(ticker: str) -> str | None:

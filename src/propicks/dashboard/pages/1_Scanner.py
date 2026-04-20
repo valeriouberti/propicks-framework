@@ -63,22 +63,34 @@ if not results:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Auto-add classe B alla watchlist (coerente col CLI propicks-scan)
+# Auto-add classe A+B alla watchlist (coerente col CLI propicks-scan)
+#   - Classe A → target = current_price per nuove entry (preserva target esistente)
+#   - Classe B → senza target (il trader imposta livello pullback/breakout manuale)
 # ---------------------------------------------------------------------------
-class_b = [r for r in results if r.get("classification", "").startswith("B")]
-if class_b:
+actionable = [
+    r for r in results if r.get("classification", "").startswith(("A", "B"))
+]
+if actionable:
     from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
 
     wl = load_watchlist()
     added, updated = [], []
-    for r in class_b:
+    for r in actionable:
+        classification = r.get("classification", "")
+        is_class_a = classification.startswith("A")
+        existing = wl.get("tickers", {}).get(r["ticker"].upper())
+        if is_class_a and not (existing and existing.get("target_entry")):
+            target = round(r["price"], 2)
+        else:
+            target = None
         regime = r.get("regime") or {}
         _, is_new = add_to_watchlist(
             wl,
             r["ticker"],
+            target_entry=target,
             score_at_add=r.get("score_composite"),
             regime_at_add=regime.get("regime"),
-            classification_at_add=r.get("classification"),
+            classification_at_add=classification,
             source="auto_scan",
         )
         (added if is_new else updated).append(r["ticker"])
@@ -87,7 +99,7 @@ if class_b:
         parts.append(f"nuovi: {', '.join(added)}")
     if updated:
         parts.append(f"aggiornati: {', '.join(updated)}")
-    st.toast(f"Watchlist (classe B) — {' · '.join(parts)}", icon="📋")
+    st.toast(f"Watchlist (classe A+B) — {' · '.join(parts)}", icon="📋")
 
 # ---------------------------------------------------------------------------
 # Summary table
@@ -167,6 +179,31 @@ for r in results:
             f"stop_suggest = {r['stop_suggested']:.2f}\n",
             language="text",
         )
+
+        # -----------------------------------------------------------------
+        # Manual "→ Watchlist" — funziona per qualunque classe (anche C/D)
+        # Utile quando il setup non è pronto ma vuoi tenerlo d'occhio
+        # -----------------------------------------------------------------
+        wl_col1, wl_col2 = st.columns([1, 3])
+        if wl_col1.button(
+            "📋 Aggiungi a watchlist",
+            key=f"wl_btn_{r['ticker']}",
+            type="secondary",
+        ):
+            from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
+
+            wl = load_watchlist()
+            regime = r.get("regime") or {}
+            _, is_new = add_to_watchlist(
+                wl,
+                r["ticker"],
+                score_at_add=r.get("score_composite"),
+                regime_at_add=regime.get("regime"),
+                classification_at_add=r.get("classification"),
+                source="manual",
+            )
+            verb = "Aggiunto" if is_new else "Aggiornato"
+            wl_col2.success(f"{verb} {r['ticker']} in watchlist.")
 
         # -----------------------------------------------------------------
         # AI validation on-demand
