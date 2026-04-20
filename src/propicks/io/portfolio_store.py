@@ -162,6 +162,11 @@ def add_position(
 
 
 def remove_position(portfolio: dict, ticker: str) -> dict:
+    """Rimuove una posizione rimborsando il costo d'entrata (undo di add_position).
+
+    Usalo per correggere errori di data entry. Per chiudere un trade reale
+    con P&L usa invece ``close_position(exit_price)``.
+    """
     ticker = ticker.upper()
     positions = portfolio.get("positions", {})
     if ticker not in positions:
@@ -169,6 +174,27 @@ def remove_position(portfolio: dict, ticker: str) -> dict:
     pos = positions.pop(ticker)
     refund = pos["shares"] * pos["entry_price"]
     portfolio["cash"] = round(float(portfolio.get("cash") or 0) + refund, 2)
+    save_portfolio(portfolio)
+    return pos
+
+
+def close_position(portfolio: dict, ticker: str, exit_price: float) -> dict:
+    """Chiude una posizione con cash accounting corretto.
+
+    Il cash residuo aumenta di ``shares * exit_price`` (proventi dalla vendita),
+    non di ``shares * entry_price`` come fa ``remove_position``. La differenza
+    tra i due rappresenta il P&L realizzato — che NON viene tracciato qui:
+    il P&L vive nel journal, portfolio.json ha solo lo stato corrente.
+    """
+    ticker = ticker.upper()
+    positions = portfolio.get("positions", {})
+    if ticker not in positions:
+        raise ValueError(f"Nessuna posizione aperta su {ticker}.")
+    if exit_price <= 0:
+        raise ValueError(f"exit_price deve essere > 0 (ricevuto {exit_price}).")
+    pos = positions.pop(ticker)
+    proceeds = pos["shares"] * exit_price
+    portfolio["cash"] = round(float(portfolio.get("cash") or 0) + proceeds, 2)
     save_portfolio(portfolio)
     return pos
 

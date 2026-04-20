@@ -26,7 +26,9 @@ from typing import Optional
 from tabulate import tabulate
 
 from propicks.domain.verdict import max_drawdown, verdict
-from propicks.io.journal_store import add_trade, close_trade, load_journal
+from propicks.io.journal_store import load_journal
+from propicks.io.trade_sync import close_trade as sync_close_trade
+from propicks.io.trade_sync import open_trade as sync_open_trade
 
 
 def list_trades(
@@ -156,11 +158,12 @@ def compute_stats(filter_strategy: Optional[str] = None) -> None:
 
 def cmd_add(args: argparse.Namespace) -> int:
     try:
-        trade = add_trade(
+        trade, position, warnings = sync_open_trade(
             ticker=args.ticker,
             direction=args.direction,
             entry_price=args.entry_price,
             entry_date=args.entry_date,
+            shares=args.shares,
             stop_loss=args.stop,
             target=args.target,
             score_claude=args.score_claude,
@@ -174,14 +177,19 @@ def cmd_add(args: argparse.Namespace) -> int:
         return 2
     print(
         f"Trade #{trade['id']} aperto: {trade['ticker']} {trade['direction']} "
-        f"@ {trade['entry_price']:.2f} (stop {trade['stop_loss']:.2f})"
+        f"{args.shares} @ {trade['entry_price']:.2f} (stop {trade['stop_loss']:.2f})"
     )
+    if position is not None:
+        cost = position["shares"] * position["entry_price"]
+        print(f"Portfolio aggiornato: -{cost:.2f} cash, +{position['shares']} {trade['ticker']}")
+    for w in warnings:
+        print(f"[warning] {w}", file=sys.stderr)
     return 0
 
 
 def cmd_close(args: argparse.Namespace) -> int:
     try:
-        trade = close_trade(
+        trade, removed, warnings = sync_close_trade(
             ticker=args.ticker,
             exit_price=args.exit_price,
             exit_date=args.exit_date,
@@ -198,6 +206,11 @@ def cmd_close(args: argparse.Namespace) -> int:
         f"{trade['entry_price']:.2f} → {trade['exit_price']:.2f} "
         f"({trade['pnl_pct']:+.2f}%, {trade['duration_days']} gg)"
     )
+    if removed is not None:
+        proceeds = removed["shares"] * trade["exit_price"]
+        print(f"Portfolio aggiornato: +{proceeds:.2f} cash, -{removed['shares']} {trade['ticker']}")
+    for w in warnings:
+        print(f"[warning] {w}", file=sys.stderr)
     print(
         "\nPer la post-trade analysis, incolla questo trade nel prompt Claude 3D "
         "(post-trade review)."
@@ -225,6 +238,7 @@ def main() -> int:
     p_add.add_argument("direction", choices=["long", "short"])
     p_add.add_argument("--entry-price", type=float, required=True)
     p_add.add_argument("--entry-date", required=True, help="YYYY-MM-DD")
+    p_add.add_argument("--shares", type=int, required=True, help="Numero di azioni")
     p_add.add_argument("--stop", type=float, required=True, help="Stop loss")
     p_add.add_argument("--target", type=float, default=None)
     p_add.add_argument("--score-claude", type=int, default=None)

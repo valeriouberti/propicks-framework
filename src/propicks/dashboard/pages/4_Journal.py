@@ -18,7 +18,9 @@ from propicks.dashboard._shared import (
     page_header,
 )
 from propicks.domain.verdict import max_drawdown, verdict
-from propicks.io.journal_store import add_trade, close_trade, find_open
+from propicks.io.journal_store import find_open
+from propicks.io.trade_sync import close_trade as sync_close_trade
+from propicks.io.trade_sync import open_trade as sync_open_trade
 
 st.set_page_config(page_title="Journal · Propicks", layout="wide")
 page_header(
@@ -194,11 +196,12 @@ STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "
 
 with tab_add:
     with st.form("add_trade_form", border=True):
-        cols = st.columns([2, 1, 1, 1])
+        cols = st.columns([2, 1, 1, 1, 1])
         t_ticker = cols[0].text_input("Ticker", key="at_ticker")
         t_dir = cols[1].selectbox("Direction", ("long", "short"), key="at_dir")
         t_entry = cols[2].number_input("Entry price", min_value=0.01, step=0.01, format="%.2f", key="at_entry")
-        t_stop = cols[3].number_input("Stop", min_value=0.01, step=0.01, format="%.2f", key="at_stop")
+        t_shares = cols[3].number_input("Shares", min_value=1, step=1, value=1, key="at_shares")
+        t_stop = cols[4].number_input("Stop", min_value=0.01, step=0.01, format="%.2f", key="at_stop")
 
         cols2 = st.columns([1, 1, 1, 1])
         t_date = cols2[0].date_input("Entry date", value=date.today(), key="at_date")
@@ -217,11 +220,12 @@ with tab_add:
             st.warning("Ticker obbligatorio.")
         else:
             try:
-                tr = add_trade(
+                tr, pos, warnings = sync_open_trade(
                     ticker=t_ticker.strip(),
                     direction=t_dir,
                     entry_price=t_entry,
                     entry_date=t_date.isoformat(),
+                    shares=int(t_shares),
                     stop_loss=t_stop,
                     target=t_target or None,
                     score_claude=t_sc,
@@ -232,8 +236,16 @@ with tab_add:
                 )
                 st.success(
                     f"Trade #{tr['id']} aperto: {tr['ticker']} {tr['direction']} "
-                    f"@ {tr['entry_price']:.2f} (stop {tr['stop_loss']:.2f})"
+                    f"{int(t_shares)} @ {tr['entry_price']:.2f} (stop {tr['stop_loss']:.2f})"
                 )
+                if pos is not None:
+                    cost = pos["shares"] * pos["entry_price"]
+                    st.info(
+                        f"Portfolio aggiornato: -{cost:.2f} cash, "
+                        f"+{pos['shares']} {tr['ticker']}"
+                    )
+                for w in warnings:
+                    st.warning(w)
             except ValueError as err:
                 st.error(str(err))
 
@@ -278,7 +290,7 @@ with tab_close:
 
         if submitted:
             try:
-                tr = close_trade(
+                tr, removed, warnings = sync_close_trade(
                     ticker=c_ticker,
                     exit_price=c_price,
                     exit_date=c_date.isoformat(),
@@ -293,5 +305,13 @@ with tab_close:
                     f"{tr['pnl_pct']:+.2f}%</span> in {tr['duration_days']} gg",
                     unsafe_allow_html=True,
                 )
+                if removed is not None:
+                    proceeds = removed["shares"] * tr["exit_price"]
+                    st.info(
+                        f"Portfolio aggiornato: +{proceeds:.2f} cash, "
+                        f"-{removed['shares']} {tr['ticker']}"
+                    )
+                for w in warnings:
+                    st.warning(w)
             except ValueError as err:
                 st.error(str(err))

@@ -37,8 +37,9 @@ propicks-ai-framework/
 │   │   └── metrics.py         # win_rate/PF/CAGR/Sharpe/Sortino/DD + aggregate_metrics
 │   ├── io/                    # Persistenza JSON (atomic writes)
 │   │   ├── atomic.py
-│   │   ├── portfolio_store.py # load/save + add/remove/update_position
-│   │   ├── journal_store.py   # load + add_trade/close_trade (append-only)
+│   │   ├── portfolio_store.py # load/save + add/remove/update/close_position
+│   │   ├── journal_store.py   # load + add_trade/close_trade (append-only, shares field)
+│   │   ├── trade_sync.py      # Coordinator journal+portfolio (open_trade/close_trade)
 │   │   └── watchlist_store.py # load/save + add/remove/update (dedup per ticker)
 │   ├── market/
 │   │   └── yfinance_client.py # Unico modulo che parla con yfinance
@@ -791,6 +792,37 @@ in 2 mesi, probabilmente la tesi era sbagliata o il regime è cambiato.
 **Schema legacy:** `load_watchlist` migra automaticamente
 `{"tickers": []}` e `{"tickers": ["AAPL", "MSFT"]}` (lista di stringhe)
 a dict con campi default. Nessuna azione manuale richiesta.
+
+## Sync journal ↔ portfolio
+
+I due store restano indipendenti (separation of concerns: journal è l'append-log
+immutabile con tutte le meta di analisi, portfolio è lo stato corrente con cash
+e shares), ma `propicks-journal add`/`close` e le corrispondenti dashboard form
+passano dal **coordinator `io/trade_sync.py`** che scrive in entrambi.
+
+**Schema journal esteso:** campo `shares: int | None`. Obbligatorio via CLI
+(`--shares N`) e dashboard (numeric input), `None` sui record legacy che
+non vengono migrati (nessuna sync post-hoc).
+
+**Policy di robustezza** (nessun rollback magico):
+
+- **Apertura** — `trade_sync.open_trade`: journal scritto per primo. Se
+  `add_position` fallisce (cash insufficiente, size > 15%, stop > 8%, posizione
+  già presente), il journal resta scritto con `warning` informativo. Il trade
+  reale *è* aperto sul broker — il record deve esistere a prescindere da cosa
+  dice il tracker. Correggi manualmente con `propicks-portfolio add`.
+- **Chiusura** — `trade_sync.close_trade`: journal exit scritto per primo. Se
+  la posizione non è nel portfolio (mai sincronizzata o già rimossa), il journal
+  viene comunque chiuso. P&L vive nel journal, non nel portfolio.
+- **Idempotenza** — se apri un trade e il portfolio ha già quel ticker (creato
+  via `propicks-portfolio add` prima), il journal viene scritto ma il portfolio
+  non duplicato.
+
+**Cash accounting fix:** `portfolio_store.close_position(exit_price)` rimborsa
+`shares × exit_price` (proventi reali dalla vendita). La vecchia
+`remove_position` rimborsa `shares × entry_price` (undo di add_position) e
+serve solo per correggere errori di data entry. Usare `close_position` quando
+chiudi un trade reale con P&L — il coordinator lo fa già automaticamente.
 
 ## Note per Claude Code
 

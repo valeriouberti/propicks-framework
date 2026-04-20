@@ -73,6 +73,7 @@ def add_trade(
     strategy: Optional[str],
     catalyst: Optional[str],
     notes: Optional[str] = None,
+    shares: Optional[int] = None,
 ) -> dict:
     trades = load_journal()
     ticker = ticker.upper()
@@ -83,6 +84,8 @@ def add_trade(
         raise ValueError("Per un long, stop_loss deve essere < entry_price.")
     if direction == "short" and stop_loss <= entry_price:
         raise ValueError("Per uno short, stop_loss deve essere > entry_price.")
+    if shares is not None and shares <= 0:
+        raise ValueError(f"shares deve essere > 0 (ricevuto {shares}).")
     validate_scores(score_claude, score_tech)
 
     trade = {
@@ -91,6 +94,7 @@ def add_trade(
         "direction": direction,
         "entry_price": round(entry_price, 2),
         "entry_date": validate_date(entry_date),
+        "shares": int(shares) if shares is not None else None,
         "stop_loss": round(stop_loss, 2),
         "target": round(target, 2) if target is not None else None,
         "score_claude": score_claude,
