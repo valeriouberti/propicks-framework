@@ -15,6 +15,17 @@ services:
     volumes:
       - ./data:/app/data
       - ./reports:/app/reports
+      - ./corp-ca-bundle.pem:/etc/ssl/certs/corp-ca-bundle.pem:ro
     env_file:
       - .env
+    environment:
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
+      - http_proxy=${http_proxy:-}
+      - https_proxy=${https_proxy:-}
+      - no_proxy=${no_proxy:-localhost,127.0.0.1}
+      - SSL_CERT_FILE=/etc/ssl/certs/corp-ca-bundle.pem
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/corp-ca-bundle.pem
+      - CURL_CA_BUNDLE=/etc/ssl/certs/corp-ca-bundle.pem
     restart: unless-stopped
