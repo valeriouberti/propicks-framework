@@ -516,6 +516,22 @@ AI_WEB_SEARCH_ENABLED: bool = os.environ.get("PROPICKS_AI_WEB_SEARCH", "1").lowe
 )
 AI_WEB_SEARCH_MAX_USES: int = int(os.environ.get("PROPICKS_AI_WEB_SEARCH_MAX_USES", "5"))
 
+# Budget cap giornaliero — impedisce che un loop accidentale o un run batch
+# troppo ampio bruci token senza limite. Il contatore vive in
+# ``data/ai_cache/usage_YYYY-MM-DD.json`` e si resetta automaticamente al
+# cambio di giorno (nuovo file). Cache hit NON contano verso il budget.
+# Override via env per sessioni ad-hoc: ``PROPICKS_AI_MAX_CALLS_PER_DAY=200``.
+AI_MAX_CALLS_PER_DAY: int = int(os.environ.get("PROPICKS_AI_MAX_CALLS_PER_DAY", "50"))
+AI_MAX_COST_USD_PER_DAY: float = float(
+    os.environ.get("PROPICKS_AI_MAX_COST_USD_PER_DAY", "5.0")
+)
+# Costo stimato per chiamata (input + output + web_search medio). Conservative:
+# prompt caching abbatte l'input, ma web_search è $0.01/ricerca e Opus ha output
+# caro. $0.10 = upper bound realistico per validate stock con ~5 web searches.
+AI_EST_COST_PER_CALL_USD: float = float(
+    os.environ.get("PROPICKS_AI_EST_COST_PER_CALL_USD", "0.10")
+)
+
 os.makedirs(AI_CACHE_DIR, exist_ok=True)
 
 

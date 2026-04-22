@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import statistics
 import sys
-from typing import Optional
 
 from tabulate import tabulate
 
@@ -32,8 +31,8 @@ from propicks.io.trade_sync import open_trade as sync_open_trade
 
 
 def list_trades(
-    filter_status: Optional[str] = None,
-    filter_strategy: Optional[str] = None,
+    filter_status: str | None = None,
+    filter_strategy: str | None = None,
 ) -> None:
     trades = load_journal()
     if filter_status:
@@ -68,7 +67,7 @@ def list_trades(
     ))
 
 
-def compute_stats(filter_strategy: Optional[str] = None) -> None:
+def compute_stats(filter_strategy: str | None = None) -> None:
     trades = load_journal()
     closed = [t for t in trades if t.get("status") == "closed"]
     if filter_strategy:

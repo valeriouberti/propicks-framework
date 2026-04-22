@@ -5,6 +5,20 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ai_cache_dir(tmp_path_factory, monkeypatch):
+    """Redirige ``config.AI_CACHE_DIR`` su una tmp per test.
+
+    Impedisce che qualunque test scriva accidentalmente nel vero
+    ``data/ai_cache/`` (cache verdict reali, usage counter budget).
+    I test che già patchano ``thesis_validator.AI_CACHE_DIR`` continuano
+    a funzionare: quella è la variabile locale del modulo, questa è la
+    source of truth del config — coesistono.
+    """
+    cache_dir = tmp_path_factory.mktemp("ai_cache")
+    monkeypatch.setattr("propicks.config.AI_CACHE_DIR", str(cache_dir))
+
+
 @pytest.fixture
 def sample_portfolio() -> dict:
     return {

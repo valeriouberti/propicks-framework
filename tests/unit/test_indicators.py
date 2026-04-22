@@ -78,13 +78,13 @@ def test_adx_choppy_range_low_value():
 def test_macd_bull_cross_when_trend_up():
     # Prezzo in salita → EMA fast > EMA slow → MACD line > 0
     close = pd.Series(np.linspace(100, 150, 80))
-    macd_line, signal_line, hist = compute_macd(close)
+    macd_line, signal_line, _hist = compute_macd(close)
     assert macd_line.iloc[-1] > 0
     assert macd_line.iloc[-1] > signal_line.iloc[-1]
 
 
 def test_macd_bear_cross_when_trend_down():
     close = pd.Series(np.linspace(150, 100, 80))
-    macd_line, signal_line, hist = compute_macd(close)
+    macd_line, signal_line, _hist = compute_macd(close)
     assert macd_line.iloc[-1] < 0
     assert macd_line.iloc[-1] < signal_line.iloc[-1]

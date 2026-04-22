@@ -15,7 +15,6 @@ from propicks.dashboard._shared import (
     page_header,
     regime_badge,
     render_indicator_legend,
-    score_badge,
 )
 
 st.set_page_config(page_title="Scanner · Propicks", layout="wide")
@@ -149,7 +148,7 @@ for r in results:
         scores = r.get("scores", {})
         st.markdown("**Sub-score**")
         sub_cols = st.columns(len(scores))
-        for col, (k, v) in zip(sub_cols, scores.items()):
+        for col, (k, v) in zip(sub_cols, scores.items(), strict=True):
             col.metric(k, f"{v:.0f}", help=INDICATOR_HELP_STOCK.get(k))
 
         rs = r.get("rs_vs_sector")

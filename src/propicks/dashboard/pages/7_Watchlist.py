@@ -144,7 +144,7 @@ with tab_attiva:
         col_rm, col_upd = st.columns(2)
         with col_rm:
             to_remove = st.selectbox(
-                "Rimuovi ticker", options=[""] + sorted(tickers.keys()), key="wl_remove"
+                "Rimuovi ticker", options=["", *sorted(tickers.keys())], key="wl_remove"
             )
             if st.button("Rimuovi", type="secondary", disabled=not to_remove):
                 try:
@@ -155,7 +155,7 @@ with tab_attiva:
                     st.error(str(exc))
         with col_upd:
             to_update = st.selectbox(
-                "Aggiorna target di", options=[""] + sorted(tickers.keys()), key="wl_update"
+                "Aggiorna target di", options=["", *sorted(tickers.keys())], key="wl_update"
             )
             new_target = st.number_input(
                 "Nuovo target", min_value=0.0, value=0.0, step=0.01, key="wl_new_target"

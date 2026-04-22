@@ -157,7 +157,7 @@ cols[3].metric(
 )
 
 sub_cols = st.columns(4)
-for col, (k, v) in zip(sub_cols, top.get("scores", {}).items()):
+for col, (k, v) in zip(sub_cols, top.get("scores", {}).items(), strict=True):
     col.metric(k, f"{v:.0f}", help=INDICATOR_HELP_ETF.get(k))
 
 # ---------------------------------------------------------------------------

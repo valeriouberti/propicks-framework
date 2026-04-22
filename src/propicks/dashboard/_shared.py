@@ -12,8 +12,6 @@ dallo store dopo la mutazione.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import streamlit as st
 
 from propicks.config import CAPITAL, MAX_POSITIONS
@@ -23,7 +21,7 @@ from propicks.config import CAPITAL, MAX_POSITIONS
 # Cached readers
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_analyze(ticker: str, strategy: Optional[str]) -> Optional[dict]:
+def cached_analyze(ticker: str, strategy: str | None) -> dict | None:
     """Scan tecnico singolo ticker. TTL 5min: i prezzi intraday si muovono."""
     from propicks.domain.scoring import analyze_ticker
     return analyze_ticker(ticker, strategy=strategy)
@@ -92,19 +90,19 @@ def load_journal() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Formatters
 # ---------------------------------------------------------------------------
-def fmt_pct(val: Optional[float], *, decimals: int = 2, none: str = "—") -> str:
+def fmt_pct(val: float | None, *, decimals: int = 2, none: str = "—") -> str:
     if val is None:
         return none
     return f"{val * 100:.{decimals}f}%"
 
 
-def fmt_eur(val: Optional[float], *, decimals: int = 2, none: str = "—") -> str:
+def fmt_eur(val: float | None, *, decimals: int = 2, none: str = "—") -> str:
     if val is None:
         return none
     return f"€ {val:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def fmt_usd(val: Optional[float], *, decimals: int = 2, none: str = "—") -> str:
+def fmt_usd(val: float | None, *, decimals: int = 2, none: str = "—") -> str:
     if val is None:
         return none
     return f"$ {val:,.{decimals}f}"
@@ -122,7 +120,7 @@ REGIME_COLORS = {
 }
 
 
-def regime_badge(regime: Optional[dict]) -> str:
+def regime_badge(regime: dict | None) -> str:
     """Ritorna HTML per un badge colorato del regime corrente."""
     if regime is None:
         return (
@@ -168,10 +166,10 @@ def page_header(title: str, subtitle: str = "") -> None:
     st.divider()
 
 
-def kpi_row(items: list[tuple[str, str, Optional[str]]]) -> None:
+def kpi_row(items: list[tuple[str, str, str | None]]) -> None:
     """Render a row of metrics. Items: (label, value, delta_or_None)."""
     cols = st.columns(len(items))
-    for col, (label, value, delta) in zip(cols, items):
+    for col, (label, value, delta) in zip(cols, items, strict=True):
         col.metric(label, value, delta)
 
 

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 import pandas as pd
 
 from propicks.market.yfinance_client import download_benchmark
 
 
-def get_benchmark_performance(ticker: str, days: int) -> Optional[float]:
+def get_benchmark_performance(ticker: str, days: int) -> float | None:
     """Performance % negli ultimi ``days`` giorni; None se dati insufficienti."""
     close = download_benchmark(ticker, days)
     if close is None or close.empty:

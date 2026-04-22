@@ -36,7 +36,6 @@ from propicks.domain.indicators import (
     compute_rsi,
 )
 
-
 _BUCKETS = {
     5: "STRONG_BULL",
     4: "BULL",

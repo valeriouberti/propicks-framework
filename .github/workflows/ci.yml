@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,dashboard]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy) — core layers only
+        # dashboard/, cli/, backtest/ hanno noto tech-debt di tipizzazione.
+        # Gli altri layer toccano soldi o rete: qui mypy è obbligatorio.
+        run: mypy src/propicks/domain src/propicks/io src/propicks/ai src/propicks/market src/propicks/reports
+
+      - name: Run tests
+        run: pytest --cov=propicks --cov-report=term-missing

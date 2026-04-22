@@ -23,7 +23,7 @@ di drawdown — coerente con il gate regime già usato in ``validate_thesis``.
 from __future__ import annotations
 
 import sys
-from typing import Literal, Optional
+from typing import Literal
 
 import pandas as pd
 
@@ -46,7 +46,6 @@ from propicks.config import (
 from propicks.domain.etf_universe import (
     favored_sectors_for_regime,
     get_etf_info,
-    get_sector_key,
     is_favored,
     list_universe,
 )
@@ -58,7 +57,6 @@ from propicks.market.yfinance_client import (
     download_history,
     download_weekly_history,
 )
-
 
 Region = Literal["US", "EU", "WORLD", "ALL"]
 
@@ -158,7 +156,7 @@ def score_rs(
     }
 
 
-def score_regime_fit(sector_key: Optional[str], regime_code: Optional[int]) -> float:
+def score_regime_fit(sector_key: str | None, regime_code: int | None) -> float:
     """Fit del settore col regime weekly corrente (0-100).
 
     Favored in regime corrente                  → 100
@@ -180,7 +178,7 @@ def score_regime_fit(sector_key: Optional[str], regime_code: Optional[int]) -> f
     return 20.0
 
 
-def score_abs_momentum(perf: Optional[float]) -> float:
+def score_abs_momentum(perf: float | None) -> float:
     """Momentum assoluto (perf 3M) mappato su 0-100.
 
     +15%+    → 100  (trend acceso)
@@ -254,7 +252,7 @@ def score_etf_trend(close_weekly: pd.Series, ema_span: int = REGIME_WEEKLY_EMA_S
 # ---------------------------------------------------------------------------
 # Regime hard-gate cap
 # ---------------------------------------------------------------------------
-def apply_regime_cap(composite: float, sector_key: str, regime_code: Optional[int]) -> float:
+def apply_regime_cap(composite: float, sector_key: str, regime_code: int | None) -> float:
     """Applica il cap superiore da regime hard-gate.
 
     Non-favored in STRONG_BEAR → 0  (no long ciclicali in crisi)
@@ -293,10 +291,10 @@ def classify_etf(score: float) -> str:
 # ---------------------------------------------------------------------------
 def analyze_etf(
     ticker: str,
-    benchmark_weekly: Optional[pd.Series] = None,
-    regime_code: Optional[int] = None,
-    regime: Optional[dict] = None,
-) -> Optional[dict]:
+    benchmark_weekly: pd.Series | None = None,
+    regime_code: int | None = None,
+    regime: dict | None = None,
+) -> dict | None:
     """Analizza un singolo ETF settoriale.
 
     ``benchmark_weekly`` e ``regime_code`` sono iniettabili per permettere
@@ -394,8 +392,8 @@ def analyze_etf(
 
 def rank_universe(
     region: Region = "US",
-    regime_code: Optional[int] = None,
-    benchmark_weekly: Optional[pd.Series] = None,
+    regime_code: int | None = None,
+    benchmark_weekly: pd.Series | None = None,
 ) -> list[dict]:
     """Scarica e scora l'intero universo, ritorna lista ordinata per score.
 
@@ -412,7 +410,7 @@ def rank_universe(
     if benchmark_weekly is None:
         benchmark_weekly = download_benchmark_weekly(benchmark_ticker)
 
-    regime: Optional[dict] = None
+    regime: dict | None = None
     if regime_code is None:
         # Regime sempre su ^GSPC: la tabella REGIME_FAVORED_SECTORS è US-calibrata
         # (correlazione S&P/MSCI World ≈ 0.95 giustifica l'approssimazione).

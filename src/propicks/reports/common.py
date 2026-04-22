@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from propicks.config import DATE_FMT
 
 
-def fmt_pct(x: Optional[float]) -> str:
+def fmt_pct(x: float | None) -> str:
     return f"{x:+.2f}%" if x is not None else "N/A"
 
 
-def parse_date(s: Optional[str]) -> Optional[datetime]:
+def parse_date(s: str | None) -> datetime | None:
     if not s:
         return None
     try:

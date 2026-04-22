@@ -14,8 +14,8 @@ import os
 import sys
 import time
 from datetime import date
-from typing import Optional
 
+from propicks.ai.budget import AIBudgetExceeded, check_budget, record_call
 from propicks.ai.claude_client import AIValidationError, ThesisVerdict, call_validation
 from propicks.ai.prompts import render_user_prompt
 from propicks.config import (
@@ -23,7 +23,6 @@ from propicks.config import (
     AI_CACHE_TTL_HOURS,
     AI_MIN_SCORE_FOR_VALIDATION,
 )
-
 
 _CACHE_VERSION = "v4"
 
@@ -80,7 +79,7 @@ def _enforce_reward_risk(analysis: dict, payload: dict) -> None:
         payload["verdict"] = "CAUTION"
 
 
-def _load_cached(ticker: str, day: str) -> Optional[dict]:
+def _load_cached(ticker: str, day: str) -> dict | None:
     path = _cache_path(ticker, day)
     if not os.path.exists(path):
         return None
@@ -107,7 +106,7 @@ def validate_thesis(
     *,
     force: bool = False,
     gate: bool = True,
-) -> Optional[dict]:
+) -> dict | None:
     """Valida qualitativamente la tesi con Claude.
 
     Args:
@@ -142,6 +141,12 @@ def validate_thesis(
             cached["_cache_hit"] = True
             return cached
 
+    try:
+        check_budget()
+    except AIBudgetExceeded as err:
+        print(f"[ai] {ticker} skipped: {err}", file=sys.stderr)
+        return None
+
     user_prompt = render_user_prompt(analysis, as_of_date=day)
 
     try:
@@ -150,6 +155,7 @@ def validate_thesis(
         print(f"[ai] validation failed for {ticker}: {err}", file=sys.stderr)
         return None
 
+    record_call()
     payload = verdict.model_dump()
     _enforce_reward_risk(analysis, payload)
     _save_cache(ticker, day, payload)

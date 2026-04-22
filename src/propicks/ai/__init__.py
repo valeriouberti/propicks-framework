@@ -3,4 +3,4 @@
 from propicks.ai.etf_validator import validate_rotation
 from propicks.ai.thesis_validator import validate_thesis
 
-__all__ = ["validate_thesis", "validate_rotation"]
+__all__ = ["validate_rotation", "validate_thesis"]

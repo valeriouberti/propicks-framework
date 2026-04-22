@@ -23,8 +23,6 @@ Policy di robustezza (deliberate, documentate):
 
 from __future__ import annotations
 
-from typing import Optional
-
 from propicks.io import journal_store
 from propicks.io.portfolio_store import (
     add_position,
@@ -41,13 +39,13 @@ def open_trade(
     entry_date: str,
     shares: int,
     stop_loss: float,
-    target: Optional[float] = None,
-    score_claude: Optional[int] = None,
-    score_tech: Optional[int] = None,
-    strategy: Optional[str] = None,
-    catalyst: Optional[str] = None,
-    notes: Optional[str] = None,
-) -> tuple[dict, Optional[dict], list[str]]:
+    target: float | None = None,
+    score_claude: int | None = None,
+    score_tech: int | None = None,
+    strategy: str | None = None,
+    catalyst: str | None = None,
+    notes: str | None = None,
+) -> tuple[dict, dict | None, list[str]]:
     """Apre un trade: scrive journal e sincronizza portfolio.
 
     Returns:
@@ -78,7 +76,7 @@ def open_trade(
     )
 
     # 2. Portfolio sync — può fallire, journal resta scritto
-    position: Optional[dict] = None
+    position: dict | None = None
     portfolio = load_portfolio()
     if ticker_up in portfolio.get("positions", {}):
         warnings.append(
@@ -111,10 +109,10 @@ def close_trade(
     *,
     ticker: str,
     exit_price: float,
-    exit_date: Optional[str] = None,
-    reason: Optional[str] = None,
-    notes: Optional[str] = None,
-) -> tuple[dict, Optional[dict], list[str]]:
+    exit_date: str | None = None,
+    reason: str | None = None,
+    notes: str | None = None,
+) -> tuple[dict, dict | None, list[str]]:
     """Chiude un trade: scrive exit su journal e rimuove dal portfolio.
 
     Returns:
@@ -136,7 +134,7 @@ def close_trade(
     )
 
     # 2. Portfolio close con cash accounting corretto (proceeds, non cost)
-    removed: Optional[dict] = None
+    removed: dict | None = None
     portfolio = load_portfolio()
     if ticker_up not in portfolio.get("positions", {}):
         warnings.append(

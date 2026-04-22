@@ -10,7 +10,6 @@ ritorna un dict pronto per la CLI o la API.
 from __future__ import annotations
 
 import sys
-from typing import Optional
 
 import pandas as pd
 
@@ -183,7 +182,7 @@ def classify(score: float) -> str:
 # ---------------------------------------------------------------------------
 # Orchestrazione
 # ---------------------------------------------------------------------------
-def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict]:
+def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
     """Analizza un ticker e ritorna il dict completo di score.
 
     In caso di errore (ticker non trovato, timeout, dati vuoti) stampa un
@@ -196,15 +195,15 @@ def analyze_ticker(ticker: str, strategy: Optional[str] = None) -> Optional[dict
         print(f"[errore] {err}", file=sys.stderr)
         return None
 
-    regime: Optional[dict] = None
-    weekly: Optional[pd.DataFrame] = None
+    regime: dict | None = None
+    weekly: pd.DataFrame | None = None
     try:
         weekly = download_weekly_history(ticker)
         regime = classify_regime(weekly)
     except DataUnavailable as err:
         print(f"[warning] regime weekly non disponibile per {ticker}: {err}", file=sys.stderr)
 
-    rs_vs_sector: Optional[dict] = None
+    rs_vs_sector: dict | None = None
     if weekly is not None and is_us_ticker(ticker):
         yf_sector = get_ticker_sector(ticker)
         peer = peer_etf_for(yf_sector)

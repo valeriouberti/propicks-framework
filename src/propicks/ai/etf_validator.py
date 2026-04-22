@@ -24,8 +24,8 @@ import os
 import sys
 import time
 from datetime import date
-from typing import Optional
 
+from propicks.ai.budget import AIBudgetExceeded, check_budget, record_call
 from propicks.ai.claude_client import (
     AIValidationError,
     ETFRotationVerdict,
@@ -34,17 +34,16 @@ from propicks.ai.claude_client import (
 from propicks.ai.etf_prompts import render_etf_user_prompt
 from propicks.config import AI_CACHE_DIR, get_etf_benchmark
 
-
 _CACHE_VERSION = "etf-v1"
 _CACHE_TTL_HOURS = 48
 
 
-def _cache_path(region: str, regime_code: Optional[int], day: str) -> str:
+def _cache_path(region: str, regime_code: int | None, day: str) -> str:
     rc = regime_code if regime_code is not None else "NA"
     return os.path.join(AI_CACHE_DIR, f"rotation_{region}_{rc}_{_CACHE_VERSION}_{day}.json")
 
 
-def _load_cached(region: str, regime_code: Optional[int], day: str) -> Optional[dict]:
+def _load_cached(region: str, regime_code: int | None, day: str) -> dict | None:
     path = _cache_path(region, regime_code, day)
     if not os.path.exists(path):
         return None
@@ -58,7 +57,7 @@ def _load_cached(region: str, regime_code: Optional[int], day: str) -> Optional[
         return None
 
 
-def _save_cache(region: str, regime_code: Optional[int], day: str, payload: dict) -> None:
+def _save_cache(region: str, regime_code: int | None, day: str, payload: dict) -> None:
     path = _cache_path(region, regime_code, day)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -73,7 +72,7 @@ def validate_rotation(
     region: str = "US",
     force: bool = False,
     skip_in_strong_bear: bool = True,
-) -> Optional[dict]:
+) -> dict | None:
     """Valida qualitativamente la rotazione proposta con Claude.
 
     Args:
@@ -109,6 +108,12 @@ def validate_rotation(
             cached["_cache_hit"] = True
             return cached
 
+    try:
+        check_budget()
+    except AIBudgetExceeded as err:
+        print(f"[ai] ETF rotation skipped: {err}", file=sys.stderr)
+        return None
+
     user_prompt = render_etf_user_prompt(
         ranked=ranked,
         allocation=allocation,
@@ -123,6 +128,7 @@ def validate_rotation(
         print(f"[ai] ETF rotation validation failed: {err}", file=sys.stderr)
         return None
 
+    record_call()
     payload = verdict.model_dump()
     _save_cache(region, regime_code, day, payload)
     payload["_cache_hit"] = False

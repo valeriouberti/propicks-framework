@@ -27,10 +27,10 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Optional
 
 from propicks.config import DATE_FMT, WATCHLIST_FILE
 from propicks.io.atomic import atomic_write_json
+from propicks.io.migrations import migrate, stamp_version
 
 
 def _default_watchlist() -> dict:
@@ -51,7 +51,7 @@ def load_watchlist() -> dict:
         raise SystemExit(
             f"[fatal] watchlist.json corrotto: {exc}. "
             f"Ripristina da backup o correggi manualmente."
-        )
+        ) from exc
 
     # Migrazione schema legacy: {"tickers": []} o {"tickers": [str, ...]}
     if isinstance(data.get("tickers"), list):
@@ -75,11 +75,13 @@ def load_watchlist() -> dict:
 
     data.setdefault("tickers", {})
     data.setdefault("last_updated", None)
+    data = migrate(data, "watchlist")
     return data
 
 
 def save_watchlist(watchlist: dict) -> None:
     watchlist["last_updated"] = datetime.now().strftime(DATE_FMT)
+    stamp_version(watchlist, "watchlist")
     atomic_write_json(WATCHLIST_FILE, watchlist)
 
 
@@ -87,13 +89,13 @@ def add_to_watchlist(
     watchlist: dict,
     ticker: str,
     *,
-    target_entry: Optional[float] = None,
-    note: Optional[str] = None,
-    score_at_add: Optional[float] = None,
-    regime_at_add: Optional[str] = None,
-    classification_at_add: Optional[str] = None,
+    target_entry: float | None = None,
+    note: str | None = None,
+    score_at_add: float | None = None,
+    regime_at_add: str | None = None,
+    classification_at_add: str | None = None,
     source: str = "manual",
-    added_date: Optional[str] = None,
+    added_date: str | None = None,
 ) -> tuple[dict, bool]:
     """Aggiunge o aggiorna un ticker in watchlist.
 
@@ -150,8 +152,8 @@ def update_watchlist_entry(
     watchlist: dict,
     ticker: str,
     *,
-    target_entry: Optional[float] = None,
-    note: Optional[str] = None,
+    target_entry: float | None = None,
+    note: str | None = None,
 ) -> dict:
     ticker = ticker.upper()
     tickers = watchlist.get("tickers", {})

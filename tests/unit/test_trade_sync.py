@@ -25,7 +25,7 @@ def stores_tmp(tmp_path, monkeypatch):
 
 
 def test_open_trade_writes_both_stores(stores_tmp):
-    journal_file, portfolio_file = stores_tmp
+    _journal_file, portfolio_file = stores_tmp
     from propicks.io.trade_sync import open_trade
 
     trade, pos, warnings = open_trade(
@@ -167,7 +167,7 @@ def test_open_trade_portfolio_violation_keeps_journal(stores_tmp):
     # Size > 15% del capitale → violazione MAX_POSITION_SIZE_PCT
     huge_shares = int(CAPITAL * 0.5 / 150.0)
 
-    trade, pos, warnings = open_trade(
+    _trade, pos, warnings = open_trade(
         ticker="AAPL",
         direction="long",
         entry_price=150.0,

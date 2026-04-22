@@ -9,17 +9,19 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Optional
 
 from propicks.config import DATE_FMT, JOURNAL_FILE
 from propicks.domain.validation import validate_date, validate_scores
 from propicks.io.atomic import atomic_write_json
+from propicks.io.migrations import CURRENT_VERSIONS, migrate
 
 
 def load_journal() -> list[dict]:
     """Carica il journal. Supporta array puro e schema legacy {"trades": [...]}.
 
     Migra la chiave legacy ``pnl_abs`` (valore per-share) → ``pnl_per_share``.
+    Ritorna sempre ``list[dict]`` di trade: lo schema versioning vive nel
+    wrapper on-disk, non è esposto al resto del codice.
     """
     if not os.path.exists(JOURNAL_FILE):
         _save_journal([])
@@ -32,28 +34,38 @@ def load_journal() -> list[dict]:
         raise SystemExit(
             f"[fatal] journal.json corrotto: {exc}. "
             f"Ripristina da backup o correggi manualmente."
-        )
+        ) from exc
 
-    if isinstance(data, dict) and "trades" in data:
-        data = data["trades"]
-    if not isinstance(data, list):
+    # Legacy: file come array puro → wrappa in dict per passare dalla migration.
+    if isinstance(data, list):
+        data = {"trades": data}
+    if not isinstance(data, dict) or "trades" not in data:
         raise ValueError("Formato journal.json non valido.")
 
-    for t in data:
+    data = migrate(data, "journal")
+    trades = data["trades"]
+    if not isinstance(trades, list):
+        raise ValueError("Formato journal.json non valido: 'trades' non è una lista.")
+
+    for t in trades:
         if "pnl_abs" in t and "pnl_per_share" not in t:
             t["pnl_per_share"] = t.pop("pnl_abs")
-    return data
+    return trades
 
 
 def _save_journal(trades: list[dict]) -> None:
-    atomic_write_json(JOURNAL_FILE, trades)
+    payload = {
+        "schema_version": CURRENT_VERSIONS["journal"],
+        "trades": trades,
+    }
+    atomic_write_json(JOURNAL_FILE, payload)
 
 
 def _next_id(trades: list[dict]) -> int:
     return max((t.get("id", 0) for t in trades), default=0) + 1
 
 
-def find_open(trades: list[dict], ticker: str) -> Optional[dict]:
+def find_open(trades: list[dict], ticker: str) -> dict | None:
     ticker = ticker.upper()
     for t in trades:
         if t.get("ticker") == ticker and t.get("status") == "open":
@@ -67,13 +79,13 @@ def add_trade(
     entry_price: float,
     entry_date: str,
     stop_loss: float,
-    target: Optional[float],
-    score_claude: Optional[int],
-    score_tech: Optional[int],
-    strategy: Optional[str],
-    catalyst: Optional[str],
-    notes: Optional[str] = None,
-    shares: Optional[int] = None,
+    target: float | None,
+    score_claude: int | None,
+    score_tech: int | None,
+    strategy: str | None,
+    catalyst: str | None,
+    notes: str | None = None,
+    shares: int | None = None,
 ) -> dict:
     trades = load_journal()
     ticker = ticker.upper()
@@ -120,9 +132,9 @@ def add_trade(
 def close_trade(
     ticker: str,
     exit_price: float,
-    exit_date: Optional[str] = None,
-    reason: Optional[str] = None,
-    notes: Optional[str] = None,
+    exit_date: str | None = None,
+    reason: str | None = None,
+    notes: str | None = None,
 ) -> dict:
     trades = load_journal()
     trade = find_open(trades, ticker)

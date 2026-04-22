@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from propicks.config import DATE_FMT
 
 
-def validate_scores(score_claude: Optional[int], score_tech: Optional[int]) -> None:
+def validate_scores(score_claude: int | None, score_tech: int | None) -> None:
     """Controlla i range: Claude 1-10, Tech 0-100. None è valido."""
     if score_claude is not None and not (1 <= score_claude <= 10):
         raise ValueError(f"score_claude fuori range 1-10: {score_claude}")

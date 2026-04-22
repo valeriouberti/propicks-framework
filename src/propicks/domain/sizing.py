@@ -6,7 +6,7 @@ di risultato. L'I/O è responsabilità di io/portfolio_store.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from propicks.config import (
     ETF_MAX_POSITION_SIZE_PCT,
@@ -69,7 +69,7 @@ def portfolio_market_value(
     return cash + invested
 
 
-def _convictions_level(avg_score: float) -> Optional[tuple[str, float]]:
+def _convictions_level(avg_score: float) -> tuple[str, float] | None:
     if avg_score >= 80:
         return "ALTA", HIGH_CONVICTION_SIZE_PCT
     if avg_score >= 60:
@@ -82,7 +82,7 @@ def calculate_position_size(
     stop_price: float,
     score_claude: int = 7,
     score_tech: int = 70,
-    portfolio: Optional[dict] = None,
+    portfolio: dict | None = None,
     asset_type: AssetTypeLiteral = "STOCK",
 ) -> dict:
     """Calcola quante azioni comprare dati entry, stop e score.

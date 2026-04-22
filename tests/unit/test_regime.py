@@ -48,7 +48,6 @@ def test_regime_strong_bear_on_steady_downtrend():
 def test_regime_neutral_on_mixed_tape():
     # Trend rialzista che stalla: primi 2/3 in salita, ultimo terzo flat.
     # EMA fast si appiattisce, ADX cala, momentum diventa mixed → NEUTRAL.
-    n = 120
     rising = np.linspace(80, 130, 80)
     flat = np.linspace(130, 128, 40)
     close = pd.Series(np.concatenate([rising, flat]))

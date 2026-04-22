@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Optional
 
 from propicks.config import (
     CAPITAL,
@@ -25,6 +24,7 @@ from propicks.config import (
 from propicks.domain.sizing import portfolio_value
 from propicks.domain.validation import validate_scores
 from propicks.io.atomic import atomic_write_json
+from propicks.io.migrations import migrate, stamp_version
 
 
 def _default_portfolio() -> dict:
@@ -45,7 +45,7 @@ def load_portfolio() -> dict:
         raise SystemExit(
             f"[fatal] portfolio.json corrotto: {exc}. "
             f"Ripristina da backup o correggi manualmente."
-        )
+        ) from exc
 
     if isinstance(data.get("positions"), list):
         positions = {p["ticker"]: {k: v for k, v in p.items() if k != "ticker"}
@@ -57,11 +57,13 @@ def load_portfolio() -> dict:
     data.setdefault("positions", {})
     data.setdefault("cash", CAPITAL)
     data.setdefault("last_updated", None)
+    data = migrate(data, "portfolio")
     return data
 
 
 def save_portfolio(portfolio: dict) -> None:
     portfolio["last_updated"] = datetime.now().strftime(DATE_FMT)
+    stamp_version(portfolio, "portfolio")
     atomic_write_json(PORTFOLIO_FILE, portfolio)
 
 
@@ -93,12 +95,12 @@ def add_position(
     entry_price: float,
     shares: int,
     stop_loss: float,
-    target: Optional[float],
-    strategy: Optional[str],
-    score_claude: Optional[int],
-    score_tech: Optional[int],
-    catalyst: Optional[str],
-    entry_date: Optional[str] = None,
+    target: float | None,
+    strategy: str | None,
+    score_claude: int | None,
+    score_tech: int | None,
+    catalyst: str | None,
+    entry_date: str | None = None,
 ) -> dict:
     ticker = ticker.upper()
     positions = portfolio.setdefault("positions", {})
@@ -208,10 +210,10 @@ def close_position(portfolio: dict, ticker: str, exit_price: float) -> dict:
 def update_position(
     portfolio: dict,
     ticker: str,
-    stop_loss: Optional[float] = None,
-    target: Optional[float] = None,
-    highest_price: Optional[float] = None,
-    trailing_enabled: Optional[bool] = None,
+    stop_loss: float | None = None,
+    target: float | None = None,
+    highest_price: float | None = None,
+    trailing_enabled: bool | None = None,
 ) -> dict:
     ticker = ticker.upper()
     positions = portfolio.get("positions", {})
