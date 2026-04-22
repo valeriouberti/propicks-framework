@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import streamlit as st
 
-from propicks.config import CAPITAL, MAX_POSITIONS
+from propicks.config import (
+    MAX_LOSS_WEEKLY_PCT,
+    MAX_POSITIONS,
+    MIN_CASH_RESERVE_PCT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -173,16 +177,80 @@ def kpi_row(items: list[tuple[str, str, str | None]]) -> None:
         col.metric(label, value, delta)
 
 
+def _dot(level: str) -> str:
+    """Pallino colorato per status inline. ``ok``→verde, ``warn``→giallo, ``bad``→rosso."""
+    return {"ok": "🟢", "warn": "🟡", "bad": "🔴"}.get(level, "⚪")
+
+
+def _status_positions(n: int) -> str:
+    if n >= MAX_POSITIONS:
+        return "bad"
+    if n >= int(MAX_POSITIONS * 0.8):
+        return "warn"
+    return "ok"
+
+
+def _status_cash(cash_pct: float) -> str:
+    if cash_pct < MIN_CASH_RESERVE_PCT:
+        return "bad"
+    if cash_pct < MIN_CASH_RESERVE_PCT + 0.10:
+        return "warn"
+    return "ok"
+
+
+def _status_weekly_risk(risk_pct: float) -> str:
+    if risk_pct >= MAX_LOSS_WEEKLY_PCT:
+        return "bad"
+    if risk_pct >= MAX_LOSS_WEEKLY_PCT * 0.6:
+        return "warn"
+    return "ok"
+
+
 def invariants_note() -> None:
-    """Sidebar footer con invariants rapidi — promemoria visibile."""
+    """Sidebar con stato live + regole. I semafori leggono il portfolio corrente."""
+    from propicks.domain.sizing import portfolio_value
+    from propicks.io.portfolio_store import get_initial_capital
+
+    portfolio = load_portfolio()
+    positions = portfolio.get("positions", {})
+    cash = float(portfolio.get("cash") or 0)
+    total = portfolio_value(portfolio)
+    ref_capital = get_initial_capital(portfolio)
+
+    n_positions = len(positions)
+    cash_pct = cash / total if total else 1.0
+    # Rischio settimanale aggregato = Σ (entry-stop) × shares a cost-basis.
+    # Stima conservativa: se tutti gli stop saltano insieme.
+    risk_total = sum(
+        (float(p["entry_price"]) - float(p["stop_loss"])) * float(p.get("shares") or 0)
+        for p in positions.values()
+        if p.get("stop_loss") is not None
+    )
+    risk_pct = risk_total / total if total else 0.0
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Stato corrente**")
+    st.sidebar.markdown(
+        f"{_dot(_status_positions(n_positions))} Posizioni · "
+        f"**{n_positions}** / {MAX_POSITIONS}"
+    )
+    st.sidebar.markdown(
+        f"{_dot(_status_cash(cash_pct))} Cash · "
+        f"**{cash_pct * 100:.1f}%** (min {MIN_CASH_RESERVE_PCT * 100:.0f}%)"
+    )
+    st.sidebar.markdown(
+        f"{_dot(_status_weekly_risk(risk_pct))} Rischio settimanale · "
+        f"**{risk_pct * 100:.2f}%** (max {MAX_LOSS_WEEKLY_PCT * 100:.0f}%)"
+    )
+    st.sidebar.caption(f"Capitale rif.: € {ref_capital:,.0f}")
+
     st.sidebar.markdown("---")
     st.sidebar.caption(
-        f"**Invariants**  \n"
-        f"• Capitale riferimento: € {CAPITAL:,.0f}  \n"
+        "**Regole**  \n"
         f"• Max posizioni: {MAX_POSITIONS}  \n"
-        f"• Max size: 15% stock / 20% ETF  \n"
-        f"• Min cash: 20%  \n"
-        f"• Max loss week: 5% → stop"
+        "• Max size: 15% stock / 20% ETF  \n"
+        f"• Min cash: {MIN_CASH_RESERVE_PCT * 100:.0f}%  \n"
+        f"• Max loss week: {MAX_LOSS_WEEKLY_PCT * 100:.0f}% → stop"
     )
 
 

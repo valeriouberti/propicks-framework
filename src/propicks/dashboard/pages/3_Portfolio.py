@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from propicks.config import CAPITAL, MAX_LOSS_WEEKLY_PCT, MIN_CASH_RESERVE_PCT
+from propicks.config import MAX_LOSS_WEEKLY_PCT, MIN_CASH_RESERVE_PCT
 from propicks.dashboard._shared import (
     INDICATOR_HELP_PORTFOLIO,
     cached_current_atr,
@@ -48,7 +48,9 @@ from propicks.domain.trade_mgmt import (
 )
 from propicks.io.portfolio_store import (
     add_position,
+    get_initial_capital,
     remove_position,
+    set_initial_capital,
     update_position,
 )
 
@@ -64,12 +66,13 @@ portfolio = load_portfolio()
 positions = portfolio.get("positions", {})
 cash = float(portfolio.get("cash") or 0)
 total = portfolio_value(portfolio)
+ref_capital = get_initial_capital(portfolio)
 
 # ---------------------------------------------------------------------------
 # Header metrics
 # ---------------------------------------------------------------------------
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Capital riferimento", fmt_eur(CAPITAL))
+col1.metric("Capital riferimento", fmt_eur(ref_capital))
 col2.metric("Portfolio value", fmt_eur(total))
 col3.metric("Cash", fmt_eur(cash), fmt_pct(cash / total) if total else "—")
 col4.metric("Posizioni aperte", len(positions))
@@ -78,6 +81,47 @@ if cash < total * MIN_CASH_RESERVE_PCT:
     st.error(
         f"Cash sotto riserva minima {MIN_CASH_RESERVE_PCT * 100:.0f}% — blocca nuove entry."
     )
+
+with st.expander("Modifica capitale di riferimento", expanded=False):
+    st.caption(
+        "Il **capitale di riferimento** è il seed iniziale usato solo per display "
+        "(header + sidebar invariants). Non influisce sul sizing, che usa sempre "
+        "`cash + sum(shares × entry)`. Con **Reset cash** (consentito solo a "
+        "portfolio vuoto) puoi ri-allineare anche il cash disponibile — utile "
+        "se parti con un capitale diverso da € 10.000."
+    )
+    with st.form("capital_form", border=True):
+        new_cap = st.number_input(
+            "Capitale di riferimento (€)",
+            min_value=0.01,
+            value=float(ref_capital),
+            step=500.0,
+            format="%.2f",
+            key="cap_value",
+        )
+        reset_cash = st.checkbox(
+            "Reset anche del cash disponibile (solo a portfolio vuoto)",
+            value=False,
+            disabled=bool(positions),
+            key="cap_reset_cash",
+            help=(
+                "Azzera il cash al nuovo valore. Disabilitato se ci sono "
+                "posizioni aperte — chiudile prima del reset per non rompere "
+                "il cash accounting."
+            ),
+        )
+        cap_submit = st.form_submit_button("Applica", type="primary")
+
+    if cap_submit:
+        try:
+            set_initial_capital(portfolio, new_cap, reset_cash=reset_cash)
+            msg = f"Capitale aggiornato a {fmt_eur(new_cap)}"
+            if reset_cash:
+                msg += " (cash resettato)"
+            st.toast(msg, icon="✅")
+            st.rerun()
+        except ValueError as err:
+            st.error(str(err))
 
 st.divider()
 
@@ -302,11 +346,12 @@ with tab_mgmt:
                 pos = update_position(
                     portfolio, t_ticker, trailing_enabled=(t_action == "enable")
                 )
-                st.success(
-                    f"Trailing {'abilitato' if t_action == 'enable' else 'disabilitato'} "
-                    f"su {t_ticker} (stop attuale {pos['stop_loss']:.2f})."
+                verb = "abilitato" if t_action == "enable" else "disabilitato"
+                st.toast(
+                    f"Trailing {verb} su {t_ticker} (stop {pos['stop_loss']:.2f})",
+                    icon="✅",
                 )
-                st.caption("Ricarica la pagina per refresh.")
+                st.rerun()
             except ValueError as err:
                 st.error(str(err))
 
@@ -438,11 +483,16 @@ with tab_mgmt:
                         applied += 1
                     except ValueError as err:
                         errors.append(f"{ticker}: {err}")
-                st.success(f"Aggiornate {applied}/{len(suggestions)} posizioni.")
-                for e in errors:
-                    st.error(e)
-                # Invalidate cached suggestions after apply
                 st.session_state.pop("mgmt_suggestions", None)
+                if errors:
+                    for e in errors:
+                        st.error(e)
+                else:
+                    st.toast(
+                        f"Aggiornate {applied}/{len(suggestions)} posizioni",
+                        icon="✅",
+                    )
+                    st.rerun()
 
             time_stops = [t for t, _, s, _ in suggestions if s["time_stop_triggered"]]
             if time_stops:
@@ -555,12 +605,12 @@ with tab_add:
                     score_tech=a_tech,
                     catalyst=a_catalyst or None,
                 )
-                st.success(
-                    f"Apertura {a_ticker.upper()} salvata: "
-                    f"{pos['shares']} x {pos['entry_price']:.2f} = "
-                    f"{fmt_eur(pos['shares'] * pos['entry_price'])}"
+                st.toast(
+                    f"{a_ticker.upper()}: {pos['shares']} @ {pos['entry_price']:.2f} "
+                    f"= {fmt_eur(pos['shares'] * pos['entry_price'])}",
+                    icon="✅",
                 )
-                st.caption("Ricarica la pagina per vedere il portfolio aggiornato.")
+                st.rerun()
             except ValueError as err:
                 st.error(str(err))
 
@@ -602,9 +652,11 @@ with tab_update:
                     target=u_target if u_target > 0 else None,
                 )
                 target_str = f"{new['target']:.2f}" if new.get("target") else "—"
-                st.success(
-                    f"{u_ticker}: stop {new['stop_loss']:.2f} · target {target_str}"
+                st.toast(
+                    f"{u_ticker}: stop {new['stop_loss']:.2f} · target {target_str}",
+                    icon="✅",
                 )
+                st.rerun()
             except ValueError as err:
                 st.error(str(err))
 
@@ -636,8 +688,8 @@ with tab_remove:
         if submitted:
             try:
                 removed = remove_position(portfolio=portfolio, ticker=r_ticker)
-                st.success(
-                    f"{r_ticker} rimosso · refund cash {fmt_eur(removed['shares'] * removed['entry_price'])}"
-                )
+                refund = fmt_eur(removed["shares"] * removed["entry_price"])
+                st.toast(f"{r_ticker} rimosso · refund {refund}", icon="✅")
+                st.rerun()
             except ValueError as err:
                 st.error(str(err))

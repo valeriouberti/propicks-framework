@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-from propicks.config import MAX_POSITIONS, MIN_CASH_RESERVE_PCT
+from datetime import date
+
+from propicks.config import MAX_LOSS_WEEKLY_PCT, MAX_POSITIONS, MIN_CASH_RESERVE_PCT
 from propicks.dashboard._shared import (
     cached_current_prices,
     fmt_eur,
@@ -22,6 +24,12 @@ from propicks.dashboard._shared import (
     score_badge,
 )
 from propicks.domain.sizing import portfolio_value
+from propicks.domain.trade_mgmt import (
+    DEFAULT_FLAT_THRESHOLD_PCT,
+    DEFAULT_TIME_STOP_DAYS,
+    check_time_stop,
+)
+from propicks.io.watchlist_store import load_watchlist
 
 st.set_page_config(
     page_title="Propicks Dashboard",
@@ -77,6 +85,119 @@ if regime is not None:
         f"RSI(w) {regime.get('rsi_weekly', 0):.1f} · "
         f"entry long {'allowed' if regime.get('entry_allowed') else 'NOT allowed'}"
     )
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Next actions — cosa richiede attenzione oggi
+# ---------------------------------------------------------------------------
+st.subheader("Prossime azioni")
+
+_all_tickers: set[str] = set(positions.keys())
+_watchlist = load_watchlist()
+_wl_entries: dict = _watchlist.get("tickers", {}) if isinstance(_watchlist, dict) else {}
+_wl_with_target = {t: e for t, e in _wl_entries.items() if e.get("target_entry")}
+_all_tickers |= set(_wl_with_target.keys())
+
+_prices_all: dict[str, float] = {}
+if _all_tickers:
+    with st.spinner("Fetching prezzi per next actions…"):
+        _prices_all = cached_current_prices(tuple(sorted(_all_tickers)))
+
+# 1) Time-stop triggered
+_today = date.today()
+time_stop_hits: list[tuple[str, int, float]] = []
+for _t, _p in positions.items():
+    cur = _prices_all.get(_t)
+    if cur is None or not _p.get("entry_date"):
+        continue
+    if check_time_stop(
+        _p["entry_date"], float(_p["entry_price"]), _today, float(cur),
+        max_days_flat=DEFAULT_TIME_STOP_DAYS,
+        flat_threshold_pct=DEFAULT_FLAT_THRESHOLD_PCT,
+    ):
+        pnl_pct = (cur - _p["entry_price"]) / _p["entry_price"]
+        from datetime import datetime as _dt
+        days = (_today - _dt.strptime(_p["entry_date"], "%Y-%m-%d").date()).days
+        time_stop_hits.append((_t, days, pnl_pct))
+
+# 2) Stop distance critica (< 2% dal current price)
+stop_critical: list[tuple[str, float]] = []
+for _t, _p in positions.items():
+    cur = _prices_all.get(_t)
+    stop = _p.get("stop_loss")
+    if cur is None or stop is None or cur <= 0:
+        continue
+    dist = (cur - float(stop)) / cur
+    if 0 <= dist <= 0.02:
+        stop_critical.append((_t, dist))
+
+# 3) Watchlist READY price-trigger (entro 2% dal target_entry)
+READY_DIST_PCT = 0.02
+ready_hits: list[tuple[str, float, float]] = []
+for _t, _e in _wl_with_target.items():
+    cur = _prices_all.get(_t)
+    target = float(_e["target_entry"])
+    if cur is None or target <= 0:
+        continue
+    dist = (cur - target) / target
+    if abs(dist) <= READY_DIST_PCT:
+        ready_hits.append((_t, cur, dist))
+
+# 4) Invariants violati
+_cash_pct = cash / total if total else 1.0
+_risk_week = sum(
+    (float(p["entry_price"]) - float(p["stop_loss"])) * float(p.get("shares") or 0)
+    for p in positions.values()
+    if p.get("stop_loss") is not None
+)
+_risk_pct = _risk_week / total if total else 0.0
+invariant_alerts: list[str] = []
+if _cash_pct < MIN_CASH_RESERVE_PCT:
+    invariant_alerts.append(
+        f"Cash {_cash_pct * 100:.1f}% sotto riserva minima "
+        f"{MIN_CASH_RESERVE_PCT * 100:.0f}% — niente nuove entry"
+    )
+if _risk_pct >= MAX_LOSS_WEEKLY_PCT:
+    invariant_alerts.append(
+        f"Rischio settimanale aggregato {_risk_pct * 100:.2f}% oltre il "
+        f"limite {MAX_LOSS_WEEKLY_PCT * 100:.0f}% — valuta riduzione"
+    )
+
+_n_actions = (
+    len(time_stop_hits) + len(stop_critical) + len(ready_hits) + len(invariant_alerts)
+)
+if _n_actions == 0:
+    st.success("Nessuna azione pendente. Portfolio in linea con invariants e watchlist senza trigger.")
+else:
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        if time_stop_hits:
+            st.markdown("**⏱ Time-stop triggered**")
+            for _t, _days, _pnl in time_stop_hits:
+                st.markdown(f"- **{_t}** · flat da {_days} gg ({_pnl * 100:+.2f}%) → valuta chiusura")
+        if stop_critical:
+            st.markdown("**🔻 Stop a rischio (≤ 2%)**")
+            for _t, _d in sorted(stop_critical, key=lambda x: x[1]):
+                st.markdown(f"- **{_t}** · dist stop {_d * 100:+.2f}%")
+    with _c2:
+        if ready_hits:
+            st.markdown("**🎯 Watchlist entry pronte**")
+            for _t, _cur, _dist in sorted(ready_hits, key=lambda x: abs(x[2])):
+                st.markdown(
+                    f"- **{_t}** @ {_cur:.2f} · {_dist * 100:+.2f}% dal target → "
+                    "vai su **Scanner** per validazione completa"
+                )
+        if invariant_alerts:
+            st.markdown("**⚠️ Invariants**")
+            for _a in invariant_alerts:
+                st.markdown(f"- {_a}")
+    st.caption(
+        "**Time-stop** = posizione flat (|P&L| < 2%) da ≥ 30 gg · "
+        "**Stop a rischio** = current − stop ≤ 2% del prezzo · "
+        "**Watchlist pronte** = trigger di prezzo (±2% dal target). "
+        "Il READY completo con score+regime vive sulla pagina Watchlist."
+    )
+
 st.divider()
 
 # ---------------------------------------------------------------------------

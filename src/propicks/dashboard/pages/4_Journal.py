@@ -234,18 +234,23 @@ with tab_add:
                     catalyst=t_cat or None,
                     notes=t_notes or None,
                 )
-                st.success(
-                    f"Trade #{tr['id']} aperto: {tr['ticker']} {tr['direction']} "
-                    f"{int(t_shares)} @ {tr['entry_price']:.2f} (stop {tr['stop_loss']:.2f})"
+                st.toast(
+                    f"Trade #{tr['id']} {tr['ticker']} aperto · "
+                    f"{int(t_shares)} @ {tr['entry_price']:.2f}",
+                    icon="✅",
                 )
-                if pos is not None:
-                    cost = pos["shares"] * pos["entry_price"]
-                    st.info(
-                        f"Portfolio aggiornato: -{cost:.2f} cash, "
-                        f"+{pos['shares']} {tr['ticker']}"
-                    )
-                for w in warnings:
-                    st.warning(w)
+                if warnings:
+                    # warnings richiedono lettura, niente rerun finché l'utente li vede
+                    for w in warnings:
+                        st.warning(w)
+                    if pos is not None:
+                        cost = pos["shares"] * pos["entry_price"]
+                        st.info(
+                            f"Portfolio aggiornato: -{cost:.2f} cash, "
+                            f"+{pos['shares']} {tr['ticker']}"
+                        )
+                else:
+                    st.rerun()
             except ValueError as err:
                 st.error(str(err))
 
@@ -297,6 +302,8 @@ with tab_close:
                     reason=c_reason,
                     notes=c_notes or None,
                 )
+                # Il risultato di una chiusura è informazione *da leggere*
+                # (P&L finale, warnings) — non faccio rerun automatico qui.
                 pnl_color = "green" if tr["pnl_pct"] > 0 else "red"
                 st.markdown(
                     f"Trade #{tr['id']} {tr['ticker']} chiuso: "

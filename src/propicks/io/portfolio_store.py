@@ -1,7 +1,13 @@
 """Persistenza e mutazioni del portafoglio.
 
 Schema data/portfolio.json:
-    {"positions": {TICKER: {...}}, "cash": float, "last_updated": str|None}
+    {"positions": {TICKER: {...}}, "cash": float, "initial_capital": float,
+     "last_updated": str|None}
+
+``initial_capital`` è il capitale di riferimento per i display/metrics (header
+dashboard, sidebar invariants). Non influisce sui calcoli di sizing, che usano
+``portfolio_value(portfolio) = cash + sum(shares*entry)`` come denominatore.
+Se assente (file legacy) viene inizializzato a ``config.CAPITAL``.
 """
 
 from __future__ import annotations
@@ -28,7 +34,12 @@ from propicks.io.migrations import migrate, stamp_version
 
 
 def _default_portfolio() -> dict:
-    return {"positions": {}, "cash": CAPITAL, "last_updated": None}
+    return {
+        "positions": {},
+        "cash": CAPITAL,
+        "initial_capital": CAPITAL,
+        "last_updated": None,
+    }
 
 
 def load_portfolio() -> dict:
@@ -56,9 +67,42 @@ def load_portfolio() -> dict:
 
     data.setdefault("positions", {})
     data.setdefault("cash", CAPITAL)
+    data.setdefault("initial_capital", CAPITAL)
     data.setdefault("last_updated", None)
     data = migrate(data, "portfolio")
     return data
+
+
+def get_initial_capital(portfolio: dict) -> float:
+    """Capitale di riferimento. Fallback su ``config.CAPITAL`` per file legacy."""
+    return float(portfolio.get("initial_capital") or CAPITAL)
+
+
+def set_initial_capital(
+    portfolio: dict,
+    value: float,
+    *,
+    reset_cash: bool = False,
+) -> dict:
+    """Aggiorna il capitale di riferimento (campo informativo).
+
+    Con ``reset_cash=True`` azzera anche il ``cash`` corrente a ``value`` —
+    consentito solo se non ci sono posizioni aperte, per evitare di rompere
+    il cash accounting di un portfolio live. Il journal NON viene toccato.
+    """
+    if value <= 0:
+        raise ValueError(f"initial_capital deve essere > 0 (ricevuto {value}).")
+    if reset_cash and portfolio.get("positions"):
+        raise ValueError(
+            "Reset cash consentito solo con portfolio vuoto "
+            f"({len(portfolio['positions'])} posizioni aperte). "
+            "Chiudi o rimuovi le posizioni prima del reset."
+        )
+    portfolio["initial_capital"] = round(float(value), 2)
+    if reset_cash:
+        portfolio["cash"] = round(float(value), 2)
+    save_portfolio(portfolio)
+    return portfolio
 
 
 def save_portfolio(portfolio: dict) -> None:
