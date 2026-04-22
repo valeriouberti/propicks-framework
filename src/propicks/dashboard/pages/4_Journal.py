@@ -261,27 +261,42 @@ with tab_close:
     if not open_trades:
         st.info("Nessun trade aperto da chiudere.")
     else:
-        with st.form("close_trade_form", border=True):
-            c_ticker = st.selectbox(
-                "Ticker",
-                sorted(t["ticker"] for t in open_trades),
-                key="ct_ticker",
+        # Selectbox fuori dal form: il pre-fill exit_price con lo spot reagisce
+        # alla scelta del ticker.
+        c_ticker = st.selectbox(
+            "Ticker",
+            sorted(t["ticker"] for t in open_trades),
+            key="ct_ticker",
+        )
+        cur_trade = find_open(trades, c_ticker)
+        if cur_trade is not None:
+            target_str = (
+                f"{cur_trade['target']:.2f}" if cur_trade.get("target") else "—"
             )
-            # mostra contesto del trade selezionato
-            cur_trade = find_open(trades, c_ticker)
-            if cur_trade is not None:
-                target_str = (
-                    f"{cur_trade['target']:.2f}" if cur_trade.get("target") else "—"
-                )
-                st.caption(
-                    f"Aperto: {cur_trade['entry_date']} @ "
-                    f"{cur_trade['entry_price']:.2f} · stop "
-                    f"{cur_trade['stop_loss']:.2f} · target {target_str}"
-                )
+            st.caption(
+                f"Aperto: {cur_trade['entry_date']} @ "
+                f"{cur_trade['entry_price']:.2f} · stop "
+                f"{cur_trade['stop_loss']:.2f} · target {target_str}"
+            )
 
+        from propicks.dashboard._shared import cached_current_prices as _ccp
+        _spot = _ccp(tuple([c_ticker])).get(c_ticker)
+
+        with st.form("close_trade_form", border=True):
             cols = st.columns([1, 1])
+            # Key per-ticker: evita che session_state trattenga lo spot del
+            # ticker precedente quando l'utente cambia selectbox.
             c_price = cols[0].number_input(
-                "Exit price", min_value=0.01, step=0.01, format="%.2f", key="ct_price"
+                "Exit price",
+                min_value=0.01,
+                value=float(_spot) if _spot else 0.01,
+                step=0.01,
+                format="%.2f",
+                key=f"ct_price_{c_ticker}",
+                help=(
+                    f"Pre-fill con lo spot corrente ({_spot:.2f})." if _spot
+                    else "Spot non disponibile — inserisci manualmente."
+                ),
             )
             c_date = cols[1].date_input("Exit date", value=date.today(), key="ct_date")
             c_reason = st.selectbox(
@@ -320,5 +335,22 @@ with tab_close:
                     )
                 for w in warnings:
                     st.warning(w)
+
+                # -----------------------------------------------------
+                # Claude 3D — post-trade analysis pronto da incollare
+                # (Playbook §3D) — il momento giusto per generarlo è ora.
+                # -----------------------------------------------------
+                from propicks.ai.user_prompts import claude_3d_post_trade
+
+                with st.expander(
+                    "Prompt Claude 3D — analisi post-trade (copia-incolla)",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Da incollare nella web app Claude per estrarre "
+                        "lesson-learn. Il campo catalyst del trade viene "
+                        "incluso come motivo entry."
+                    )
+                    st.code(claude_3d_post_trade(tr), language=None)
             except ValueError as err:
                 st.error(str(err))

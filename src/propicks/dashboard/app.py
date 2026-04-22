@@ -20,10 +20,12 @@ from propicks.dashboard._shared import (
     load_journal,
     load_portfolio,
     page_header,
+    pnl_arrow,
     regime_badge,
     score_badge,
 )
 from propicks.domain.sizing import portfolio_value
+from propicks.dashboard.cadence import DAY_NAMES_IT, WEEKLY_CADENCE, today_block
 from propicks.domain.trade_mgmt import (
     DEFAULT_FLAT_THRESHOLD_PCT,
     DEFAULT_TIME_STOP_DAYS,
@@ -201,6 +203,43 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
+# Cadenza della settimana — focus sul giorno corrente
+# ---------------------------------------------------------------------------
+_today_dt = date.today()
+_day_name, _day_cad = today_block(_today_dt.weekday())
+st.subheader(f"Cadenza · {_day_name} — {_day_cad['name']}")
+_dur = _day_cad.get("duration", "")
+if _dur:
+    st.caption(f"Budget tempo: {_dur}")
+
+for _block_title, _block_dur, _block_items in _day_cad["blocks"]:
+    _header = f"**{_block_title}**"
+    if _block_dur and _block_dur != "—":
+        _header += f"  · _{_block_dur}_"
+    st.markdown(_header)
+    for _item in _block_items:
+        st.markdown(f"- {_item}")
+
+with st.expander("Cadenza completa della settimana", expanded=False):
+    for _dow in range(7):
+        _name = DAY_NAMES_IT[_dow]
+        _cad = WEEKLY_CADENCE[_dow]
+        _is_today = _dow == _today_dt.weekday()
+        _prefix = "▶ " if _is_today else ""
+        st.markdown(
+            f"{_prefix}**{_name} — {_cad['name']}** · _{_cad.get('duration', '')}_"
+        )
+        for _bt, _bd, _bi in _cad["blocks"]:
+            st.markdown(f"&nbsp;&nbsp;• _{_bt}_ ({_bd}): " + " · ".join(_bi[:2])
+                        + (" …" if len(_bi) > 2 else ""), unsafe_allow_html=True)
+    st.caption(
+        "Dettaglio completo con budget tempo e tabelle trigger: "
+        "`docs/Weekly_Operating_Framework.md`."
+    )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
 # Mark-to-market
 # ---------------------------------------------------------------------------
 prices: dict[str, float] = {}
@@ -244,6 +283,7 @@ st.subheader("Posizioni aperte")
 if not positions:
     st.info("Nessuna posizione aperta. Vai su **Scanner** o **ETF Rotation** per analizzare setup.")
 else:
+    denom = total + unrealized
     rows = []
     for ticker, p in sorted(positions.items()):
         cur = prices.get(ticker)
@@ -254,20 +294,43 @@ else:
             (cur - p["stop_loss"]) / cur if cur is not None and cur > 0 else None
         )
         rows.append({
+            "": pnl_arrow(pnl_pct),
             "Ticker": ticker,
             "Strategy": p.get("strategy") or "—",
             "Shares": p["shares"],
-            "Entry": f"{p['entry_price']:.2f}",
-            "Current": f"{cur:.2f}" if cur is not None else "—",
-            "MV": fmt_eur(mv),
-            "Size%": fmt_pct(mv / (total + unrealized)) if total else "—",
-            "P&L": fmt_eur(pnl) if pnl is not None else "—",
-            "P&L%": fmt_pct(pnl_pct) if pnl_pct is not None else "—",
-            "Stop": f"{p['stop_loss']:.2f}",
-            "Stop dist": fmt_pct(stop_dist) if stop_dist is not None else "—",
-            "Target": f"{p['target']:.2f}" if p.get("target") else "—",
+            "Entry": p["entry_price"],
+            "Current": cur,
+            "MV": mv,
+            # ProgressColumn/NumberColumn usano printf: valori già moltiplicati *100
+            "Size%": (mv / denom * 100) if denom else None,
+            "P&L": pnl,
+            "P&L%": pnl_pct * 100 if pnl_pct is not None else None,
+            "Stop": p["stop_loss"],
+            "Stop dist": stop_dist * 100 if stop_dist is not None else None,
+            "Target": p.get("target"),
         })
-    st.dataframe(rows, width="stretch", hide_index=True)
+    st.dataframe(
+        rows,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Entry": st.column_config.NumberColumn(format="%.2f"),
+            "Current": st.column_config.NumberColumn(format="%.2f"),
+            "MV": st.column_config.NumberColumn(format="€ %.2f"),
+            "Size%": st.column_config.ProgressColumn(
+                format="%.1f%%", min_value=0.0, max_value=20.0,
+                help="Quota del portfolio mark-to-market. Cap: 15% stock / 20% ETF.",
+            ),
+            "P&L": st.column_config.NumberColumn(format="€ %+.2f"),
+            "P&L%": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Stop": st.column_config.NumberColumn(format="%.2f"),
+            "Stop dist": st.column_config.ProgressColumn(
+                format="%.2f%%", min_value=0.0, max_value=10.0,
+                help="Distanza current → stop. Vicino a 0 = stop a rischio.",
+            ),
+            "Target": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # Recent journal entries
@@ -282,23 +345,100 @@ else:
     recent = closed[:5]
     rows = []
     for t in recent:
+        pnl_pct = t.get("pnl_pct")
         rows.append({
+            "": pnl_arrow((pnl_pct / 100) if pnl_pct is not None else None),
             "Ticker": t["ticker"],
             "Strategy": t.get("strategy") or "—",
             "Entry date": t["entry_date"],
             "Exit date": t.get("exit_date") or "—",
-            "Days": str(t.get("duration_days")) if t.get("duration_days") is not None else "—",
-            "P&L %": fmt_pct((t.get("pnl_pct") or 0) / 100) if t.get("pnl_pct") is not None else "—",
+            "Days": t.get("duration_days"),
+            "P&L %": pnl_pct,
             "Reason": t.get("exit_reason") or "—",
         })
-    st.dataframe(rows, width="stretch", hide_index=True)
+    st.dataframe(
+        rows,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Days": st.column_config.NumberColumn(format="%d"),
+        },
+    )
 
 # ---------------------------------------------------------------------------
-# Watchlist scorer (top-N dal journal recent closed per strategy)
+# Workflow tipico — percorso end-to-end dal pick al review
 # ---------------------------------------------------------------------------
-st.subheader("Score classification — riferimento")
-col1, col2, col3, col4 = st.columns(4)
-col1.markdown("A — Azione immediata  \n" + score_badge(80), unsafe_allow_html=True)
-col2.markdown("B — Watchlist  \n" + score_badge(65), unsafe_allow_html=True)
-col3.markdown("C — Neutrale  \n" + score_badge(50), unsafe_allow_html=True)
-col4.markdown("D — Skip  \n" + score_badge(30), unsafe_allow_html=True)
+st.subheader("Workflow tipico")
+st.caption(
+    "Il ciclo end-to-end dal pick mensile al review. Ogni step ha una pagina "
+    "dedicata e il comando CLI equivalente."
+)
+
+_steps = [
+    (
+        "1 · Scan tecnico",
+        "🔍",
+        "Analisi indicatori + classificazione A/B/C/D. Auto-add in watchlist "
+        "per classe A (target = prezzo corrente) e B.",
+        "Scanner",
+        "propicks-scan TICKER",
+    ),
+    (
+        "2 · Watchlist",
+        "👀",
+        "Incubatrice per classe B (target manuale) e A in attesa. Flag READY "
+        "quando score ≥ 60 e prezzo entro ±2% dal target.",
+        "Watchlist",
+        "propicks-watchlist list",
+    ),
+    (
+        "3 · Validate AI",
+        "🤖",
+        "Claude verdict strutturato (CONFIRM / CAUTION / REJECT) con gate "
+        "doppio: score ≥ 60 **e** regime ≥ NEUTRAL. Cache 24h.",
+        "Scanner → Valida",
+        "propicks-scan TICKER --validate",
+    ),
+    (
+        "4 · Size + Open",
+        "📏",
+        "Sizing rischio (cap 15%/20%, reserve 20%, max loss 8%) poi Journal "
+        "add (sync automatico su portfolio).",
+        "Portfolio · Journal",
+        "propicks-journal add TICKER ...",
+    ),
+    (
+        "5 · Manage",
+        "🔧",
+        "Trailing stop ATR-based (ratchet-up) + time-stop su trade flat da "
+        "30 gg. Opt-in per posizione.",
+        "Portfolio → Trade mgmt",
+        "propicks-portfolio manage --apply",
+    ),
+    (
+        "6 · Close + Review",
+        "💰",
+        "Chiusura trade (P&L nel journal) e report weekly/monthly per "
+        "validare che la strategia funzioni.",
+        "Journal · Reports",
+        "propicks-journal close / propicks-report",
+    ),
+]
+_rows = [_steps[:3], _steps[3:]]
+for _row in _rows:
+    _cols = st.columns(3)
+    for _col, (_title, _emoji, _desc, _page, _cli) in zip(_cols, _row, strict=True):
+        _col.markdown(
+            f"**{_emoji} {_title}**  \n"
+            f"{_desc}  \n"
+            f"_Pagina_: **{_page}**  \n"
+            f"`{_cli}`"
+        )
+
+with st.expander("Scala di classificazione score (A/B/C/D)", expanded=False):
+    _c1, _c2, _c3, _c4 = st.columns(4)
+    _c1.markdown("**A — Azione immediata**  \n" + score_badge(80) + "  \nscore ≥ 75", unsafe_allow_html=True)
+    _c2.markdown("**B — Watchlist**  \n" + score_badge(65) + "  \nscore 60–74", unsafe_allow_html=True)
+    _c3.markdown("**C — Neutrale**  \n" + score_badge(50) + "  \nscore 45–59", unsafe_allow_html=True)
+    _c4.markdown("**D — Skip**  \n" + score_badge(30) + "  \nscore < 45", unsafe_allow_html=True)

@@ -180,6 +180,69 @@ for r in results:
         )
 
         # -----------------------------------------------------------------
+        # Prompt esterni (Perplexity) — cross-check indipendente a Claude
+        # I prompt vivono in `ai/user_prompts.py` parametrizzati sul ticker.
+        # -----------------------------------------------------------------
+        with st.expander("Prompt Perplexity (copia-incolla)", expanded=False):
+            from propicks.ai.user_prompts import (
+                is_italian_ticker,
+                perplexity_2a,
+                perplexity_2b,
+                perplexity_2c,
+            )
+
+            st.caption(
+                "Cross-check indipendente a `--validate` Claude. "
+                "Perplexity 2C (red flag 24h) va eseguito **sempre** prima "
+                "di un'entry, anche con verdict CONFIRM."
+            )
+            _prompt_label_full = (
+                "2B — Titoli italiani"
+                if is_italian_ticker(r["ticker"])
+                else "2A — Nuovi ingressi"
+            )
+            st.markdown(f"**{_prompt_label_full}** (analisi completa catalyst + rischi)")
+            _prompt_full = (
+                perplexity_2b(r["ticker"], r.get("name") or "")
+                if is_italian_ticker(r["ticker"])
+                else perplexity_2a(
+                    r["ticker"],
+                    r.get("name") or "",
+                    (strategy_val or "").strip(),
+                )
+            )
+            st.code(_prompt_full, language=None)
+
+            st.markdown("**2C — Check pre-entry** (red flag ultime 24h)")
+            st.code(perplexity_2c(r["ticker"]), language=None)
+
+        # -----------------------------------------------------------------
+        # Fallback Claude --validate — prompt completo per LLM alternativi
+        # quando l'API Anthropic è down o la chiave è esaurita.
+        # -----------------------------------------------------------------
+        with st.expander(
+            "Prompt Claude --validate completo (fallback LLM alternativo)",
+            expanded=False,
+        ):
+            from datetime import date as _date
+
+            from propicks.ai.user_prompts import claude_stock_validate_fallback
+
+            st.caption(
+                "Ricostruisce byte-per-byte il payload (system + user + schema) "
+                "che `propicks-scan --validate` manda ad Anthropic. Incollalo "
+                "in ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
+                "Lo schema JSON è inline a fondo prompt — il modello risponderà "
+                "in formato strutturato parsabile."
+            )
+            _fallback = claude_stock_validate_fallback(r, _date.today().isoformat())
+            st.caption(
+                f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+                "Verifica la context window del modello target prima di incollare."
+            )
+            st.code(_fallback, language="markdown")
+
+        # -----------------------------------------------------------------
         # Manual "→ Watchlist" — funziona per qualunque classe (anche C/D)
         # Utile quando il setup non è pronto ma vuoi tenerlo d'occhio
         # -----------------------------------------------------------------

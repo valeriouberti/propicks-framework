@@ -193,6 +193,36 @@ if allocate:
         )
 
 # ---------------------------------------------------------------------------
+# Fallback Claude --validate — prompt completo per LLM alternativi
+# ---------------------------------------------------------------------------
+with st.expander(
+    "Prompt Claude --validate completo (fallback LLM alternativo)",
+    expanded=False,
+):
+    from datetime import date as _date
+
+    from propicks.ai.user_prompts import claude_etf_validate_fallback
+
+    st.caption(
+        "Ricostruisce il payload (system + user + schema) che "
+        "`propicks-rotate --validate` manda ad Anthropic. Incollalo in "
+        "ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
+        "Schema JSON inline a fondo prompt → risposta strutturata parsabile."
+    )
+    _fallback = claude_etf_validate_fallback(
+        ranked=ranked,
+        allocation=allocation,
+        as_of_date=_date.today().isoformat(),
+        region=region,
+        benchmark=bench,
+    )
+    st.caption(
+        f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+        "Verifica la context window del modello target prima di incollare."
+    )
+    st.code(_fallback, language="markdown")
+
+# ---------------------------------------------------------------------------
 # AI validation (macro view)
 # ---------------------------------------------------------------------------
 if validate_ai:

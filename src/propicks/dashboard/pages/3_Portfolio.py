@@ -166,13 +166,26 @@ with tab_risk:
             risk_rows.append({
                 "Ticker": ticker,
                 "Shares": shares,
-                "Entry": f"{entry:.2f}",
-                "Stop": f"{stop:.2f}",
-                "Rischio €": fmt_eur(risk_eur),
-                "% capitale": fmt_pct(risk_pct),
+                "Entry": entry,
+                "Stop": stop,
+                "Rischio €": risk_eur,
+                "% capitale": risk_pct * 100,
             })
         st.subheader("Rischio per posizione (a stop)")
-        st.dataframe(risk_rows, width="stretch", hide_index=True)
+        st.dataframe(
+            risk_rows,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Entry": st.column_config.NumberColumn(format="%.2f"),
+                "Stop": st.column_config.NumberColumn(format="%.2f"),
+                "Rischio €": st.column_config.NumberColumn(format="€ %.2f"),
+                "% capitale": st.column_config.ProgressColumn(
+                    format="%.2f%%", min_value=0.0, max_value=2.0,
+                    help="Loss potenziale se lo stop salta, in % del portfolio. Soglia informativa: 2% per trade.",
+                ),
+            },
+        )
         st.caption(
             "**Rischio €** = `(entry - stop) x shares` · "
             "**% capitale** = rischio / portfolio_value. "
@@ -206,9 +219,12 @@ with tab_risk:
             "Concentrazione settoriale",
             help=INDICATOR_HELP_PORTFOLIO["sector_exposure"],
         )
-        with st.spinner("Fetching sector / beta…"):
+        with st.status("Analisi esposizione…", expanded=False) as _exp_status:
+            st.write(f"Fetch settori GICS per {len(tickers)} ticker")
             sector_yf = cached_ticker_sectors(tuple(tickers))
+            st.write("Fetch beta vs SPX")
             betas = cached_ticker_betas(tuple(tickers))
+            _exp_status.update(label="Esposizione pronta", state="complete")
         sector_key_map = {
             t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_yf.items()
         }
@@ -219,15 +235,21 @@ with tab_risk:
         sector_exp = compute_sector_exposure(positions, prices_map, sector_key_map, total_market)
         if sector_exp:
             sector_rows = sorted(
-                ([{"Settore": k, "Esposizione": fmt_pct(v), "_pct": v}
+                ([{"Settore": k, "Esposizione": v * 100}
                   for k, v in sector_exp.items()]),
-                key=lambda r: r["_pct"],
+                key=lambda r: r["Esposizione"],
                 reverse=True,
             )
             st.dataframe(
-                [{k: v for k, v in r.items() if k != "_pct"} for r in sector_rows],
+                sector_rows,
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "Esposizione": st.column_config.ProgressColumn(
+                        format="%.1f%%", min_value=0.0, max_value=30.0,
+                        help="Quota del portfolio mark-to-market per settore. Cap informativo: 30% → warning.",
+                    ),
+                },
             )
             st.caption(
                 "Mapping da Yahoo a tassonomia interna (`Consumer Cyclical` → "
@@ -392,9 +414,12 @@ with tab_mgmt:
         run_btn = st.button("Calcola suggerimenti", type="primary", key="mgmt_run")
         if run_btn:
             tickers = sorted(positions.keys())
-            with st.spinner("Fetching prezzi e ATR…"):
+            with st.status("Calcolo suggerimenti trailing…", expanded=False) as _mgmt_status:
+                st.write(f"Fetch prezzi spot per {len(tickers)} ticker")
                 prices_map = cached_current_prices(tuple(tickers))
+                st.write("Calcolo ATR per ogni ticker")
                 atrs = {t: cached_current_atr(t) for t in tickers}
+                _mgmt_status.update(label="Dati pronti", state="complete")
 
             suggestions: list[tuple[str, dict, dict, float]] = []
             for ticker in tickers:
@@ -621,44 +646,65 @@ with tab_update:
     if not positions:
         st.info("Nessuna posizione aperta.")
     else:
+        # Selectbox fuori dal form: il pre-fill stop/target reagisce al ticker
+        u_ticker = st.selectbox("Ticker", sorted(positions.keys()), key="upd_ticker")
+        cur_pos = positions[u_ticker]
+        cur_stop = float(cur_pos.get("stop_loss") or 0)
+        cur_target = float(cur_pos.get("target") or 0)
+        st.caption(
+            f"Valori correnti — stop **{cur_stop:.2f}** · target "
+            f"**{cur_target:.2f}** · entry {cur_pos['entry_price']:.2f}. "
+            "Modifica un campo e premi **Aggiorna**; i campi invariati "
+            "vengono ignorati."
+        )
+
         with st.form("update_form", border=True):
-            cols = st.columns([2, 1, 1])
-            u_ticker = cols[0].selectbox("Ticker", sorted(positions.keys()), key="upd_ticker")
-            cur_pos = positions[u_ticker]
-            u_stop = cols[1].number_input(
-                "Nuovo stop (0 = no change)",
-                min_value=0.0,
-                value=float(cur_pos.get("stop_loss") or 0),
+            cols = st.columns([1, 1])
+            # Key per-ticker: cambiando selectbox si crea un widget fresco con
+            # il pre-fill corretto, evitando la session_state stickiness di
+            # una key fissa tipo `upd_stop`.
+            u_stop = cols[0].number_input(
+                "Nuovo stop",
+                min_value=0.01,
+                value=cur_stop if cur_stop > 0 else 0.01,
                 step=0.01,
                 format="%.2f",
-                key="upd_stop",
+                key=f"upd_stop_{u_ticker}",
             )
-            u_target = cols[2].number_input(
-                "Nuovo target (0 = no change)",
-                min_value=0.0,
-                value=float(cur_pos.get("target") or 0),
+            u_target = cols[1].number_input(
+                "Nuovo target",
+                min_value=0.01,
+                value=cur_target if cur_target > 0 else 0.01,
                 step=0.01,
                 format="%.2f",
-                key="upd_target",
+                key=f"upd_target_{u_ticker}",
             )
             submitted = st.form_submit_button("Aggiorna", type="primary")
 
         if submitted:
-            try:
-                new = update_position(
-                    portfolio=portfolio,
-                    ticker=u_ticker,
-                    stop_loss=u_stop if u_stop > 0 else None,
-                    target=u_target if u_target > 0 else None,
-                )
-                target_str = f"{new['target']:.2f}" if new.get("target") else "—"
-                st.toast(
-                    f"{u_ticker}: stop {new['stop_loss']:.2f} · target {target_str}",
-                    icon="✅",
-                )
-                st.rerun()
-            except ValueError as err:
-                st.error(str(err))
+            # Rileva cambi via confronto con tolleranza (centesimo). Un campo
+            # uguale al corrente non viene toccato.
+            EPS = 0.005
+            stop_changed = abs(u_stop - cur_stop) > EPS
+            target_changed = abs(u_target - cur_target) > EPS
+            if not (stop_changed or target_changed):
+                st.info("Nessuna modifica rilevata.")
+            else:
+                try:
+                    new = update_position(
+                        portfolio=portfolio,
+                        ticker=u_ticker,
+                        stop_loss=u_stop if stop_changed else None,
+                        target=u_target if target_changed else None,
+                    )
+                    target_str = f"{new['target']:.2f}" if new.get("target") else "—"
+                    st.toast(
+                        f"{u_ticker}: stop {new['stop_loss']:.2f} · target {target_str}",
+                        icon="✅",
+                    )
+                    st.rerun()
+                except ValueError as err:
+                    st.error(str(err))
 
 # ---------------------------------------------------------------------------
 # Remove position

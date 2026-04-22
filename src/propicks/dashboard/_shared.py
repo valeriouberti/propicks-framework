@@ -112,6 +112,21 @@ def fmt_usd(val: float | None, *, decimals: int = 2, none: str = "—") -> str:
     return f"$ {val:,.{decimals}f}"
 
 
+def pnl_arrow(val: float | None, *, flat_threshold: float = 0.002) -> str:
+    """Pallino colorato per P&L (positivo/negativo/flat).
+
+    ``val`` è la frazione (es. 0.023 per +2.3%). Sotto il threshold in valore
+    assoluto il trade è considerato flat (pallino bianco).
+    """
+    if val is None:
+        return "—"
+    if val > flat_threshold:
+        return "🟢"
+    if val < -flat_threshold:
+        return "🔴"
+    return "⚪"
+
+
 # ---------------------------------------------------------------------------
 # UI primitives
 # ---------------------------------------------------------------------------
