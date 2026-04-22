@@ -229,8 +229,12 @@ def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
     ema_slow = float(ema_slow_s.iloc[-1])
     rsi = float(rsi_s.iloc[-1])
     atr = float(atr_s.iloc[-1])
-    avg_vol = float(volume.tail(VOLUME_AVG_PERIOD).mean())
+    # avg_vol = media delle N barre PRECEDENTI (esclude la barra corrente).
+    # Includere la barra corrente nella media biasa il volume_ratio verso 1.0
+    # (≈ -5% bias su VOLUME_AVG_PERIOD=20): `cur_vol / mean_incl_self` < `cur_vol / mean_prev_only`.
     cur_vol = float(volume.iloc[-1])
+    prev_window = volume.iloc[-VOLUME_AVG_PERIOD - 1 : -1]
+    avg_vol = float(prev_window.mean()) if not prev_window.empty else cur_vol
     high_52w = float(high.tail(min(252, len(high))).max())
 
     prev_ema_fast = float(ema_fast_s.iloc[-6]) if len(ema_fast_s) >= 6 else float("nan")

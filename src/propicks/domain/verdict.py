@@ -6,6 +6,22 @@ Logica pura, testabile con liste di pnl_pct senza dipendenze esterne.
 from __future__ import annotations
 
 
+def profit_factor(pnls_pct: list[float]) -> float:
+    """Profit factor = sum(wins) / |sum(losses)|.
+
+    Ritorna ``inf`` se ci sono solo vincenti, ``0.0`` se la lista è vuota o
+    contiene solo perdenti senza vincenti. NB: usare ``avg_win/avg_loss``
+    è errato — coincide col PF reale solo quando len(wins)==len(losses).
+    """
+    wins = [p for p in pnls_pct if p > 0]
+    losses = [p for p in pnls_pct if p <= 0]
+    sum_wins = sum(wins)
+    sum_losses = sum(losses)
+    if sum_losses == 0:
+        return float("inf") if wins else 0.0
+    return sum_wins / abs(sum_losses)
+
+
 def max_drawdown(pnls_pct: list[float]) -> float:
     """Max drawdown peak-to-trough su equity curve composta.
 

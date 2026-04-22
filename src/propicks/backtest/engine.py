@@ -226,8 +226,13 @@ def backtest_ticker(
         # ------------------------------------------------------------------
         # Nessuna posizione aperta: valuta signal
         # ------------------------------------------------------------------
-        avg_vol = float(volume.iloc[max(0, i - VOLUME_AVG_PERIOD + 1) : i + 1].mean())
+        # avg_vol = media delle N barre PRECEDENTI a i (esclude i stesso).
+        # Stesso motivo del fix in domain.scoring: la barra corrente non va
+        # nel denominatore o volume_ratio è biased verso 1.0.
         cur_vol = float(volume.iloc[i])
+        prev_start = max(0, i - VOLUME_AVG_PERIOD)
+        prev_window = volume.iloc[prev_start:i]
+        avg_vol = float(prev_window.mean()) if not prev_window.empty else cur_vol
         high_52w = float(high.iloc[max(0, i - 251) : i + 1].max())
 
         ef_now = float(ema_fast.iloc[i])

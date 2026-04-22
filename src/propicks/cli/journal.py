@@ -24,7 +24,7 @@ import sys
 
 from tabulate import tabulate
 
-from propicks.domain.verdict import max_drawdown, verdict
+from propicks.domain.verdict import max_drawdown, profit_factor, verdict
 from propicks.io.journal_store import load_journal
 from propicks.io.trade_sync import close_trade as sync_close_trade
 from propicks.io.trade_sync import open_trade as sync_open_trade
@@ -84,7 +84,7 @@ def compute_stats(filter_strategy: str | None = None) -> None:
     wr = len(wins) / len(closed)
     avg_win = statistics.mean(wins) if wins else 0.0
     avg_loss = statistics.mean(losses) if losses else 0.0
-    pf = abs(avg_win / avg_loss) if avg_loss else float("inf") if wins else 0.0
+    pf = profit_factor(pnls_pct)
     best = max(pnls_pct)
     worst = min(pnls_pct)
     max_dd = max_drawdown(pnls_pct)
