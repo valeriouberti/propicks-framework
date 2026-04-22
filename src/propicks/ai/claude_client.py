@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -23,8 +23,11 @@ from propicks.config import (
     AI_WEB_SEARCH_ENABLED,
     AI_WEB_SEARCH_MAX_USES,
 )
+from propicks.obs.log import get_logger
 
 WEB_SEARCH_UNIT_PRICE_USD: float = 0.01
+
+_log = get_logger("ai.claude")
 
 
 class ConfidenceByDimension(BaseModel):
@@ -275,16 +278,31 @@ def _build_tools() -> list[dict] | None:
     ]
 
 
-def _log_web_search_usage(response: Any) -> None:
-    """Stampa su stderr il conteggio delle ricerche web e il costo stimato."""
+def _extract_usage_context(response: Any) -> dict[str, Any]:
+    """Estrae token counts + web_search dalla usage di Anthropic, safe-access."""
+    ctx: dict[str, Any] = {}
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return ctx
+
+    for attr in (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        val = getattr(usage, attr, None)
+        if isinstance(val, int) and val:
+            ctx[attr] = val
+
     try:
-        count = response.usage.server_tool_use.web_search_requests
+        ws = usage.server_tool_use.web_search_requests
     except AttributeError:
-        return
-    if not count:
-        return
-    cost = count * WEB_SEARCH_UNIT_PRICE_USD
-    print(f"[ai] {count} web search(es) ≈ ${cost:.2f}", file=sys.stderr)
+        ws = None
+    if isinstance(ws, int) and ws:
+        ctx["web_search_count"] = ws
+        ctx["web_search_cost_usd"] = round(ws * WEB_SEARCH_UNIT_PRICE_USD, 4)
+    return ctx
 
 
 def _call_claude_with_schema(
@@ -320,14 +338,47 @@ def _call_claude_with_schema(
     if tools:
         kwargs["tools"] = tools
 
+    _log.info(
+        "ai_call_start",
+        extra={"ctx": {"model": AI_MODEL, "web_search": bool(tools)}},
+    )
+    t0 = time.monotonic()
     try:
         response = client.messages.create(**kwargs)
     except anthropic.APIStatusError as err:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        _log.error(
+            "ai_call_error",
+            extra={
+                "ctx": {
+                    "model": AI_MODEL,
+                    "duration_ms": duration_ms,
+                    "kind": "api_status",
+                    "status": getattr(err, "status_code", None),
+                }
+            },
+        )
         raise AIValidationError(f"Anthropic API error: {err.message}") from err
     except anthropic.APIConnectionError as err:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        _log.error(
+            "ai_call_error",
+            extra={
+                "ctx": {
+                    "model": AI_MODEL,
+                    "duration_ms": duration_ms,
+                    "kind": "connection",
+                }
+            },
+        )
         raise AIValidationError(f"Network error talking to Anthropic: {err}") from err
 
-    _log_web_search_usage(response)
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    usage_ctx = _extract_usage_context(response)
+    usage_ctx["model"] = AI_MODEL
+    usage_ctx["duration_ms"] = duration_ms
+    usage_ctx["stop_reason"] = getattr(response, "stop_reason", None)
+    _log.info("ai_call_success", extra={"ctx": usage_ctx})
 
     if getattr(response, "stop_reason", None) == "pause_turn":
         raise AIValidationError(

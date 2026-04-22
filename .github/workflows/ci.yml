@@ -35,7 +35,7 @@ jobs:
       - name: Type check (mypy) — core layers only
         # dashboard/, cli/, backtest/ hanno noto tech-debt di tipizzazione.
         # Gli altri layer toccano soldi o rete: qui mypy è obbligatorio.
-        run: mypy src/propicks/domain src/propicks/io src/propicks/ai src/propicks/market src/propicks/reports
+        run: mypy src/propicks/domain src/propicks/io src/propicks/ai src/propicks/market src/propicks/reports src/propicks/obs
 
       - name: Run tests
         run: pytest --cov=propicks --cov-report=term-missing

@@ -7,13 +7,15 @@ Tenere il client isolato qui permette di:
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 
 import pandas as pd
 import yfinance as yf
 
 from propicks.config import EMA_SLOW, REGIME_MIN_WEEKLY_BARS
+from propicks.obs.log import get_logger
+
+_log = get_logger("market.yfinance")
 
 
 @dataclass
@@ -79,7 +81,10 @@ def download_benchmark(ticker: str, days: int) -> pd.Series | None:
         buffer = max(days + 10, 30)
         hist = yf.Ticker(ticker).history(period=f"{buffer}d", auto_adjust=False)
     except Exception as exc:
-        print(f"[warning] benchmark {ticker} non disponibile: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_benchmark_unavailable",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
         return None
     if hist is None or hist.empty:
         return None
@@ -96,7 +101,10 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | No
     try:
         hist = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=False)
     except Exception as exc:
-        print(f"[warning] benchmark weekly {ticker} non disponibile: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_benchmark_weekly_unavailable",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
         return None
     if hist is None or hist.empty:
         return None
@@ -113,7 +121,10 @@ def get_ticker_sector(ticker: str) -> str | None:
     try:
         info = yf.Ticker(ticker).info
     except Exception as exc:
-        print(f"[warning] sector non disponibile per {ticker}: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_sector_unavailable",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
         return None
     if not isinstance(info, dict):
         return None
@@ -132,7 +143,10 @@ def get_ticker_beta(ticker: str) -> float | None:
     try:
         info = yf.Ticker(ticker).info
     except Exception as exc:
-        print(f"[warning] beta non disponibile per {ticker}: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_beta_unavailable",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
         return None
     if not isinstance(info, dict):
         return None
@@ -163,7 +177,10 @@ def download_returns(tickers: list[str], period: str = "6mo") -> pd.DataFrame:
             threads=False,
         )
     except Exception as exc:
-        print(f"[warning] download returns fallito: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_returns_download_failed",
+            extra={"ctx": {"n_tickers": len(tickers), "error": str(exc)}},
+        )
         return pd.DataFrame()
 
     if data is None or data.empty:
@@ -198,7 +215,10 @@ def get_current_prices(tickers: list[str]) -> dict[str, float]:
             threads=False,
         )
     except Exception as exc:
-        print(f"[warning] download batch fallito: {exc}", file=sys.stderr)
+        _log.warning(
+            "yf_prices_batch_failed",
+            extra={"ctx": {"n_tickers": len(tickers), "error": str(exc)}},
+        )
         data = None
 
     if data is not None and not data.empty:
@@ -219,5 +239,8 @@ def get_current_prices(tickers: list[str]) -> dict[str, float]:
             if hist is not None and not hist.empty:
                 prices[t] = float(hist["Close"].iloc[-1])
         except Exception as exc:
-            print(f"[warning] prezzo non disponibile per {t}: {exc}", file=sys.stderr)
+            _log.warning(
+                "yf_price_unavailable",
+                extra={"ctx": {"ticker": t, "error": str(exc)}},
+            )
     return prices
