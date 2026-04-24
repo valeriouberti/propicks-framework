@@ -29,6 +29,7 @@ propicks-ai-framework/
 │   │   ├── stock_rs.py        # Peer RS stock vs sector ETF (solo US, campo informativo)
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
 │   │   ├── attribution.py     # Phase 9: decompose trade (α/β/sector/timing) + gate Phase 7
+│   │   ├── calendar.py        # Phase 8: earnings hard gate + macro events lookup
 │   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
 │   │   ├── sizing_v2.py       # Phase 5: calculate_position_size_advanced (Kelly + vol + corr)
 │   │   ├── risk.py            # Phase 5: kelly_fractional, VaR, vol, corr_adjusted (pure math)
@@ -73,7 +74,8 @@ propicks-ai-framework/
 │   │   ├── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
 │   │   ├── cache.py           # propicks-cache (stats/warm/clear OHLCV cache)
 │   │   ├── scheduler.py       # propicks-scheduler (run/job/alerts/history)
-│   │   └── bot.py             # propicks-bot (Telegram daemon + queue helpers)
+│   │   ├── bot.py             # propicks-bot (Telegram daemon + queue helpers)
+│   │   └── calendar.py        # propicks-calendar (earnings + macro events) Phase 8
 │   ├── scheduler/             # Phase 3 — automazione EOD
 │   │   ├── jobs.py            # 6 job functions idempotenti + @run_job decorator
 │   │   ├── alerts.py          # alert queue CRUD + dedup_key logic
@@ -189,6 +191,110 @@ commodity/FX/indici, date e risultati di earnings, short interest e performance
 settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
+
+## Catalyst calendar (post Phase 8)
+
+**Hard gate** su earnings (ticker-specific) + **soft warning** su macro events
+(whole-market). Implementato come safety check pre-add_position.
+
+### Earnings hard gate
+
+- **Soglia**: ``EARNINGS_HARD_GATE_DAYS = 5`` giorni (dal precedente warning)
+- **Source**: ``yfinance.Ticker(t).calendar`` / ``.get_earnings_dates()``
+- **Cache**: tabella ``market_ticker_meta.next_earnings_date`` TTL 7gg
+- **Behavior**:
+  - ``add_position`` → ``ValueError`` se earnings entro 5gg (default)
+  - ``ignore_earnings=True`` bypass per trade intentional (contrarian post-earnings flush)
+  - Fail-open su yfinance error (non blocca operatività se data source giù)
+- **CLI flag**: ``propicks-portfolio add ... --ignore-earnings``
+
+### Macro events (hardcoded 2026)
+
+Tabella ``MACRO_EVENTS_2026`` in ``config.py``:
+- **8 FOMC** meetings (Tue-Wed, Jan/Mar/Apr/Jun/Jul/Sep/Oct/Dec)
+- **12 CPI** releases (2nd Tue/Wed of month)
+- **12 NFP** (1st Fri of month)
+- **8 ECB** monetary policy decisions
+
+**Soft warning**: `macro_warning_check(entry_date, warning_days=2)` ritorna
+info + lista eventi imminenti. Non blocca (coinvolge tutto il mercato, non
+ticker-specific) ma alerta il trader. Le macro events sono a frequenza
+stabile → hardcoded è accettabile (vs API scraping fragile). Aggiornare
+annualmente ``config.MACRO_EVENTS_2026`` quando Fed pubblica nuovo calendar.
+
+### CLI `propicks-calendar`
+
+```bash
+propicks-calendar earnings               # portfolio+watchlist, finestra 14gg
+propicks-calendar earnings --upcoming 30d --refresh
+propicks-calendar macro                   # FOMC/CPI/NFP/ECB 14gg
+propicks-calendar macro --upcoming 30d --types FOMC,CPI
+propicks-calendar check AAPL              # gate check per ticker specifico
+propicks-calendar check AAPL --refresh    # forza fetch yfinance
+```
+
+### Scheduler
+
+Nuovo job ``check_earnings_calendar`` (daily Mon-Fri 17:30, pre warm_cache):
+- Fetch earnings per portfolio + watchlist tickers
+- Genera alert ``earnings_upcoming`` per ticker entro 5gg
+- Dedup per-ticker per-week (ISO week tag)
+- Severity ``critical`` se ≤ 2gg, ``warning`` altrimenti
+- Telegram bot delivery via Phase 4 dispatcher
+
+### Bot command
+
+```
+/calendar     # summary earnings + macro upcoming nei prossimi 14gg
+```
+
+### Architettura
+
+```
+┌──────────────────┐  daily 17:30
+│ check_earnings_  │────────┐
+│  calendar (job)  │        │
+└──────────────────┘        │
+                            ▼
+                   ┌─────────────────────┐
+                   │ yf.Ticker.calendar  │─┐
+                   └─────────────────────┘ │
+                            │              │ cache 7gg
+                            ▼              ▼
+                   ┌────────────────────────────┐
+                   │ market_ticker_meta         │
+                   │   next_earnings_date       │
+                   │   earnings_fetched_at      │
+                   └──────────┬─────────────────┘
+                              │
+              ┌───────────────┼──────────────────┐
+              │               │                  │
+              ▼               ▼                  ▼
+    ┌─────────────┐  ┌────────────────┐  ┌──────────────┐
+    │ add_position│  │ scheduler job  │  │ CLI calendar │
+    │ HARD GATE   │  │ alert generator│  │ query        │
+    └─────────────┘  └────────┬───────┘  └──────────────┘
+                              │ create_alert
+                              ▼
+                     ┌──────────────┐
+                     │ alerts queue │───→ Telegram bot
+                     └──────────────┘
+```
+
+### Trade-off accettati
+
+- **Macro events hardcoded**: fragile su aggiornamenti manuali annuali ma
+  deterministic (no API scraping che può rompersi). Marcato in doc per
+  update ogni dicembre.
+- **Earnings fetch yfinance**: non sempre affidabile (missing data per
+  ticker esteri/ETF). Fail-open accettato: add_position procede se earnings
+  unknown — il warning arriva comunque via scheduler alert dopo 24h.
+- **Nessun hard gate su macro events**: block di 2gg pre-FOMC significherebbe
+  no entry per 20% dell'anno. Troppo restrittivo. Warning è la balance
+  giusta — il trader decide.
+- **Earnings TTL 7gg**: se una company riporta earnings e la prossima data
+  si sblocca il giorno successivo, il cache resta stale fino a 7gg. Workaround:
+  `propicks-calendar earnings --refresh` per forzare update.
 
 ## Risk framework v2 (post Phase 5)
 
@@ -889,7 +995,16 @@ propicks-bot run                         # daemon bloccante (polling + dispatche
 propicks-bot stats                       # counters queue delivery
 propicks-bot reset-retries               # recovery dopo errori persistenti
 propicks-bot reset-retries --alert-id 42 # reset solo uno specifico
-# Dalla chat Telegram: /status /portfolio /alerts /ack N /history /cache /regime /help
+# Dalla chat Telegram: /status /portfolio /alerts /ack N /history /cache /regime /report /calendar /help
+
+# Calendar (Phase 8) — earnings hard gate + macro events
+propicks-calendar earnings                      # portfolio+watchlist, 14gg
+propicks-calendar earnings --upcoming 30d --refresh  # forza fetch yfinance
+propicks-calendar macro                          # FOMC/CPI/NFP/ECB 14gg
+propicks-calendar macro --types FOMC,CPI         # filter events
+propicks-calendar check AAPL                     # gate status per ticker
+# Override hard gate (trade intentional post-earnings):
+propicks-portfolio add AAPL --ignore-earnings --entry ... --shares ... --stop ...
 
 # Test unit (solo domain/ + backtest, nessuna rete, DB SQLite ephemeral per test)
 pytest
