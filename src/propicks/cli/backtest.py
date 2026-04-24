@@ -104,6 +104,213 @@ def _print_ascii_equity(result, width: int = 60, height: int = 10) -> None:
         print("  " + "".join(row))
 
 
+def _run_portfolio_backtest(args: argparse.Namespace) -> int:
+    """Phase 6: portfolio-level backtest + optional walk-forward + MC."""
+    from propicks.backtest.costs import CostModel
+    from propicks.backtest.metrics_v2 import compute_portfolio_metrics
+    from propicks.backtest.portfolio_engine import BacktestConfig, simulate_portfolio
+    from propicks.backtest.walkforward import (
+        monte_carlo_bootstrap,
+        walk_forward_split,
+    )
+    from propicks.domain.scoring import (
+        score_distance_from_high,
+        score_ma_cross,
+        score_momentum,
+        score_trend,
+        score_volatility,
+        score_volume,
+    )
+    from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi
+    from propicks.market.yfinance_client import download_history
+
+    print(f"[portfolio] fetching {len(args.tickers)} ticker…", file=sys.stderr)
+    universe: dict = {}
+    for t in args.tickers:
+        try:
+            universe[t.upper()] = download_history(t, period=args.period)
+        except DataUnavailable as err:
+            print(f"[skip] {err}", file=sys.stderr)
+
+    if not universe:
+        print("[errore] nessun ticker disponibile", file=sys.stderr)
+        return 1
+
+    # Scoring function point-in-time: replica domain.scoring sui dati fino a bar t
+    from propicks.config import (
+        ATR_PERIOD,
+        EMA_FAST,
+        EMA_SLOW,
+        RSI_PERIOD,
+        VOLUME_AVG_PERIOD,
+        WEIGHT_DISTANCE_HIGH,
+        WEIGHT_MA_CROSS,
+        WEIGHT_MOMENTUM,
+        WEIGHT_TREND,
+        WEIGHT_VOLATILITY,
+        WEIGHT_VOLUME,
+    )
+
+    def _scoring_fn(ticker: str, hist_slice):
+        if len(hist_slice) < 200:
+            return None
+        close = hist_slice["Close"]
+        high = hist_slice["High"]
+        low = hist_slice["Low"]
+        volume = hist_slice["Volume"]
+
+        ema_fast = compute_ema(close, EMA_FAST).iloc[-1]
+        ema_slow = compute_ema(close, EMA_SLOW).iloc[-1]
+        rsi = compute_rsi(close, RSI_PERIOD).iloc[-1]
+        atr = compute_atr(high, low, close, ATR_PERIOD).iloc[-1]
+
+        price = float(close.iloc[-1])
+        cur_vol = float(volume.iloc[-1])
+        prev_vol = volume.iloc[-VOLUME_AVG_PERIOD - 1 : -1]
+        avg_vol = float(prev_vol.mean()) if not prev_vol.empty else cur_vol
+        high_52w = float(high.tail(min(252, len(high))).max())
+
+        ema_fast_s = compute_ema(close, EMA_FAST)
+        ema_slow_s = compute_ema(close, EMA_SLOW)
+        prev_ema_fast = float(ema_fast_s.iloc[-6]) if len(ema_fast_s) >= 6 else float("nan")
+        prev_ema_slow = float(ema_slow_s.iloc[-6]) if len(ema_slow_s) >= 6 else float("nan")
+
+        composite = (
+            score_trend(price, float(ema_fast), float(ema_slow)) * WEIGHT_TREND
+            + score_momentum(float(rsi)) * WEIGHT_MOMENTUM
+            + score_volume(cur_vol, avg_vol) * WEIGHT_VOLUME
+            + score_distance_from_high(price, high_52w) * WEIGHT_DISTANCE_HIGH
+            + score_volatility(float(atr), price) * WEIGHT_VOLATILITY
+            + score_ma_cross(
+                float(ema_fast), float(ema_slow), prev_ema_fast, prev_ema_slow
+            ) * WEIGHT_MA_CROSS
+        )
+        return max(0.0, min(100.0, composite))
+
+    cost_model = (
+        CostModel.from_bps(args.tc_bps)
+        if args.tc_bps is not None
+        else CostModel()
+    )
+    config = BacktestConfig(
+        initial_capital=args.initial_capital,
+        score_threshold=args.threshold,
+        stop_atr_mult=args.stop_atr,
+        target_atr_mult=args.target_atr,
+        time_stop_bars=args.time_stop,
+        cost_model=cost_model,
+        strategy_tag="momentum",
+        use_earnings_gate=False,  # backtest storico: earnings non disponibili pre-Phase 8
+    )
+
+    # Walk-forward mode?
+    if args.oos_split:
+        print(f"[walkforward] split {args.oos_split * 100:.0f}% train / {(1 - args.oos_split) * 100:.0f}% test")
+        wf = walk_forward_split(
+            universe=universe,
+            scoring_fn=_scoring_fn,
+            split_ratio=args.oos_split,
+            config=config,
+        )
+
+        header = [
+            ["", "Train", "Test"],
+            ["Window", f"{wf.train_window[0]} → {wf.train_window[1]}",
+             f"{wf.test_window[0]} → {wf.test_window[1]}"],
+            ["Total return", _fmt_pct(wf.train_metrics.get("total_return_pct") / 100 if wf.train_metrics.get("total_return_pct") else None),
+             _fmt_pct(wf.test_metrics.get("total_return_pct") / 100 if wf.test_metrics.get("total_return_pct") else None)],
+            ["CAGR", _fmt_pct(wf.train_metrics.get("cagr_pct") / 100 if wf.train_metrics.get("cagr_pct") else None),
+             _fmt_pct(wf.test_metrics.get("cagr_pct") / 100 if wf.test_metrics.get("cagr_pct") else None)],
+            ["Sharpe ann.", _fmt_num(wf.train_metrics.get("sharpe_annualized")),
+             _fmt_num(wf.test_metrics.get("sharpe_annualized"))],
+            ["Max DD", _fmt_pct(wf.train_metrics.get("max_drawdown_pct") / 100 if wf.train_metrics.get("max_drawdown_pct") else None),
+             _fmt_pct(wf.test_metrics.get("max_drawdown_pct") / 100 if wf.test_metrics.get("max_drawdown_pct") else None)],
+            ["N trades", wf.train_metrics.get("n_trades"), wf.test_metrics.get("n_trades")],
+        ]
+        print(tabulate(header, headers="firstrow", tablefmt="github"))
+        print()
+        sign = "✅ test > train" if wf.degradation_score >= 0 else "⚠️  overfitting suspect"
+        print(f"Degradation score: {wf.degradation_score:+.3f}  ({sign})")
+        return 0
+
+    # Single-shot portfolio backtest
+    state = simulate_portfolio(
+        universe=universe,
+        scoring_fn=_scoring_fn,
+        config=config,
+    )
+
+    metrics = compute_portfolio_metrics(state)
+    _print_portfolio_summary(metrics, state)
+
+    # Monte Carlo opzionale
+    if args.monte_carlo > 0:
+        print()
+        mc = monte_carlo_bootstrap(state.closed_trades, n_samples=args.monte_carlo)
+        _print_monte_carlo(mc)
+
+    return 0
+
+
+def _print_portfolio_summary(metrics: dict, state) -> None:
+    if "error" in metrics:
+        print(f"[errore] {metrics['error']}", file=sys.stderr)
+        return
+    print()
+    print("=" * 72)
+    print("PORTFOLIO BACKTEST — Phase 6")
+    print("=" * 72)
+    rows = [
+        ["Period", f"{metrics['period_start']} → {metrics['period_end']} ({metrics['days']}gg)"],
+        ["Capital", f"{metrics['initial_capital']:.2f} → {metrics['final_value']:.2f}"],
+        ["Total return", _fmt_pct(metrics['total_return_pct'] / 100)],
+        ["CAGR", _fmt_pct((metrics.get('cagr_pct') or 0) / 100)],
+        ["Sharpe annualized", _fmt_num(metrics.get('sharpe_annualized'))],
+        ["Sortino annualized", _fmt_num(metrics.get('sortino_annualized'))],
+        ["Max drawdown", _fmt_pct(metrics['max_drawdown_pct'] / 100)],
+        ["Calmar ratio", _fmt_num(metrics.get('calmar_ratio'))],
+        ["N trades", metrics['n_trades']],
+        ["Win rate", _fmt_pct(metrics['win_rate'])],
+        ["Profit factor", _fmt_num(metrics.get('profit_factor'))],
+        ["Avg duration (days)", metrics['avg_duration_days']],
+        ["Total TC (cost)", f"{metrics['total_commission']:.2f}"],
+    ]
+    print(tabulate(rows, tablefmt="simple"))
+
+    if metrics.get("by_strategy") and len(metrics["by_strategy"]) > 1:
+        print()
+        print("Per strategy:")
+        strat_rows = []
+        for strat, s in metrics["by_strategy"].items():
+            strat_rows.append([strat, s["n_trades"], _fmt_pct(s["win_rate"]),
+                              f"{s['avg_pnl_pct']:+.2f}%"])
+        print(tabulate(strat_rows, headers=["Strategy", "N", "Win rate", "Avg P&L"], tablefmt="github"))
+
+    if metrics.get("exit_reasons"):
+        print()
+        print("Exit reasons:")
+        for reason, n in metrics["exit_reasons"].items():
+            print(f"  {reason}: {n}")
+
+
+def _print_monte_carlo(mc) -> None:
+    print("=" * 72)
+    print(f"MONTE CARLO BOOTSTRAP — {mc.n_samples} samples")
+    print("=" * 72)
+    rows = [
+        ["Metric", "Mean", "CI 95% lower", "CI 95% upper"],
+        ["Sharpe", _fmt_num(mc.sharpe_mean), _fmt_num(mc.sharpe_ci[0]), _fmt_num(mc.sharpe_ci[1])],
+        ["Win rate", _fmt_pct(mc.win_rate_mean), _fmt_pct(mc.win_rate_ci[0]), _fmt_pct(mc.win_rate_ci[1])],
+        ["Total return", _fmt_pct(mc.total_return_mean), _fmt_pct(mc.total_return_ci[0]), _fmt_pct(mc.total_return_ci[1])],
+        ["Max DD", _fmt_pct(mc.max_dd_mean), _fmt_pct(mc.max_dd_ci[0]), _fmt_pct(mc.max_dd_ci[1])],
+    ]
+    print(tabulate(rows, headers="firstrow", tablefmt="github"))
+    print()
+    sign = "🟢 robusto" if mc.robustness_score >= 0.7 else "🟡 moderato" if mc.robustness_score >= 0.4 else "🔴 fragile"
+    print(f"Robustness score: {mc.robustness_score:.3f}  {sign}")
+    print("_(> 0.7 = Sharpe CI_95 vicino al mean → risultato robusto al random)_")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Walk-forward backtest della strategia single-stock (EOD, no slippage, no commissioni).",
@@ -127,7 +334,44 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Output JSON strutturato")
     parser.add_argument("--no-trades", action="store_true", help="Nasconde la tabella trade-by-trade")
     parser.add_argument("--no-equity", action="store_true", help="Nasconde l'ASCII equity curve")
+    # Phase 6 — portfolio backtest
+    parser.add_argument(
+        "--portfolio",
+        action="store_true",
+        help=(
+            "Phase 6: portfolio-level simulation (cross-ticker, TC + slippage, "
+            "max positions cap, cash reserve, earnings gate). Invece del loop "
+            "single-ticker legacy."
+        ),
+    )
+    parser.add_argument(
+        "--tc-bps",
+        type=float,
+        default=None,
+        help="Phase 6: total transaction cost in bps (applied per leg). Default: CostModel standard",
+    )
+    parser.add_argument(
+        "--oos-split",
+        type=float,
+        default=None,
+        help="Phase 6: walk-forward split ratio (es. 0.70 = 70%% train, 30%% test)",
+    )
+    parser.add_argument(
+        "--monte-carlo",
+        type=int,
+        default=0,
+        help="Phase 6: N samples Monte Carlo bootstrap su trade sequence (0 = skip)",
+    )
+    parser.add_argument(
+        "--initial-capital",
+        type=float,
+        default=10_000.0,
+        help="Phase 6: capitale iniziale portfolio (default 10.000)",
+    )
     args = parser.parse_args()
+
+    if args.portfolio:
+        return _run_portfolio_backtest(args)
 
     results = {}
     for t in args.tickers:

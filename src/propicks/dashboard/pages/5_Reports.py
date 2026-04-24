@@ -14,6 +14,7 @@ import streamlit as st
 
 from propicks.config import DATE_FMT, REPORTS_DIR
 from propicks.dashboard._shared import invariants_note, page_header
+from propicks.reports.attribution_report import weekly_attribution_report
 from propicks.reports.monthly import generate_monthly_report
 from propicks.reports.weekly import generate_weekly_report
 
@@ -42,7 +43,7 @@ tab_gen, tab_view = st.tabs(["Genera nuovo", "Sfoglia archivio"])
 with tab_gen:
     st.caption("La generazione scarica i prezzi correnti per l'unrealized P&L — può richiedere qualche secondo.")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Genera weekly report", type="primary", width="stretch"):
             with st.spinner("Genero report settimanale…"):
@@ -77,6 +78,30 @@ with tab_gen:
                 file_name=os.path.basename(path),
                 mime="text/markdown",
                 key="download_monthly_generated",
+            )
+
+    with col3:
+        if st.button(
+            "Genera attribution (Phase 9)",
+            width="stretch",
+            help="Decomposition α/β/sector/timing + Phase 7 gate status",
+        ):
+            with st.spinner("Genero attribution report…"):
+                result = weekly_attribution_report()
+                path = result["path"]
+                with open(path, encoding="utf-8") as f:
+                    content = f.read()
+            st.success(
+                f"Salvato: `{path}` — {result['n_closed_this_week']} trade chiusi questa settimana"
+            )
+            st.markdown("---")
+            st.markdown(content)
+            st.download_button(
+                "Download .md",
+                data=content,
+                file_name=os.path.basename(path),
+                mime="text/markdown",
+                key="download_attribution_generated",
             )
 
 # ---------------------------------------------------------------------------
