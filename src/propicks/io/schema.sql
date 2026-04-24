@@ -233,6 +233,47 @@ CREATE TABLE IF NOT EXISTS daily_budget (
 );
 
 -- ----------------------------------------------------------------------------
+-- 6. SCHEDULER (Phase 3)
+-- ----------------------------------------------------------------------------
+-- Audit trail per ogni esecuzione di job dello scheduler. Abilita:
+--   - stats affidabilità ("quante volte snapshot_portfolio è fallito ultimo mese")
+--   - debugging ("che errore ha avuto l'ultimo warm_cache?")
+--   - SLA monitoring ("quanto dura in media record_regime?")
+CREATE TABLE IF NOT EXISTS scheduler_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_name TEXT NOT NULL,
+  started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  finished_at TIMESTAMP,
+  status TEXT,                    -- 'success' | 'error' | 'partial'
+  duration_ms INTEGER,
+  n_items INTEGER,                -- count di item processati (ticker, snapshot, etc)
+  error TEXT,
+  notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_name, started_at);
+
+-- Queue di alerts generati dai job. Consumata da CLI oggi, da Phase 4
+-- Telegram bot domani. Design pending/acknowledged permette di vedere
+-- solo le cose ancora da leggere (``propicks-scheduler alerts``).
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  type TEXT NOT NULL,
+  -- 'watchlist_ready' | 'regime_change' | 'stale_position' |
+  -- 'trailing_stop_update' | 'stale_watchlist' | 'job_failed'
+  severity TEXT NOT NULL,         -- 'info' | 'warning' | 'critical'
+  ticker TEXT,                    -- nullable (es. regime_change non ha ticker)
+  message TEXT NOT NULL,
+  metadata TEXT,                  -- JSON blob con dettaglio (target, score, ecc.)
+  dedup_key TEXT,                 -- per evitare duplicati same-day (es. "AAPL_ready_2026-04-24")
+  acknowledged INTEGER DEFAULT 0,
+  acknowledged_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_pending ON alerts(acknowledged, created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key);
+
+
+-- ----------------------------------------------------------------------------
 -- Schema versioning
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS schema_version (

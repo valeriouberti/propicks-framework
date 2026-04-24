@@ -67,7 +67,13 @@ propicks-ai-framework/
 │   │   ├── rotate.py          # propicks-rotate (sector rotation ETF)
 │   │   ├── backtest.py        # propicks-backtest (walk-forward single-stock)
 │   │   ├── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
-│   │   └── cache.py           # propicks-cache (stats/warm/clear OHLCV cache)
+│   │   ├── cache.py           # propicks-cache (stats/warm/clear OHLCV cache)
+│   │   └── scheduler.py       # propicks-scheduler (run/job/alerts/history)
+│   ├── scheduler/             # Phase 3 — automazione EOD
+│   │   ├── jobs.py            # 6 job functions idempotenti + @run_job decorator
+│   │   ├── alerts.py          # alert queue CRUD + dedup_key logic
+│   │   ├── history.py         # scheduler_runs audit + stats
+│   │   └── runner.py          # APScheduler daemon (BlockingScheduler)
 │   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
 │       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
 │       ├── _shared.py         # Cached readers, formatters, UI primitives
@@ -122,6 +128,7 @@ propicks-ai-framework/
 - **anthropic** — SDK ufficiale per validazione tesi via Claude Opus 4.6
 - **pydantic** — validazione strutturata del verdict AI (`ThesisVerdict`)
 - **python-dotenv** — caricamento `.env` per `ANTHROPIC_API_KEY`
+- **apscheduler** (Phase 3) — cron-based scheduler per i 6 job EOD (``BlockingScheduler`` + ``CronTrigger`` tz ``Europe/Rome``)
 - **streamlit** (extra `[dashboard]`) — UI multi-page parallela alla CLI
 - **plotly** (extra `[dashboard]`) — chart interattivi opzionali (placeholder)
 - **pytest** (dev) — test unit su `domain/` e `ai/` (SDK mockato)
@@ -170,6 +177,106 @@ commodity/FX/indici, date e risultati di earnings, short interest e performance
 settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
+
+## Scheduler + alerts (post Phase 3)
+
+Automazione EOD via **APScheduler** (daemon) + **cron-callable jobs**.
+Ogni job idempotente, UPSERT-based, con audit trail in ``scheduler_runs``
+e alert queue in ``alerts``. Zero notifiche esterne (sono Phase 4 Telegram).
+
+### I 6 job
+
+| Job | Trigger default | Azione | Alert generati |
+|-----|-----------------|--------|----------------|
+| ``warm_cache`` | Mon-Fri 17:45 | Prefetch daily+weekly per portfolio + watchlist + benchmarks | — |
+| ``record_regime`` | Mon-Fri 18:00 | Classify ^GSPC weekly, UPSERT regime_history | ``regime_change`` |
+| ``snapshot_portfolio`` | Mon-Fri 18:30 | Mark-to-market, exposure per bucket, MTD/YTD, benchmark SPX+FTSEMIB | — |
+| ``scan_watchlist`` | Mon-Fri 18:30 | Score live, populate strategy_runs, READY detection | ``watchlist_ready`` |
+| ``trailing_stop_check`` | Mon-Fri 18:30 | Suggest trailing stop update su posizioni con trailing_enabled | ``trailing_stop_update``, ``stale_position`` |
+| ``cleanup_stale_watchlist`` | Sun 20:00 | Flag watchlist entries > 60gg + contrarian near-cap warning | ``stale_watchlist``, ``contra_near_cap`` |
+
+### Modalità operative
+
+**Daemon (sessione always-on)**:
+```bash
+propicks-scheduler run        # bloccante, tz=Europe/Rome
+```
+Run in tmux/nohup per persistenza. SIGINT / SIGTERM → shutdown grazioso.
+
+**Cron-callable (desktop-only, no daemon)**:
+```bash
+# macOS (launchd) o Linux (crontab -e). Esempio crontab:
+# Warm cache pre-EOD EU
+45 17 * * 1-5  /path/to/.venv/bin/propicks-scheduler job warm
+# Regime + snapshot + scan post EU close
+0  18 * * 1-5  /path/to/.venv/bin/propicks-scheduler job regime
+30 18 * * 1-5  /path/to/.venv/bin/propicks-scheduler job snapshot
+30 18 * * 1-5  /path/to/.venv/bin/propicks-scheduler job scan
+30 18 * * 1-5  /path/to/.venv/bin/propicks-scheduler job trailing
+# Weekly cleanup Sunday 20:00
+0  20 * * 0    /path/to/.venv/bin/propicks-scheduler job cleanup
+```
+
+### Alert workflow
+
+```bash
+propicks-scheduler alerts             # lista pending con badge severity
+propicks-scheduler alerts --stats     # aggregate per type/severity
+propicks-scheduler alerts --ack 42    # acknowledge singolo
+propicks-scheduler alerts --ack-all   # mark all as read
+```
+
+Dedup: ogni alert ha ``dedup_key`` (es. ``AAPL_ready_2026-04-24``). Se
+un alert con stesso key è già pending, il secondo ``create_alert`` no-op.
+Questo evita spam quando warm_cache alle 17:45 e scan_watchlist alle
+18:30 producono lo stesso READY alert. Gli alert già **acknowledged**
+non bloccano la creazione di nuovi con stesso key (permette
+ri-triggerare "ready" settimana dopo).
+
+### Audit trail
+
+```bash
+propicks-scheduler history             # ultimi 20 run con status/duration
+propicks-scheduler history --days 7    # stats aggregate ultimi 7gg
+```
+
+Ogni job logga in ``scheduler_runs``: ``started_at``, ``finished_at``,
+``status`` (success/error/partial), ``duration_ms``, ``n_items``
+processati, ``error`` + traceback se fallito. Abilita:
+
+```sql
+-- Job affidabilità ultimo mese
+SELECT job_name, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)*1.0/COUNT(*) AS rate
+FROM scheduler_runs
+WHERE started_at > datetime('now', '-30 days')
+GROUP BY job_name;
+
+-- Warm cache più lento del solito? (regression detection)
+SELECT DATE(started_at), AVG(duration_ms) AS avg_ms
+FROM scheduler_runs WHERE job_name='warm_cache'
+GROUP BY 1 ORDER BY 1 DESC LIMIT 14;
+```
+
+### Benchmark misurati (dati reali)
+
+- ``warm_cache``: 6.0s su 11 ticker (portfolio 1 + watchlist 7 + benchmarks 3)
+- ``scan_watchlist``: 5.5s primo run (miss cache residui), **78ms** seconda run (tutto hit cache Phase 2)
+- ``record_regime``: 1.2s
+- ``snapshot_portfolio``: 2.6s (include fetch benchmark SPX + FTSEMIB)
+
+### Design choices
+
+- **APScheduler BlockingScheduler** + ``CronTrigger`` tz-aware (Europe/Rome). Nessun JobStore persistente — il daemon è stateless, riavvii non perdono cron schedule (sono hardcoded in runner.py).
+- **Idempotenza via UPSERT** su ``portfolio_snapshots``, ``regime_history``. Rigirare un job lo stesso giorno aggiorna, non duplica.
+- **Idempotenza via dedup_key** su ``alerts``. Rigirare scan_watchlist 3 volte al giorno non spam.
+- **Non auto-apply** modifiche di stop/target: il trader resta il decision-maker. I job generano alert informativi; l'applicazione passa da ``propicks-portfolio manage --apply``.
+- **Scheduler non è AI-aware**: i job ``scan_watchlist`` e ``trailing_stop_check`` NON chiamano Claude. Risparmio tokens: la validazione AI resta on-demand via flag ``--validate`` dei CLI.
+
+### Trade-off accettati
+
+- **Manual cron wiring**: nessun installer automatico (launchd plist / systemd unit). Il trader copia-incolla le righe crontab dalla doc. Motivo: `launchctl load` richiede permessi e formato XML platform-specific — out-of-scope per MVP.
+- **Nessuna retry**: se un job fallisce, resta errore registrato in scheduler_runs, niente retry automatico. Il prossimo trigger giornaliero è il retry naturale. Per fallimenti consecutivi, guardare ``history --days 3``.
+- **Nessun lock cross-process**: due daemon in parallelo duplicherebbero scheduler_runs. Non abbiamo PID lock file. Il trader responsabilizzato sull'avvio unico.
 
 ## Market data cache (post Phase 2)
 
@@ -363,6 +470,16 @@ propicks-cache warm AAPL --force        # invalida + refetch (garantito fresh)
 propicks-cache clear --ticker AAPL      # wipe solo AAPL
 propicks-cache clear --all              # wipe totale (si ricrea al primo scan)
 propicks-cache clear --stale            # solo righe fuori TTL (8h daily / 7gg weekly)
+
+# Scheduler (Phase 3) — automazione EOD + audit trail + alert queue
+propicks-scheduler run                  # daemon APScheduler bloccante (Europe/Rome)
+propicks-scheduler job regime           # esegue 1 job one-shot (per OS cron)
+propicks-scheduler job snapshot --date 2026-04-23  # backfill snapshot specifico
+propicks-scheduler alerts               # lista alert pending con severity
+propicks-scheduler alerts --ack 42      # acknowledge singolo
+propicks-scheduler alerts --ack-all     # mark all as read
+propicks-scheduler history              # ultimi 20 job run
+propicks-scheduler history --days 7     # stats aggregate per job ultimi 7gg
 
 # Test unit (solo domain/ + backtest, nessuna rete, DB SQLite ephemeral per test)
 pytest
