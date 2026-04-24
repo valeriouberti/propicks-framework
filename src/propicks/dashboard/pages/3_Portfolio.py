@@ -326,6 +326,104 @@ with tab_risk:
                     )
 
         st.divider()
+
+        # -------------------------------------------------------------------
+        # Phase 5: Advanced risk metrics — VaR, vol annualized, Kelly per-strategy
+        # -------------------------------------------------------------------
+        st.subheader(
+            "⚗️ Advanced risk metrics (Phase 5)",
+            help="Kelly fractional + vol annualized + VaR 95% + expected shortfall. "
+                 "Advisory — i hard cap restano attivi.",
+        )
+
+        from propicks.domain.risk import (
+            portfolio_var_95,
+            portfolio_vol_annualized,
+            strategy_kelly_from_trades,
+        )
+        from propicks.io.journal_store import load_journal as _load_journal
+
+        # Weights mark-to-market
+        total_mtm = portfolio_market_value(portfolio, prices_map)
+        weights_mtm: dict[str, float] = {}
+        if total_mtm > 0:
+            for tk, pos in positions.items():
+                cur_p = prices_map.get(tk) or pos.get("entry_price")
+                shares_p = float(pos.get("shares") or 0)
+                weights_mtm[tk] = (shares_p * float(cur_p)) / total_mtm
+
+        # returns già scaricati sopra per la correlation matrix
+        if "returns" not in dir() or returns is None or returns.empty:
+            st.caption("_Returns non disponibili — skip VaR/vol._")
+        else:
+            vol_info = portfolio_vol_annualized(returns, weights_mtm)
+            var_info = portfolio_var_95(returns, weights_mtm, horizon_days=5)
+
+            cols_v = st.columns(4)
+            cols_v[0].metric(
+                "Vol annualized",
+                f"{vol_info['vol_annualized'] * 100:.2f}%",
+                help="Volatility portfolio annualizzata (covariance-weighted).",
+            )
+            var_pct = var_info.get("var_95_pct")
+            cols_v[1].metric(
+                "VaR 95% (5gg)",
+                f"{var_pct:.2f}%" if var_pct is not None else "—",
+                help="5° percentile della distribuzione P&L 5gg (bootstrap 500). "
+                     "C'è 5% probabilità di perdere almeno questo %.",
+            )
+            es_pct = var_info.get("expected_shortfall_pct")
+            cols_v[2].metric(
+                "Expected Shortfall",
+                f"{es_pct:.2f}%" if es_pct is not None else "—",
+                help="Loss media condizionale al worst 5%.",
+            )
+            worst = var_info.get("worst_case_pct")
+            cols_v[3].metric(
+                "Worst case (simulato)",
+                f"{worst:.2f}%" if worst is not None else "—",
+                help="Peggior scenario osservato nelle 500 simulazioni.",
+            )
+
+        # Kelly per-strategy
+        st.markdown("**Kelly fractional per strategia (advisory)**")
+        trades_journal = _load_journal()
+        strategies_in_journal = sorted({
+            (t.get("strategy") or "").strip()
+            for t in trades_journal
+            if t.get("status") == "closed" and t.get("strategy")
+        })
+        if not strategies_in_journal:
+            st.caption("_Nessuna strategia con trade chiusi nel journal._")
+        else:
+            kelly_rows = []
+            for strat in strategies_in_journal:
+                k = strategy_kelly_from_trades(trades_journal, strat)
+                kelly_rows.append({
+                    "Strategia": strat,
+                    "n_trades": k["n_trades"],
+                    "Win rate": (
+                        f"{k['win_rate'] * 100:.1f}%"
+                        if k.get("win_rate") is not None else "—"
+                    ),
+                    "W/L ratio": (
+                        f"{k['win_loss_ratio']:.2f}"
+                        if k.get("win_loss_ratio") is not None else "—"
+                    ),
+                    "Kelly %": (
+                        f"{k['kelly_pct'] * 100:.2f}%"
+                        if k.get("usable") else "—"
+                    ),
+                    "Status": "✅" if k.get("usable") else f"⚠️ {k.get('reason', '?')[:40]}",
+                })
+            st.dataframe(kelly_rows, width="stretch", hide_index=True)
+            st.caption(
+                "**Kelly fractional 25%** da journal storico. Advisory — "
+                "mai override dei hard cap. Sotto 15 trade chiusi il Kelly "
+                "non è affidabile e viene skippato (status ⚠️)."
+            )
+
+        st.divider()
         render_indicator_legend("portfolio")
 
 # ---------------------------------------------------------------------------

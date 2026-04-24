@@ -270,6 +270,10 @@ def cmd_risk(_: argparse.Namespace) -> int:
 def cmd_size(args: argparse.Namespace) -> int:
     portfolio = load_portfolio()
     bucket = "contrarian" if getattr(args, "contrarian", False) else "momentum"
+
+    if getattr(args, "advanced", False):
+        return _cmd_size_advanced(args, portfolio, bucket)
+
     r = calculate_position_size(
         entry_price=args.entry,
         stop_price=args.stop,
@@ -280,6 +284,163 @@ def cmd_size(args: argparse.Namespace) -> int:
     )
     _print_size_result(args.ticker, r)
     return 0 if r.get("ok") else 2
+
+
+def _cmd_size_advanced(args, portfolio: dict, bucket: str) -> int:
+    """Advanced sizing: base + Kelly + vol target + corr penalty (Phase 5)."""
+    from propicks.domain.sizing_v2 import (
+        apply_correlation_penalty,
+        calculate_position_size_advanced,
+    )
+    from propicks.io.journal_store import load_journal
+
+    trades = load_journal()
+
+    # Returns DataFrame + corr matrix: solo se ci sono posizioni esistenti.
+    # Skip i download di rete se portfolio vuoto (niente da correlare).
+    positions = portfolio.get("positions", {})
+    returns_df = None
+    corr_matrix = None
+    if positions:
+        from propicks.market.yfinance_client import download_returns
+        all_tickers = list({*positions.keys(), args.ticker.upper()})
+        print(f"[advanced] fetching returns per {len(all_tickers)} ticker...", file=sys.stderr)
+        returns_df = download_returns(all_tickers, period="6mo")
+        if not returns_df.empty:
+            corr_matrix = returns_df.corr()
+
+    # Strategy name: l'user può passarlo via --strategy. Altrimenti uso il bucket.
+    strategy_name = getattr(args, "strategy_name", None) or (
+        "Contrarian" if bucket == "contrarian" else None
+    )
+
+    r = calculate_position_size_advanced(
+        entry_price=args.entry,
+        stop_price=args.stop,
+        score_claude=args.score_claude,
+        score_tech=args.score_tech,
+        portfolio=portfolio,
+        strategy_bucket=bucket,
+        strategy_name=strategy_name,
+        trades=trades,
+        returns_df=returns_df,
+        target_vol=getattr(args, "vol_target", 0.15),
+    )
+
+    # Applica correlation penalty se disponibile
+    if corr_matrix is not None and positions and r.get("ok"):
+        total_cap = float(portfolio.get("cash") or 0) + sum(
+            float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+            for p in positions.values()
+        )
+        existing_weights = {}
+        if total_cap > 0:
+            for ticker, p in positions.items():
+                invested = float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+                existing_weights[ticker] = invested / total_cap
+        r = apply_correlation_penalty(
+            r,
+            new_ticker=args.ticker,
+            existing_weights=existing_weights,
+            corr_matrix=corr_matrix,
+        )
+
+    _print_advanced_size_result(args.ticker, r)
+    return 0 if r.get("ok") else 2
+
+
+def _print_advanced_size_result(ticker: str, r: dict) -> None:
+    """Print breakdown del calculate_position_size_advanced."""
+    from tabulate import tabulate
+
+    if not r.get("ok"):
+        print(f"[{ticker}] NOT OK: {r.get('error', 'unknown')}", file=sys.stderr)
+        return
+
+    # Riepilogo finale
+    base_shares = r.get("base_shares", r["shares"])
+    reduction = r.get("shares_reduction", 0)
+    binding = r.get("binding_constraint", "—")
+
+    summary = [
+        ["Ticker", ticker.upper()],
+        ["Strategy bucket", r.get("strategy_bucket")],
+        ["Entry × shares", f"{r['entry_price']:.2f} × {r['shares']}"],
+        ["Position value", f"€ {r['final_value']:,.2f}"],
+        ["Final size %", f"{r['final_size_pct'] * 100:.2f}%"],
+        ["Base (naive) size %", f"{r['base_size_pct'] * 100:.2f}%"],
+        ["Binding constraint", binding],
+    ]
+    if reduction > 0:
+        summary.append(
+            ["Shares reduction", f"{reduction} shares (from {base_shares} → {r['shares']})"]
+        )
+    print(tabulate(summary, tablefmt="simple"))
+    print()
+
+    breakdown = r.get("breakdown", {})
+
+    # Kelly detail
+    kelly = breakdown.get("kelly", {})
+    if kelly:
+        print("--- Kelly per strategia ---")
+        if kelly.get("usable"):
+            rows = [
+                ["n_trades", kelly["n_trades"]],
+                ["win_rate", f"{kelly['win_rate'] * 100:.1f}%"],
+                ["win/loss ratio", f"{kelly['win_loss_ratio']:.2f}"],
+                ["avg_win / avg_loss", f"+{kelly['avg_win_pct']:.2f}% / {kelly['avg_loss_pct']:.2f}%"],
+                ["Kelly pct (fractional 25%)", f"{kelly['kelly_pct'] * 100:.2f}%"],
+            ]
+        else:
+            rows = [
+                ["Status", "NON USABILE"],
+                ["Reason", kelly.get("reason", "—")],
+                ["n_trades", kelly.get("n_trades", 0)],
+            ]
+        print(tabulate(rows, tablefmt="simple"))
+        print()
+
+    # Vol info
+    vol = breakdown.get("current_vol")
+    if vol:
+        print("--- Portfolio vol corrente ---")
+        rows = [
+            ["Vol annualized", f"{vol['vol_annualized'] * 100:.2f}%"],
+            ["n_tickers_used", vol["n_tickers_used"]],
+            ["Weight coverage", f"{vol.get('total_weight_used', 0) * 100:.2f}%"],
+        ]
+        print(tabulate(rows, tablefmt="simple"))
+        vt = breakdown.get("vol_target")
+        if vt:
+            print()
+            rows = [
+                ["Target vol", f"{vt['target_vol'] * 100:.0f}%"],
+                ["Current vol", f"{vt['current_vol'] * 100:.2f}%"],
+                ["Scale factor", f"{vt['scale_factor']:.3f}"],
+                ["Recommendation", vt["recommendation"]],
+            ]
+            print(tabulate(rows, tablefmt="simple"))
+        print()
+
+    # Corr penalty
+    corr = breakdown.get("corr_penalty")
+    if corr:
+        print("--- Correlation penalty ---")
+        rows = [
+            ["Scale factor", f"{corr.get('scale_factor', 1.0):.3f}"],
+            ["Effective duplicate exposure", f"{corr.get('effective_exposure', 0) * 100:.2f}%"],
+        ]
+        pairs = corr.get("correlated_pairs", [])
+        if pairs:
+            rows.append(["Correlated with", ", ".join(f"{t}({c:+.2f})" for t, c in pairs[:5])])
+        print(tabulate(rows, tablefmt="simple"))
+        print()
+
+    if r.get("warnings"):
+        print("Warnings:")
+        for w in r["warnings"]:
+            print(f"  ⚠️  {w}")
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -465,6 +626,27 @@ def main() -> int:
         "--contrarian",
         action="store_true",
         help="Applica regole bucket contrarian: size cap 8%%, max 3 pos, 20%% aggregate",
+    )
+    p_size.add_argument(
+        "--advanced",
+        action="store_true",
+        help=(
+            "Phase 5 advanced sizing: applica Kelly fractional da journal + "
+            "vol target + corr penalty. Hard caps restano attivi (solo downscale)."
+        ),
+    )
+    p_size.add_argument(
+        "--strategy-name",
+        help=(
+            "Tag strategia per matching Kelly (es. TechTitans, Contrarian). "
+            "Se omesso, usa default del bucket."
+        ),
+    )
+    p_size.add_argument(
+        "--vol-target",
+        type=float,
+        default=0.15,
+        help="Portfolio vol target annualizzato (default 0.15 = 15%%)",
     )
     p_size.set_defaults(func=cmd_size)
 

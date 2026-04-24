@@ -30,6 +30,8 @@ propicks-ai-framework/
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
 │   │   ├── attribution.py     # Phase 9: decompose trade (α/β/sector/timing) + gate Phase 7
 │   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
+│   │   ├── sizing_v2.py       # Phase 5: calculate_position_size_advanced (Kelly + vol + corr)
+│   │   ├── risk.py            # Phase 5: kelly_fractional, VaR, vol, corr_adjusted (pure math)
 │   │   ├── trade_mgmt.py      # Trailing stop ATR-based + time stop (gestione in-vita)
 │   │   ├── exposure.py        # Concentrazione settoriale + beta-weighted + correlazioni
 │   │   ├── validation.py      # validate_scores, validate_date
@@ -187,6 +189,126 @@ commodity/FX/indici, date e risultati di earnings, short interest e performance
 settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
+
+## Risk framework v2 (post Phase 5)
+
+Advanced sizing layer che **estende** (non rimpiazza) il sizing classico
+con 4 risk metrics matematici. **Principio di sicurezza**: i hard cap
+esistenti (8% contrarian, 15% momentum, 20% ETF, 20% bucket cap, 80% max cash
+reserve, 8% / 12% max loss per trade) **sempre vincono**. Il layer v2
+può solo **scalare down**, mai up.
+
+### Le 4 metriche
+
+1. **Kelly fractional 25%** — da journal storico trade chiusi
+   - Formula: `f* = (p×b - q)/b`, poi ×0.25 (quarter Kelly, industry retail)
+   - Safety floor: cap a 20% anche con fractional (KELLY_MAX)
+   - Richiede ≥ 15 trade chiusi per strategia → sotto soglia = "non usabile"
+   - Degenerate sample (tutti win o tutti loss) = "non usabile"
+
+2. **Portfolio vol annualized** — `σ = sqrt(w'Σw) × sqrt(252)`
+   - Covariance da 6 mesi daily returns (cache Phase 2)
+   - Display + usato per vol target scaling
+
+3. **Portfolio VaR 95%** — bootstrap su 6mo daily returns
+   - 500 simulazioni, horizon configurabile (default 5gg)
+   - VaR + Expected Shortfall + worst case osservato
+   - Display-only, zero hard gate (info per decisione trader)
+
+4. **Correlation penalty** — scala down se nuovo ticker correlato ≥0.7 con esistenti
+   - `effective_exposure = sum(weight_i × corr(new, i))` per corr ≥ threshold
+   - `scale_factor = max(0, 1 - effective × penalty_factor)` (default 0.5)
+   - Previene "diversificazione camuffata" (AAPL+MSFT+GOOGL = 1 scommessa tech 3x)
+
+### Flow sizing advanced
+
+```
+propicks-portfolio size AAPL --entry 180 --stop 168 --advanced
+    │
+    ▼
+[1] calculate_position_size (hard caps + MIN_CASH + risk-per-trade)
+    ▼ base_size_pct, base_shares
+[2] strategy_kelly_from_trades (se use_kelly + journal ≥15 trade)
+    ▼ Kelly < base? → scale down. Kelly > base? → ignora (safety).
+[3] portfolio_vol_annualized + vol_target_scale (se use_vol_target)
+    ▼ Vol corrente > target? → scale down. Vol < target? → ignora (safety).
+[4] apply_correlation_penalty (se corr_matrix + new_ticker)
+    ▼ Corr ≥ 0.7 con esistenti? → scale down proporzionale.
+[5] final_shares = min(final_shares, base_shares)  ← safety hardstop
+```
+
+**Safety invariant (verified by test)**: `final_shares ≤ base_shares` *sempre*.
+
+### CLI
+
+```bash
+propicks-portfolio size AAPL --entry 180 --stop 168 \
+  --score-claude 7 --score-tech 75 --advanced \
+  --strategy-name TechTitans --vol-target 0.12
+```
+
+Output include **breakdown completo**:
+- Base sizing (shares, size%, conviction, source)
+- Kelly (n_trades, win_rate, W/L ratio, kelly_pct) o reason if non usable
+- Current portfolio vol + scale factor vs target
+- Correlation penalty (pairs, effective exposure, scale factor)
+- Binding constraint: **quale** factor ha limitato la size finale
+
+### Dashboard
+
+Il tab "Rischio & esposizione" di `3_Portfolio.py` è esteso con:
+- **Vol annualized**, **VaR 95% (5gg)**, **Expected Shortfall**, **Worst case** come metric card
+- **Kelly per strategia** table: n_trades, win rate, W/L ratio, kelly %, usable status
+- Legenda integrata nell'expander esistente
+
+Tutte le metriche sono **derivate dalla cache Phase 2** — zero chiamate yfinance extra
+quando il portfolio è già caricato.
+
+### Config defaults
+
+```python
+# risk.py
+MIN_TRADES_FOR_KELLY = 15        # sotto → skip Kelly (sample insufficient)
+KELLY_FRACTION_DEFAULT = 0.25    # quarter Kelly
+KELLY_MAX = 0.20                 # safety cap anche con fractional
+TRADING_DAYS_PER_YEAR = 252
+
+# sizing_v2.py
+DEFAULT_TARGET_VOL_ANNUALIZED = 0.15  # 15% target (retail conservative)
+```
+
+Override via CLI: `--vol-target 0.10` (più conservativo).
+
+### Perché Kelly fractional e non full
+
+- **Input stimati, non noti**: P(win) e W/L sono stime storiche con sample basso.
+  Full Kelly su input stimati è historicamente disastroso (volatility blowup).
+- **25% "quarter Kelly"** è industry standard retail (Thorp, Vince, MAN AHL).
+- **Cap 20% assoluto**: anche con fractional, mai oltre 20% su una singola
+  posizione — safety floor indipendente dalla Kelly math.
+
+### Perché vol target scaling solo DOWN
+
+- Scaling **up** via vol target richiederebbe assumption che il target vol è
+  *raggiungibile* — se il portfolio è già poco volatile, aumentare le posizioni
+  per "riempire" il budget di vol è un'ottimizzazione aggressiva.
+- Per retail, preferiamo **safety-first**: scale down OK, scale up mai via vol
+  target. Il trader decide manualmente se aumentare esposizione quando vol < target.
+
+### Trade-off accettati
+
+- **Beta statico** per VaR/vol: usiamo beta da `market_ticker_meta` (TTL 7gg).
+  Se il titolo ha cambiato profile recentemente, VaR può sottostimare.
+- **Correlation 6mo fissa**: non usiamo rolling correlation (sarebbe più realistico
+  ma introduce più volatilità nelle stime e quindi nel sizing). 6mo è sweet spot.
+- **Kelly non regime-aware**: un trade in BEAR non usa Kelly stimato su BULL.
+  Miglioramento possibile Phase 6: Kelly condizionale a regime corrente.
+- **Corr penalty lineare**: `1 - eff × penalty_factor`. Su correlazioni multiple
+  compound, il penalty si somma linearmente. Non riflette correttamente la
+  "saturazione" (2 ticker correlati 0.9 ciascuno a 25% non sono peggio di uno a 50%).
+  Accettabile per MVP.
+- **Nessun drawdown scaling dinamico**: Vegas-style "scale up after losses" o
+  "scale down after wins" NON implementati — out of scope Phase 5.
 
 ## P&L attribution + weekly report (post Phase 9)
 
@@ -653,6 +775,11 @@ propicks-scan AAPL --force-validate   # bypassa gate (score + regime) e cache
 # Calcolo position size per un trade
 propicks-portfolio size AAPL --entry 185.50 --stop 171.50 \
   --score-claude 8 --score-tech 75
+# Phase 5 advanced: Kelly fractional + vol target + corr penalty (opt-in)
+propicks-portfolio size AAPL --entry 185.50 --stop 171.50 \
+  --score-claude 8 --score-tech 75 --advanced \
+  --strategy-name TechTitans --vol-target 0.15
+# Hard caps (8%/15%/20%) restano attivi — Kelly è advisory (solo scale down).
 
 # Stato del portafoglio e rischio aggregato (risk include esposizione settori,
 # beta-weighted vs SPX, top pair correlate >= 0.7)
