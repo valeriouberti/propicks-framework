@@ -18,6 +18,10 @@ from datetime import datetime
 
 from propicks.config import (
     CAPITAL,
+    CONTRA_MAX_AGGREGATE_EXPOSURE_PCT,
+    CONTRA_MAX_LOSS_PER_TRADE_PCT,
+    CONTRA_MAX_POSITION_SIZE_PCT,
+    CONTRA_MAX_POSITIONS,
     DATE_FMT,
     MAX_LOSS_PER_TRADE_PCT,
     MAX_POSITION_SIZE_PCT,
@@ -27,7 +31,12 @@ from propicks.config import (
     MIN_SCORE_TECH,
     PORTFOLIO_FILE,
 )
-from propicks.domain.sizing import portfolio_value
+from propicks.domain.sizing import (
+    contrarian_aggregate_exposure,
+    contrarian_position_count,
+    is_contrarian_position,
+    portfolio_value,
+)
 from propicks.domain.validation import validate_scores
 from propicks.io.atomic import atomic_write_json
 from propicks.io.migrations import migrate, stamp_version
@@ -169,11 +178,47 @@ def add_position(
         )
 
     total = portfolio_value(portfolio)
-    if cost > total * MAX_POSITION_SIZE_PCT:
+
+    # Riconosci il bucket dal tag strategy. I gate contrarian sono più stretti
+    # del momentum (size cap 8%, bucket cap 20%, max 3 pos) e DEVONO essere
+    # enforced qui — altrimenti `add_position` diretto bypassa `calculate_position_size`.
+    is_contra = isinstance(strategy, str) and strategy.lower().startswith("contra")
+    if is_contra:
+        size_cap_pct = CONTRA_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = CONTRA_MAX_LOSS_PER_TRADE_PCT
+    else:
+        size_cap_pct = MAX_POSITION_SIZE_PCT
+        loss_cap_pct = MAX_LOSS_PER_TRADE_PCT
+
+    if cost > total * size_cap_pct:
+        bucket_label = "contrarian" if is_contra else "standard"
         raise ValueError(
             f"Size {cost/total*100:.1f}% supera il limite "
-            f"{MAX_POSITION_SIZE_PCT*100:.0f}% per posizione."
+            f"{size_cap_pct*100:.0f}% per posizione ({bucket_label})."
         )
+
+    if is_contra:
+        contra_n = contrarian_position_count(portfolio)
+        if contra_n >= CONTRA_MAX_POSITIONS:
+            raise ValueError(
+                f"Bucket contrarian pieno: {contra_n}/{CONTRA_MAX_POSITIONS} "
+                f"posizioni contrarian aperte."
+            )
+        # Esposizione aggregata dopo l'aggiunta:
+        new_contra_value = sum(
+            float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+            for p in positions.values()
+            if _is_contrarian_position(p)
+        ) + cost
+        new_contra_pct = new_contra_value / total if total > 0 else 0.0
+        if new_contra_pct > CONTRA_MAX_AGGREGATE_EXPOSURE_PCT:
+            current_expo = contrarian_aggregate_exposure(portfolio)
+            raise ValueError(
+                f"Aggiungere {ticker} porterebbe l'esposizione contrarian a "
+                f"{new_contra_pct*100:.1f}% (da {current_expo*100:.1f}%), "
+                f"sopra il cap {CONTRA_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+
     new_cash = cash - cost
     if new_cash < total * MIN_CASH_RESERVE_PCT:
         raise ValueError(
@@ -182,10 +227,11 @@ def add_position(
             f"< {total * MIN_CASH_RESERVE_PCT:.2f}."
         )
     risk_pct_trade = (entry_price - stop_loss) / entry_price
-    if risk_pct_trade > MAX_LOSS_PER_TRADE_PCT:
+    if risk_pct_trade > loss_cap_pct:
+        bucket_label = "contrarian" if is_contra else "standard"
         raise ValueError(
             f"Stop distante {risk_pct_trade*100:.2f}% > limite "
-            f"{MAX_LOSS_PER_TRADE_PCT*100:.0f}% per trade."
+            f"{loss_cap_pct*100:.0f}% per trade ({bucket_label})."
         )
     if score_claude is not None and score_claude < MIN_SCORE_CLAUDE:
         raise ValueError(

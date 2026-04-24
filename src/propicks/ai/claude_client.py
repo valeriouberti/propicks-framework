@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from propicks.ai.contrarian_prompts import CONTRA_SYSTEM_PROMPT
 from propicks.ai.etf_prompts import ETF_SYSTEM_PROMPT
 from propicks.ai.prompts import SYSTEM_PROMPT
 from propicks.config import (
@@ -63,6 +64,52 @@ class ThesisVerdict(BaseModel):
     target_rationale: str
     confidence_by_dimension: ConfidenceByDimension
     suggested_adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContraConfidenceByDimension(BaseModel):
+    """Confidence per-dimensione (0-10) sulle 5 dimensioni del framework contrarian."""
+
+    quality_persistence: int = Field(ge=0, le=10)
+    catalyst_type_assessment: int = Field(ge=0, le=10)
+    market_context: int = Field(ge=0, le=10)
+    reversion_path: int = Field(ge=0, le=10)
+    fundamental_risk: int = Field(ge=0, le=10)
+
+
+class ContrarianVerdict(BaseModel):
+    """Schema strutturato della risposta di Claude per setup mean reversion.
+
+    La chiave discriminante è ``flush_vs_break``: il selloff è un flush tecnico
+    di qualità (buy) o una frattura strutturale (reject)?
+    """
+
+    verdict: str = Field(description="CONFIRM | CAUTION | REJECT")
+    flush_vs_break: str = Field(description="FLUSH | BREAK | MIXED")
+    catalyst_type: str = Field(
+        description=(
+            "macro_flush | sector_rotation | earnings_miss_fundamental | "
+            "fraud_or_accounting | guidance_cut | technical_only | other"
+        )
+    )
+    conviction_score: int = Field(ge=0, le=10)
+    thesis_summary: str
+    reversion_target: float = Field(
+        description="Price at which to take profit (typical: EMA50 daily)"
+    )
+    invalidation_price: float = Field(
+        description="Price at which thesis is invalidated (hard stop)"
+    )
+    time_horizon_days: int = Field(
+        ge=3, le=30, description="Expected days to thesis resolution (5-15 typical)"
+    )
+    bull_case: list[str]
+    bear_case: list[str]
+    key_risks: list[str]
+    invalidation_triggers: list[str]
+    entry_tactic: str = Field(
+        description="MARKET_NOW | LIMIT_BELOW | SCALE_IN_TRANCHES | WAIT_STABILIZATION"
+    )
+    confidence_by_dimension: ContraConfidenceByDimension
 
 
 class ETFConfidenceByDimension(BaseModel):
@@ -193,6 +240,76 @@ _JSON_SCHEMA = {
         "target_rationale",
         "confidence_by_dimension",
         "suggested_adjustments",
+    ],
+    "additionalProperties": False,
+}
+
+
+_CONTRA_CONFIDENCE_KEYS = (
+    "quality_persistence",
+    "catalyst_type_assessment",
+    "market_context",
+    "reversion_path",
+    "fundamental_risk",
+)
+
+_CONTRA_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["CONFIRM", "CAUTION", "REJECT"]},
+        "flush_vs_break": {"type": "string", "enum": ["FLUSH", "BREAK", "MIXED"]},
+        "catalyst_type": {
+            "type": "string",
+            "enum": [
+                "macro_flush",
+                "sector_rotation",
+                "earnings_miss_fundamental",
+                "fraud_or_accounting",
+                "guidance_cut",
+                "technical_only",
+                "other",
+            ],
+        },
+        "conviction_score": {"type": "integer"},
+        "thesis_summary": {"type": "string"},
+        "reversion_target": {"type": "number"},
+        "invalidation_price": {"type": "number"},
+        "time_horizon_days": {"type": "integer"},
+        "bull_case": {"type": "array", "items": {"type": "string"}},
+        "bear_case": {"type": "array", "items": {"type": "string"}},
+        "key_risks": {"type": "array", "items": {"type": "string"}},
+        "invalidation_triggers": {"type": "array", "items": {"type": "string"}},
+        "entry_tactic": {
+            "type": "string",
+            "enum": [
+                "MARKET_NOW",
+                "LIMIT_BELOW",
+                "SCALE_IN_TRANCHES",
+                "WAIT_STABILIZATION",
+            ],
+        },
+        "confidence_by_dimension": {
+            "type": "object",
+            "properties": {k: {"type": "integer"} for k in _CONTRA_CONFIDENCE_KEYS},
+            "required": list(_CONTRA_CONFIDENCE_KEYS),
+            "additionalProperties": False,
+        },
+    },
+    "required": [
+        "verdict",
+        "flush_vs_break",
+        "catalyst_type",
+        "conviction_score",
+        "thesis_summary",
+        "reversion_target",
+        "invalidation_price",
+        "time_horizon_days",
+        "bull_case",
+        "bear_case",
+        "key_risks",
+        "invalidation_triggers",
+        "entry_tactic",
+        "confidence_by_dimension",
     ],
     "additionalProperties": False,
 }
@@ -425,3 +542,14 @@ def call_etf_validation(user_prompt: str) -> ETFRotationVerdict:
         return ETFRotationVerdict.model_validate(payload)
     except Exception as err:
         raise AIValidationError(f"Schema mismatch (etf): {err}") from err
+
+
+def call_contrarian_validation(user_prompt: str) -> ContrarianVerdict:
+    """Chiama Claude per la validazione tesi contrarian (mean reversion)."""
+    payload = _call_claude_with_schema(
+        user_prompt, CONTRA_SYSTEM_PROMPT, _CONTRA_JSON_SCHEMA
+    )
+    try:
+        return ContrarianVerdict.model_validate(payload)
+    except Exception as err:
+        raise AIValidationError(f"Schema mismatch (contrarian): {err}") from err

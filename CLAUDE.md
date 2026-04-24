@@ -22,7 +22,8 @@ propicks-ai-framework/
 │   ├── config.py              # Parametri operativi (capitale, regole, pesi, regime, contract Pine)
 │   ├── domain/                # Puro: nessun I/O, nessuna rete
 │   │   ├── indicators.py      # EMA, RSI, ATR, ADX, MACD, pct_change
-│   │   ├── scoring.py         # 6 sub-score stock + classify + analyze_ticker
+│   │   ├── scoring.py         # 6 sub-score stock + classify + analyze_ticker (momentum)
+│   │   ├── contrarian_scoring.py # 4 sub-score contrarian (oversold/quality/context/rr) + analyze_contra_ticker
 │   │   ├── etf_scoring.py     # 4 sub-score ETF (RS/regime/mom/trend) + rank_universe + alloc
 │   │   ├── etf_universe.py    # Query helpers su SECTOR_ETFS_US/EU
 │   │   ├── stock_rs.py        # Peer RS stock vs sector ETF (solo US, campo informativo)
@@ -44,10 +45,12 @@ propicks-ai-framework/
 │   ├── market/
 │   │   └── yfinance_client.py # Unico modulo che parla con yfinance
 │   ├── ai/                    # Adapter Anthropic (validazione tesi via Claude)
-│   │   ├── claude_client.py   # SDK anthropic + ThesisVerdict + ETFRotationVerdict
-│   │   ├── prompts.py         # System prompt stock (equity analyst)
+│   │   ├── claude_client.py   # SDK anthropic + ThesisVerdict + ETFRotationVerdict + ContrarianVerdict
+│   │   ├── prompts.py         # System prompt stock momentum (equity analyst)
 │   │   ├── etf_prompts.py     # System prompt ETF (macro strategist)
-│   │   ├── thesis_validator.py# Gate + cache 24h + orchestrazione stock
+│   │   ├── contrarian_prompts.py # System prompt contrarian (event-driven/mean-reversion PM)
+│   │   ├── thesis_validator.py# Gate + cache 24h + orchestrazione stock momentum
+│   │   ├── contrarian_validator.py # Gate inverso + cache 24h + orchestrazione mean reversion
 │   │   └── etf_validator.py   # Skip STRONG_BEAR + cache 48h + orchestrazione rotation
 │   ├── reports/               # Markdown generators
 │   │   ├── benchmark.py       # get_benchmark_performance (^GSPC, FTSEMIB.MI)
@@ -55,7 +58,8 @@ propicks-ai-framework/
 │   │   ├── weekly.py
 │   │   └── monthly.py
 │   ├── cli/                   # Thin argparse wrappers (entry points)
-│   │   ├── scanner.py         # propicks-scan
+│   │   ├── scanner.py         # propicks-scan (momentum/quality)
+│   │   ├── contrarian.py      # propicks-contra (quality-filtered mean reversion)
 │   │   ├── portfolio.py       # propicks-portfolio (status/risk/size/add/manage/trail/...)
 │   │   ├── journal.py         # propicks-journal
 │   │   ├── report.py          # propicks-report
@@ -73,7 +77,8 @@ propicks-ai-framework/
 │           ├── 4_Journal.py           # ≡ propicks-journal add/close/list/stats
 │           ├── 5_Reports.py           # ≡ propicks-report weekly/monthly + archive
 │           ├── 6_Backtest.py          # ≡ propicks-backtest
-│           └── 7_Watchlist.py         # ≡ propicks-watchlist (live score + READY flag)
+│           ├── 7_Watchlist.py         # ≡ propicks-watchlist (live score + READY flag)
+│           └── 8_Contrarian.py        # ≡ propicks-contra [--validate]
 ├── tradingview/               # Pine script (contract con config.py)
 │   ├── daily_signal_engine.pine    # Entry triggers in tempo reale (BRK/PB/GC/SQZ/DIV)
 │   └── weekly_regime_engine.pine   # Filtro macro (5-bucket) — duplicato visuale di regime.py
@@ -256,6 +261,18 @@ propicks-watchlist status                       # score live + distanza target +
 #     impostato al prezzo corrente (preserva target esistenti su re-scan).
 #     Usa `propicks-scan TICKER --no-watchlist` per disabilitare l'auto-add.
 
+# Contrarian — quality-filtered mean reversion (strategia parallela al momentum)
+propicks-contra AAPL                           # singolo ticker
+propicks-contra AAPL MSFT NVDA                 # batch
+propicks-contra AAPL --validate                # validazione Claude (flush vs break)
+propicks-contra AAPL --force-validate          # bypassa gate + cache
+propicks-contra AAPL --json                    # output JSON
+propicks-contra AAPL MSFT --brief              # tabella riassuntiva
+propicks-contra AAPL --no-watchlist            # disabilita auto-add classe A+B
+# Sizing bucket contrarian (cap 8%, max 3 pos, 20% aggregate):
+propicks-portfolio size AAPL --entry 180 --stop 162 \
+  --score-claude 7 --score-tech 65 --contrarian
+
 # Test unit (solo domain/ + backtest, nessuna rete)
 pytest
 
@@ -284,21 +301,25 @@ docker compose down                        # stop (volumi preservati)
 | `propicks-report weekly/monthly` | `pages/5_Reports.py` + archivio |
 | `propicks-backtest`              | `pages/6_Backtest.py`           |
 | `propicks-watchlist add/remove/update/list/status` | `pages/7_Watchlist.py` |
+| `propicks-contra [--validate]`   | `pages/8_Contrarian.py`         |
 
 ## Regole di Business (Invarianti)
 
 Queste regole sono hardcoded e NON devono essere aggirate:
 
-- **Max posizioni aperte**: 10
-- **Max size singola posizione**: 15% del capitale (stock) / 20% (sector ETF)
+- **Max posizioni aperte**: 10 (shared cap, include momentum + contrarian + ETF)
+- **Max size singola posizione**: 15% capitale (stock momentum) / 20% (sector ETF) / **8% (contrarian)**
 - **Max esposizione aggregata sector ETF**: 60% del capitale
+- **Max esposizione aggregata contrarian**: **20% del capitale** (bucket cap indipendente)
+- **Max posizioni contrarian simultanee**: **3** (cap interno al bucket)
 - **Min cash reserve**: 20% del capitale
-- **Max loss per trade**: 8% della posizione (stock) / 5% (sector ETF, via stop hard)
+- **Max loss per trade**: 8% (stock momentum) / 5% (sector ETF) / **12% (contrarian, stop più largo a -3×ATR)**
 - **Max loss settimanale**: 5% del capitale totale → blocco trading
 - **Max loss mensile**: 15% del capitale totale → blocco trading e revisione
 - **No entry se earnings entro 5 giorni** (warning, non blocco — il trader decide)
 - **Score minimo per entry**: Claude >= 6/10, Tecnico >= 60/100
-- **Regime weekly minimo per validazione AI stock**: NEUTRAL (code >= 3). BEAR/STRONG_BEAR skippano `--validate` senza spendere token (override con `--force-validate`).
+- **Regime weekly minimo per validazione AI stock momentum**: NEUTRAL (code >= 3). BEAR/STRONG_BEAR skippano `--validate`.
+- **Regime gate contrarian (INVERSO)**: `--validate` skippa STRONG_BULL (5) e STRONG_BEAR (1) — edge collassa agli estremi. Override con `--force-validate`.
 - **Regime hard gate ETF rotation**: in STRONG_BEAR (1) i settori non favoriti sono forzati a score 0; in BEAR (2) sono capped a 50. In NEUTRAL+ il ranking è libero.
 
 ## Convenzioni Codice
@@ -605,6 +626,183 @@ killa l'esperimento. Stesso pattern di `rs_vs_sector`: informativo finché
 i trade non giustificano la promozione.
 
 Documentazione operativa completa in `docs/Trading_System_Playbook.md` §5B.
+
+## Strategia Contrarian (quality-filtered mean reversion)
+
+Motore **parallelo** alla strategia momentum/quality attuale, **additivo** —
+non modifica `propicks-scan` né i pesi di `domain/scoring.py`. Il momentum
+cerca forza che accelera; la contrarian compra qualità temporaneamente
+oversold. Le due strategie hanno tesi opposte, e i trade sono taggati
+`strategy="Contrarian"` nel journal per isolare le metriche.
+
+### Tesi operativa
+
+Setup valido solo se **tutti** i filtri passano:
+1. **Oversold tecnico** — RSI(14) < 30 strict (o <35 warm) **e** prezzo
+   ≥ 2×ATR sotto EMA50 **e** almeno 3 sedute rosse consecutive.
+2. **Trend strutturale intatto** — prezzo ≥ EMA200 weekly. Sotto → hard gate:
+   composite azzerato (è downtrend, non mean reversion).
+3. **Market context favorevole** — VIX > 25 (paura) bonus, VIX < 14 (euforia)
+   penalty. Regime weekly NEUTRAL ideale, BULL/BEAR ok, skip STRONG_*.
+4. **Qualità aziendale** — universe filter (Pro Picks basket o watchlist
+   curata). Enforced nel CLI / workflow trader, non nel domain puro.
+5. **Fundamental non rotto** — validazione Claude `flush_vs_break`:
+   FLUSH = tradable, BREAK = REJECT. Catalyst type da classificare
+   (macro_flush / sector_rotation / earnings_miss_fundamental / guidance_cut /
+   fraud / technical_only).
+
+### Scoring engine (`domain/contrarian_scoring.py`)
+
+4 sub-score ortogonali, composite 0-100:
+
+```
+composite = oversold*40% + quality*25% + market_context*20% + reversion*15%
+```
+
+- **Oversold (40%)** — RSI pts (0-40) + ATR distance pts (0-40) + consecutive
+  down pts (0-20). Il massimo 100 richiede tutti e tre: RSI<30, ≥3×ATR sotto
+  EMA50, ≥5 barre rosse. Un RSI a 28 ma price ancora sopra EMA50 **non**
+  qualifica (potrebbe essere un dip già riassorbito).
+- **Quality (25%)** — hard gate su EMA200 weekly: sotto → 0 (no mean reversion
+  su trend rotto). Sopra → modulato sulla profondità della correzione
+  (-10/-25% = 100, -3% = 30, -50%+ = 20).
+- **Market context (20%)** — lookup `CONTRA_REGIME_FIT` + aggiustamento VIX
+  (+20 se ≥25, -30 se ≤14).
+- **Reversion (15%)** — R/R teorico reward=EMA50-price / risk=price-stop.
+  ≥3:1 → 100, ≥2:1 → 80, sotto 1:1 → 10.
+
+**Regime fit inverso al momentum:**
+
+| Regime | Momentum (thesis_validator) | Contrarian (contrarian_validator) |
+|--------|---------------------------|-----------------------------------|
+| 5 STRONG_BULL | CONFIRM plausibile | skip (fit 25) — no vere oversold |
+| 4 BULL        | tailwind               | workable (fit 70) |
+| 3 NEUTRAL     | CAUTION default        | sweet spot (fit 100) |
+| 2 BEAR        | REJECT default         | ok se quality regge (fit 85) |
+| 1 STRONG_BEAR | skip (no entry)        | skip (fit 0) — falling knives |
+
+### Invarianti (diverse dal momentum)
+
+| Parametro | Momentum | Contrarian | Rationale |
+|-----------|----------|------------|-----------|
+| Size max per posizione | 15% | **8%** | Hit rate più basso (setup short-gamma) |
+| Max posizioni simultanee nel bucket | — | **3** | Cap indipendente (share cap globale 10) |
+| Max esposizione aggregata | — | **20%** | Esposizione totale contrarian ≤ 20% capitale |
+| Stop loss | ATR × 2 | `recent_low - 3×ATR` | Wider, ancorato a capitulation low |
+| Max loss per trade (soglia warning) | 8% | **12%** | Stop naturalmente più largo |
+| Target | trailing | **EMA50 fisso** | Mean reversion = target fisso, NO trailing |
+| Holding tipico | 2-8 settimane | **5-15 giorni** | Reversion rapida o thesis wrong |
+| Time stop | 30 gg flat | **15 gg** | Finestra di reversion corta |
+
+**Cap globale `MAX_POSITIONS=10` condiviso**: momentum + contrarian insieme
+non possono superare 10 posizioni aperte. Il bucket contrarian ha un cap
+indipendente interno (3 max).
+
+### CLI `propicks-contra`
+
+Entry point dedicato (parallelo a `propicks-scan`), non un flag dello
+scanner. Rotazione settoriale, momentum, e contrarian sono flussi operativi
+distinti e meritano comandi separati.
+
+```bash
+propicks-contra AAPL                        # singolo ticker
+propicks-contra AAPL MSFT NVDA              # batch
+propicks-contra AAPL --validate             # + validation Claude (flush vs break)
+propicks-contra AAPL --force-validate       # bypassa gate + cache
+propicks-contra AAPL --json                 # output JSON
+propicks-contra AAPL MSFT --brief           # solo tabella riassuntiva
+propicks-contra AAPL --no-watchlist         # disabilita auto-add classe A+B
+```
+
+**Output:** tabella dettagliata con oversold metrics (RSI / ATR distance /
+consecutive down), quality gate (sopra EMA200w? distanza 52w high),
+market context (VIX + regime), reversion R/R, parametri di trade proposti
+(entry / stop a -3×ATR dal recent_low / target EMA50).
+
+**Auto-watchlist**: classe A (≥75) e B (60-74) sono aggiunte con
+`source="auto_scan_contra"` per tracciare separatamente le idee generate
+dalla strategia contrarian nell'audit watchlist.
+
+### AI validation contrarian (`ai/contrarian_validator.py`)
+
+Persona del prompt: **senior event-driven / mean-reversion PM**, non
+momentum trader. Focus discriminante: **flush vs break**.
+
+- `FLUSH` → tradable mean reversion (macro_flush, sector_rotation,
+  technical_only se cause verified).
+- `BREAK` → non tradable (earnings_miss_fundamental, guidance_cut,
+  fraud_or_accounting). Default REJECT.
+- `MIXED` → size down, shorter horizon.
+
+**Schema verdict** `ContrarianVerdict` (in `claude_client.py`):
+- `verdict` CONFIRM/CAUTION/REJECT
+- `flush_vs_break` FLUSH/BREAK/MIXED
+- `catalyst_type` (7 categorie)
+- `reversion_target` float (take-profit specifico)
+- `invalidation_price` float (hard stop)
+- `time_horizon_days` int 3-30
+- `entry_tactic` MARKET_NOW / LIMIT_BELOW / SCALE_IN_TRANCHES / WAIT_STABILIZATION
+- 5 confidence dimensions (quality_persistence, catalyst_type_assessment,
+  market_context, reversion_path, fundamental_risk)
+
+**Cache separata**: chiave `<TICKER>_contra_v1_<YYYY-MM-DD>.json` (vs
+momentum `<TICKER>_v4_<YYYY-MM-DD>.json`). Lo stesso ticker può essere
+scansionato da entrambe le strategie nello stesso giorno senza collisione
+di verdict.
+
+**Gate inverso**: skip STRONG_BULL (5) e STRONG_BEAR (1) — edge collassa
+agli estremi. In NEUTRAL/BULL/BEAR la validation gira. Override con
+`--force-validate`.
+
+**Web search bias**: il prompt contrarian istruisce Claude a cercare
+specificamente la **causa del selloff** (earnings print, guidance,
+regulatory), non il catalyst forward. 3-5 query per ticker, indicazione
+esplicita di scrivere "unknown — search inconclusive" se la causa non è
+identificabile (mai assumere FLUSH senza evidenza).
+
+### Sizing integration (`domain/sizing.py`)
+
+`calculate_position_size` accetta `strategy_bucket: Literal["momentum",
+"contrarian"]`. Con `"contrarian"`:
+- `position_cap_pct` override a 8%
+- Gate `contrarian_position_count(portfolio) < 3`
+- Gate `contrarian_aggregate_exposure(portfolio) < 20%`
+- `max_value` cap ulteriore sul headroom bucket (evita superamento marginale)
+- `loss_threshold` warning a 12% invece di 8%
+
+Il bucket si riconosce via `p["strategy"].lower().startswith("contra")`:
+match-first-word è case-insensitive e tollera tag come "Contrarian",
+"contrarian-pullback", "Contra — macro_flush".
+
+### CLI integration `propicks-portfolio size --contrarian`
+
+Flag opzionale su `propicks-portfolio size`:
+
+```bash
+# Size contrarian: cap 8%, verifica max 3 pos + 20% aggregate
+propicks-portfolio size AAPL --entry 180 --stop 162 \
+  --score-claude 7 --score-tech 65 --contrarian
+```
+
+Per `propicks-portfolio add`, il bucket è determinato implicitamente dal
+tag `--strategy Contrarian`: il sizing al momento dell'`add_position` è
+già stato calcolato separatamente, il portfolio store persiste la
+strategia tag che poi viene letta dai gate contrarian.
+
+### Non-goal e scope esplicito
+
+- **No short selling**. Tutte le posizioni restano long. La contrarian
+  cerca entry long asimmetriche su titoli venduti, non bet ribassisti.
+- **No pair trading / long-short**. Resta universo single-leg.
+- **No crypto / futures**. Universo invariato rispetto al momentum
+  (stock Pro Picks + basket curato).
+- **No position adding on losing trade** ("averaging down"). Se lo stop
+  viene triggered, la posizione si chiude. Un nuovo setup richiede un
+  nuovo trade (e un nuovo entry nel journal).
+- **No rebalance automatico su regime change**. Il gate inverso è
+  applicato al momento dello scan (decisione di entry), non come
+  trigger di chiusura su posizioni aperte. Le posizioni contrarian
+  aperte si chiudono a target EMA50, stop hard, o time stop 15gg.
 
 ## Backtest walk-forward (`propicks.backtest`)
 

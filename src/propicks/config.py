@@ -437,6 +437,91 @@ ETF_STOP_LOSS_PCT: float = 0.05
 
 
 # ---------------------------------------------------------------------------
+# CONTRARIAN STRATEGY — QUALITY-FILTERED MEAN REVERSION
+# ---------------------------------------------------------------------------
+# Strategia parallela, additiva: momentum/quality cerca forza che accelera,
+# contrarian compra qualità temporaneamente oversold. NON modifica lo scoring
+# momentum attuale — è un motore indipendente con propri sub-score, regime
+# fit inverso, e invarianti di sizing più strette (hit rate più basso).
+#
+# Setup valido solo se TUTTI i filtri passano:
+#   1. Oversold tecnico (RSI + distanza ATR da EMA50)
+#   2. Trend di lungo non rotto (price sopra EMA200 weekly)
+#   3. Market context favorevole (VIX spike / breadth washout, regime NON bullish)
+#   4. Qualità (via Pro Picks filter — enforced in CLI, non nel domain puro)
+#   5. Non-broken fundamental (via Claude validation "flush vs break")
+
+# Sizing: più stretto del momentum (6-8% vs 15%) per il profilo short-gamma.
+CONTRA_MAX_POSITION_SIZE_PCT: float = 0.08
+CONTRA_MAX_AGGREGATE_EXPOSURE_PCT: float = 0.20  # bucket cap su sum(contra)
+CONTRA_MAX_POSITIONS: int = 3  # max simultanei contrarian (share cap globale MAX_POSITIONS)
+
+# Soglie oversold — il core del segnale.
+CONTRA_RSI_OVERSOLD: float = 30.0  # RSI(14) strict oversold
+CONTRA_RSI_WARM: float = 35.0  # tolleranza soft per zona "near oversold"
+CONTRA_ATR_DISTANCE_MIN: float = 2.0  # distanza min da EMA50 in multipli di ATR
+CONTRA_CONSECUTIVE_DOWN_DAYS: int = 3  # minimo n barre rosse consecutive
+CONTRA_MIN_EMA200_BUFFER: float = 0.0  # price must be >= EMA200w * (1 + buffer)
+
+# Market context — breadth / fear indicators (via yfinance, injectable).
+CONTRA_VIX_TICKER: str = "^VIX"
+CONTRA_VIX_SPIKE: float = 25.0  # sopra = paura/capitulazione, ottimo contesto
+CONTRA_VIX_COMPLACENT: float = 14.0  # sotto = euforia, edge contrarian collassa
+
+# Stop e target specifici: più larghi del momentum (il "noise" è la normalità
+# su oversold), target = reversion a EMA50 (non trailing — è mean reversion).
+CONTRA_STOP_ATR_MULT: float = 3.0  # stop = low_recent - 3×ATR (wider di momentum 2×)
+CONTRA_MAX_LOSS_PER_TRADE_PCT: float = 0.12  # 12% max (vs 8% momentum)
+CONTRA_TIME_STOP_DAYS: int = 15  # esito atteso in 5-15 giorni, taglia a 15gg
+CONTRA_TARGET_EMA_PERIOD: int = 50  # target = reversion a EMA50 daily
+
+# Pesi del composite contrarian (somma = 1.0).
+#   oversold: quanto è tirato l'elastico (40%)
+#   quality: il trend strutturale non è rotto (25%)
+#   market_context: VIX + regime inverso (20%)
+#   reversion_potential: gap da EMA50 espresso come R/R teorico (15%)
+CONTRA_WEIGHT_OVERSOLD: float = 0.40
+CONTRA_WEIGHT_QUALITY: float = 0.25
+CONTRA_WEIGHT_MARKET_CONTEXT: float = 0.20
+CONTRA_WEIGHT_REVERSION: float = 0.15
+
+_CONTRA_WEIGHTS = (
+    CONTRA_WEIGHT_OVERSOLD,
+    CONTRA_WEIGHT_QUALITY,
+    CONTRA_WEIGHT_MARKET_CONTEXT,
+    CONTRA_WEIGHT_REVERSION,
+)
+assert abs(sum(_CONTRA_WEIGHTS) - 1.0) < 1e-9, (
+    f"Contrarian scoring weights non sommano a 1.0: {sum(_CONTRA_WEIGHTS)}"
+)
+
+# Classification — stessi tier del momentum ma interpretazione diversa
+# (A = setup oversold pronto, D = non abbastanza tirato o trend rotto).
+CONTRA_SCORE_A: float = 75.0
+CONTRA_SCORE_B: float = 60.0
+CONTRA_SCORE_C: float = 45.0
+
+# Gate regime INVERSO al momentum:
+#   STRONG_BULL (5) → skip: non ci sono veri oversold, sono solo dip da comprare col momentum
+#   BULL (4)        → ok ma conservativo (regime_fit 70)
+#   NEUTRAL (3)     → sweet spot (100)
+#   BEAR (2)        → ok se quality gate regge (85)
+#   STRONG_BEAR (1) → skip: falling knives, non mean reversion
+CONTRA_REGIME_FIT: dict[int, float] = {
+    5: 25.0,   # STRONG_BULL: oversold rari e poco durevoli
+    4: 70.0,   # BULL: mean reversion su pullback sani
+    3: 100.0,  # NEUTRAL: sweet spot
+    2: 85.0,   # BEAR: ottimo se quality gate regge
+    1: 0.0,    # STRONG_BEAR: niente mean reversion su crash
+}
+
+# AI validation contrarian — cache separata (chiave con strategy tag per non
+# collidere con cache momentum dello stesso ticker).
+CONTRA_AI_CACHE_TTL_HOURS: int = 24
+CONTRA_AI_MIN_SCORE_FOR_VALIDATION: float = 60.0
+
+
+# ---------------------------------------------------------------------------
 # REGIME → SETTORI FAVORITI
 # ---------------------------------------------------------------------------
 # Lookup che traduce il regime_code weekly (1-5 da domain.regime) nella lista

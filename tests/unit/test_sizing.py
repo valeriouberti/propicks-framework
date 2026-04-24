@@ -147,6 +147,81 @@ def test_sizing_etf_uses_20_pct_cap():
     assert r["shares"] == 12
 
 
+def test_sizing_contrarian_cap_is_8pct():
+    r = calculate_position_size(
+        entry_price=100, stop_price=92,
+        score_claude=10, score_tech=100,
+        portfolio=_empty_portfolio(10_000),
+        asset_type="STOCK",
+        strategy_bucket="contrarian",
+    )
+    assert r["ok"] is True
+    assert r["strategy_bucket"] == "contrarian"
+    # cap 8% = 800, a 100€ → 8 shares
+    assert r["shares"] == 8
+    assert r["position_cap_pct"] == 0.08
+
+
+def test_sizing_contrarian_blocks_at_max_positions():
+    """Un portfolio con 3 contrarian già aperte blocca il 4°."""
+    pf = {
+        "cash": 5_000.0,
+        "positions": {
+            "A": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+            "B": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+            "C": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+        },
+    }
+    r = calculate_position_size(
+        entry_price=100, stop_price=92,
+        score_claude=10, score_tech=100,
+        portfolio=pf, strategy_bucket="contrarian",
+    )
+    assert r["ok"] is False
+    assert "Bucket contrarian pieno" in r["error"]
+
+
+def test_sizing_contrarian_aggregate_cap():
+    """Bucket aggregato al 20% blocca entry aggiuntivi."""
+    pf = {
+        "cash": 5_000.0,
+        "positions": {
+            # 2 contrarian già al 10% ciascuna → 20% totali = al cap
+            "A": {"shares": 10, "entry_price": 100, "strategy": "Contrarian"},
+            "B": {"shares": 10, "entry_price": 100, "strategy": "Contrarian"},
+        },
+    }
+    # portfolio_value = 5000 cash + 1000 + 1000 = 7000
+    # contra exposure = 2000 / 7000 ≈ 28.6% → già sopra il cap 20%
+    r = calculate_position_size(
+        entry_price=100, stop_price=92,
+        score_claude=10, score_tech=100,
+        portfolio=pf, strategy_bucket="contrarian",
+    )
+    assert r["ok"] is False
+    assert "cap aggregato" in r["error"]
+
+
+def test_sizing_momentum_ignores_contrarian_bucket_rules():
+    """Un trade momentum su un portfolio che ha contrarian resta libero."""
+    pf = {
+        "cash": 5_000.0,
+        "positions": {
+            "A": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+            "B": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+            "C": {"shares": 10, "entry_price": 50, "strategy": "Contrarian"},
+        },
+    }
+    r = calculate_position_size(
+        entry_price=100, stop_price=92,
+        score_claude=10, score_tech=100,
+        portfolio=pf, strategy_bucket="momentum",
+    )
+    # momentum non vede il cap contrarian: deve passare
+    assert r["ok"] is True
+    assert r["strategy_bucket"] == "momentum"
+
+
 def test_sizing_etf_cap_larger_than_stock_under_pressure():
     # Portfolio pieno di cash, conviction massima: il cap ETF deve permettere
     # 20% = 2000, mentre lo stock sarebbe bloccato a 15% = 1500.

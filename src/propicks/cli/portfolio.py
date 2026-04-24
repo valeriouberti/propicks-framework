@@ -269,12 +269,14 @@ def cmd_risk(_: argparse.Namespace) -> int:
 
 def cmd_size(args: argparse.Namespace) -> int:
     portfolio = load_portfolio()
+    bucket = "contrarian" if getattr(args, "contrarian", False) else "momentum"
     r = calculate_position_size(
         entry_price=args.entry,
         stop_price=args.stop,
         score_claude=args.score_claude,
         score_tech=args.score_tech,
         portfolio=portfolio,
+        strategy_bucket=bucket,
     )
     _print_size_result(args.ticker, r)
     return 0 if r.get("ok") else 2
@@ -459,6 +461,11 @@ def main() -> int:
     p_size.add_argument("--stop", type=float, required=True)
     p_size.add_argument("--score-claude", type=int, default=7)
     p_size.add_argument("--score-tech", type=int, default=70)
+    p_size.add_argument(
+        "--contrarian",
+        action="store_true",
+        help="Applica regole bucket contrarian: size cap 8%%, max 3 pos, 20%% aggregate",
+    )
     p_size.set_defaults(func=cmd_size)
 
     p_add = sub.add_parser("add", help="Apre una posizione")

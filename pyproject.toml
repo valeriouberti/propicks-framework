@@ -35,6 +35,7 @@ dashboard = [
 
 [project.scripts]
 propicks-scan      = "propicks.cli.scanner:main"
+propicks-contra    = "propicks.cli.contrarian:main"
 propicks-portfolio = "propicks.cli.portfolio:main"
 propicks-journal   = "propicks.cli.journal:main"
 propicks-report    = "propicks.cli.report:main"
