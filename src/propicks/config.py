@@ -574,6 +574,15 @@ DATA_DIR: str = os.path.join(BASE_DIR, "data")
 REPORTS_DIR: str = os.path.join(BASE_DIR, "reports")
 BASKETS_DIR: str = os.path.join(DATA_DIR, "baskets")
 
+# SQLite database: source of truth di tutto lo stato transazionale
+# (positions, trades, watchlist, AI verdicts, strategy runs, regime history).
+# I file JSON sono stati ritirati al completamento di Phase 1 — la migrazione
+# è one-shot via ``scripts/migrate_json_to_sqlite.py``. I path JSON sono mantenuti
+# sotto per la migration script e il backup (non vengono più letti/scritti
+# dal runtime).
+DB_FILE: str = os.path.join(DATA_DIR, "propicks.db")
+
+# Path legacy JSON — solo per migration script (one-shot). Non usare dai store.
 PORTFOLIO_FILE: str = os.path.join(DATA_DIR, "portfolio.json")
 JOURNAL_FILE: str = os.path.join(DATA_DIR, "journal.json")
 WATCHLIST_FILE: str = os.path.join(DATA_DIR, "watchlist.json")

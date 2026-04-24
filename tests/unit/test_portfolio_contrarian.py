@@ -14,12 +14,10 @@ import pytest
 
 
 @pytest.fixture
-def portfolio_tmp(tmp_path, monkeypatch):
-    """Isola portfolio.json su tmp_path."""
-    portfolio = tmp_path / "portfolio.json"
-    monkeypatch.setattr("propicks.config.PORTFOLIO_FILE", str(portfolio))
-    monkeypatch.setattr("propicks.io.portfolio_store.PORTFOLIO_FILE", str(portfolio))
-    return portfolio
+def portfolio_tmp():
+    """Compat alias: l'isolation DB è già autouse via conftest._isolate_db.
+    Mantenuto per i test che lo richiedono come parametro (no-op)."""
+    return None
 
 
 def test_add_position_contrarian_enforces_8pct_size_cap(portfolio_tmp):

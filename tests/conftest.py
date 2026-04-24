@@ -1,4 +1,9 @@
-"""Fixture condivise. Isola i test I/O su tmp_path per non toccare data/ reale."""
+"""Fixture condivise. Isola i test I/O su tmp_path per non toccare data/ reale.
+
+Post Phase 1: lo storage è SQLite. La fixture ``_isolate_db`` è autouse:
+ogni test ottiene un DB fresco su tmp_path e schema inizializzato al primo
+connect(). Nessun test tocca mai ``data/propicks.db`` reale.
+"""
 
 from __future__ import annotations
 
@@ -6,21 +11,28 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_ai_cache_dir(tmp_path_factory, monkeypatch):
-    """Redirige ``config.AI_CACHE_DIR`` su una tmp per test.
+def _isolate_db(tmp_path, monkeypatch):
+    """Redirige ``config.DB_FILE`` su un SQLite ephemeral per test.
 
-    Impedisce che qualunque test scriva accidentalmente nel vero
-    ``data/ai_cache/`` (cache verdict reali, usage counter budget).
-    I test che già patchano ``thesis_validator.AI_CACHE_DIR`` continuano
-    a funzionare: quella è la variabile locale del modulo, questa è la
-    source of truth del config — coesistono.
+    Schema inizializzato lazy al primo ``db.connect()`` tramite il controllo
+    ``is_new`` in ``io/db.py::connect()``. Ogni test parte con DB vuoto —
+    zero cross-test pollution, zero setup boilerplate.
+
+    ``autouse=True`` perché il DB è la source of truth di positions, trades,
+    watchlist e AI verdicts. Un test che bypassa la fixture rischia di
+    scrivere sul DB reale.
     """
-    cache_dir = tmp_path_factory.mktemp("ai_cache")
-    monkeypatch.setattr("propicks.config.AI_CACHE_DIR", str(cache_dir))
+    db_path = tmp_path / "test_propicks.db"
+    monkeypatch.setattr("propicks.config.DB_FILE", str(db_path))
 
 
 @pytest.fixture
 def sample_portfolio() -> dict:
+    """Portfolio dict per test che NON persistono (test puri su domain).
+
+    NB: non viene scritto sul DB. I test che vogliono la persistenza devono
+    usare ``add_position(...)`` che scrive su DB.
+    """
     return {
         "positions": {
             "AAPL": {
@@ -36,6 +48,7 @@ def sample_portfolio() -> dict:
             }
         },
         "cash": 8_000.0,
+        "initial_capital": 10_000.0,
         "last_updated": "2026-01-15",
     }
 

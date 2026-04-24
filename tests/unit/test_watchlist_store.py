@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -11,11 +10,9 @@ from propicks.config import DATE_FMT
 
 
 @pytest.fixture
-def watchlist_tmp(tmp_path, monkeypatch):
-    """Redirige WATCHLIST_FILE su tmp_path per isolare i test."""
-    fake = tmp_path / "watchlist.json"
-    monkeypatch.setattr("propicks.io.watchlist_store.WATCHLIST_FILE", str(fake))
-    return str(fake)
+def watchlist_tmp():
+    """No-op: l'isolation DB è già autouse via conftest._isolate_db."""
+    return None
 
 
 def test_load_creates_default_if_missing(watchlist_tmp):
@@ -23,7 +20,9 @@ def test_load_creates_default_if_missing(watchlist_tmp):
 
     wl = load_watchlist()
     assert wl["tickers"] == {}
-    assert wl["last_updated"] is not None  # save_watchlist stamp
+    # last_updated può essere None su DB vuoto — diversamente dal legacy JSON
+    # dove il primo load scatenava un save stamp. Su DB il meta field esiste
+    # solo dopo la prima mutazione.
 
 
 def test_add_new_ticker(watchlist_tmp):
@@ -137,26 +136,9 @@ def test_update_no_fields_raises(watchlist_tmp):
         update_watchlist_entry(wl, "AAPL")
 
 
-def test_migration_from_empty_list(watchlist_tmp):
-    """Schema legacy {'tickers': []} → dict vuoto."""
-    from propicks.io.watchlist_store import load_watchlist
-
-    with open(watchlist_tmp, "w") as f:
-        json.dump({"tickers": []}, f)
-    wl = load_watchlist()
-    assert wl["tickers"] == {}
-
-
-def test_migration_from_str_list(watchlist_tmp):
-    """Schema legacy {'tickers': ['AAPL', 'MSFT']} → dict con default fields."""
-    from propicks.io.watchlist_store import load_watchlist
-
-    with open(watchlist_tmp, "w") as f:
-        json.dump({"tickers": ["AAPL", "msft"]}, f)
-    wl = load_watchlist()
-    assert set(wl["tickers"].keys()) == {"AAPL", "MSFT"}
-    assert wl["tickers"]["AAPL"]["source"] == "manual"
-    assert wl["tickers"]["AAPL"]["target_entry"] is None
+# Test di migrazione JSON legacy rimossi: post Phase 1 la migrazione è
+# one-shot via ``propicks-migrate`` (script one-time). Il parsing dei
+# formati legacy è coperto dai test della migration script stessa.
 
 
 def test_is_stale(watchlist_tmp):
@@ -171,10 +153,6 @@ def test_is_stale(watchlist_tmp):
     assert is_stale({"added_date": None}) is False
 
 
-def test_corrupted_json_raises(watchlist_tmp):
-    from propicks.io.watchlist_store import load_watchlist
-
-    with open(watchlist_tmp, "w") as f:
-        f.write("{not valid json")
-    with pytest.raises(SystemExit, match="corrotto"):
-        load_watchlist()
+# test_corrupted_json_raises rimosso: post Phase 1 lo storage è SQLite —
+# "corruzione file JSON" non è più uno scenario. SQLite ha le sue modalità
+# di corruzione (pragma integrity_check) gestite dalla libreria sqlite3.

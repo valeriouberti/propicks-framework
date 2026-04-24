@@ -36,12 +36,13 @@ propicks-ai-framework/
 │   ├── backtest/              # Walk-forward backtest single-stock (puro su DataFrame)
 │   │   ├── engine.py          # backtest_ticker + Trade/BacktestResult dataclasses
 │   │   └── metrics.py         # win_rate/PF/CAGR/Sharpe/Sortino/DD + aggregate_metrics
-│   ├── io/                    # Persistenza JSON (atomic writes)
-│   │   ├── atomic.py
-│   │   ├── portfolio_store.py # load/save + add/remove/update/close_position
-│   │   ├── journal_store.py   # load + add_trade/close_trade (append-only, shares field)
+│   ├── io/                    # Persistenza SQLite (source of truth)
+│   │   ├── db.py              # SQLite connection + schema init + AI verdict cache helpers
+│   │   ├── schema.sql         # Schema DDL (9 tabelle)
+│   │   ├── portfolio_store.py # load + add/remove/update/close_position (backend SQLite)
+│   │   ├── journal_store.py   # load + add_trade/close_trade (append-only, backend SQLite)
 │   │   ├── trade_sync.py      # Coordinator journal+portfolio (open_trade/close_trade)
-│   │   └── watchlist_store.py # load/save + add/remove/update (dedup per ticker)
+│   │   └── watchlist_store.py # load + add/remove/update (dedup per PK ticker)
 │   ├── market/
 │   │   └── yfinance_client.py # Unico modulo che parla con yfinance
 │   ├── ai/                    # Adapter Anthropic (validazione tesi via Claude)
@@ -102,11 +103,10 @@ propicks-ai-framework/
 │       ├── test_thesis_validator.py # SDK Anthropic mockato
 │       └── test_watchlist_store.py # CRUD + migrazione schema legacy
 ├── data/                      # Runtime state (gitignored)
-│   ├── portfolio.json         # Stato corrente del portafoglio
-│   ├── journal.json           # Storico completo dei trade
-│   ├── watchlist.json         # Titoli in watchlist attiva
-│   ├── baskets/YYYY-MM.json   # Storico basket Pro Picks mensili
-│   └── ai_cache/              # Cache verdict Claude (TTL 24h)
+│   ├── propicks.db            # SQLite source of truth (9 tabelle)
+│   ├── baskets/YYYY-MM.json   # Storico basket Pro Picks mensili (input, non stato)
+│   ├── *.json.bak             # Backup JSON pre-migration (portfolio/journal/watchlist)
+│   └── ai_cache.bak/          # Backup cache AI pre-migration
 └── reports/                   # Report generati (gitignored)
     └── weekly_YYYY-MM-DD.md
 ```
@@ -117,7 +117,7 @@ propicks-ai-framework/
 - **yfinance** — dati di mercato real-time e storici
 - **pandas / numpy** — calcoli tecnici e statistici
 - **tabulate** — output formattato per terminale
-- **json** — persistenza dati (volutamente semplice, no database)
+- **SQLite** (stdlib ``sqlite3``) — source of truth per tutto lo stato transazionale: positions, trades, watchlist, AI verdicts, daily budget, strategy runs, regime history, portfolio snapshots. DB file: ``data/propicks.db``. Schema DDL in ``src/propicks/io/schema.sql``. Migrazione one-shot dai JSON legacy via ``propicks-migrate`` (backup ``*.json.bak`` conservato).
 - **anthropic** — SDK ufficiale per validazione tesi via Claude Opus 4.6
 - **pydantic** — validazione strutturata del verdict AI (`ThesisVerdict`)
 - **python-dotenv** — caricamento `.env` per `ANTHROPIC_API_KEY`
@@ -169,6 +169,37 @@ commodity/FX/indici, date e risultati di earnings, short interest e performance
 settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
+
+## Storage — SQLite (post Phase 1)
+
+Source of truth: **`data/propicks.db`**. Zero file JSON nel runtime. Schema DDL
+in `src/propicks/io/schema.sql`, 9 tabelle:
+
+| Tabella | Scopo | Ruolo |
+|---------|-------|-------|
+| `positions` | Stato posizioni aperte (PK ticker) | CRUD via `portfolio_store` |
+| `portfolio_meta` | KV singleton (cash, initial_capital, last_updated) | Scritto da `portfolio_store` e `watchlist_store` |
+| `trades` | Journal append-only (PK auto, mai deleted) | CRUD via `journal_store` |
+| `watchlist` | Incubatrice idee (PK ticker) | CRUD via `watchlist_store` |
+| `strategy_runs` | Ogni `propicks-scan`/`contra`/`rotate` produce 1 riga | TODO: populating in next phase |
+| `ai_verdicts` | Cache + storia verdict Claude (sostituisce data/ai_cache/) | `io/db.py::ai_verdict_cache_*` helpers |
+| `daily_budget` | Counter giornaliero spesa AI (UPSERT by date) | `ai/budget.py` |
+| `regime_history` | Snapshot giornaliero regime ^GSPC | TODO: popolato da scheduler Phase 3 |
+| `portfolio_snapshots` | Equity curve + exposure per strategia (daily) | TODO: popolato da scheduler Phase 3 |
+| `schema_version` | Versioning per future migrations DDL | Init a v1 |
+
+**Connection model**: `io/db.py::connect()` apre una connessione per chiamata
+(SQLite file locale = open nanosecond-fast). WAL mode + foreign keys ON.
+`transaction()` context manager per atomicità di mutazioni multi-row.
+Niente PARSE_DECLTYPES: tutti i timestamp / date sono TEXT ISO-formatted.
+
+**Migrazione**: `propicks-migrate` legge i JSON legacy e popola le tabelle.
+Idempotente (skip tabella se già popolata). Rinomina i JSON originali a
+`.json.bak` per recovery. Backup della folder `ai_cache/` → `ai_cache.bak/`.
+
+**Test isolation**: conftest.py ha fixture autouse `_isolate_db` che monkeypatcha
+`config.DB_FILE` su `tmp_path`. Ogni test ha DB ephemeral fresco. Nessun test
+tocca mai il DB reale.
 
 ## Comandi Principali
 
@@ -273,7 +304,12 @@ propicks-contra AAPL --no-watchlist            # disabilita auto-add classe A+B
 propicks-portfolio size AAPL --entry 180 --stop 162 \
   --score-claude 7 --score-tech 65 --contrarian
 
-# Test unit (solo domain/ + backtest, nessuna rete)
+# Migrazione one-shot JSON → SQLite (eseguita una volta sola in fase di setup
+# post-upgrade. Idempotente: se il DB è già popolato fa no-op su quella tabella)
+propicks-migrate --dry-run             # anteprima senza toccare nulla
+propicks-migrate                        # esegue + backup JSON → *.json.bak
+
+# Test unit (solo domain/ + backtest, nessuna rete, DB SQLite ephemeral per test)
 pytest
 
 # Dashboard Streamlit (richiede `pip install -e ".[dashboard]"`)
@@ -344,7 +380,7 @@ Queste regole sono hardcoded e NON devono essere aggirate:
   `market/`). Espone `validate_thesis(analysis)` che ritorna un dict strutturato;
   nessun altro layer importa `anthropic` direttamente. Include gate su
   `score_composite` **e sul regime weekly** (skip se BEAR/STRONG_BEAR),
-  cache giornaliera su disco (`data/ai_cache/`) e tool `web_search`
+  cache giornaliera in tabella `ai_verdicts` e tool `web_search`
   server-side per dati real-time (spot, earnings, news).
 - **`reports/`** può importare da tutti gli altri layer per comporre i markdown.
 - **`cli/`** è thin: parsing argparse + chiamata a funzioni di domain/io/ai/reports
@@ -1031,7 +1067,7 @@ chiudi un trade reale con P&L — il coordinator lo fa già automaticamente.
   `streamlit run src/propicks/dashboard/app.py` — verifica che ogni page
   renda senza eccezioni e che i `st.dataframe` non rompano la serializzazione
   Arrow (colonne con tipi misti `float`/`"—"` vanno tutte a string)
-- I file JSON in `data/` sono la source of truth — non cancellare mai, solo appendere
+- Il DB SQLite `data/propicks.db` è la source of truth — backup con `cp` o `sqlite3 .backup`
 - Il journal è append-only: i trade chiusi non vengono cancellati, viene aggiunto il campo `exit_*`
 - Nuove dipendenze → aggiungi in `[project.dependencies]` di `pyproject.toml`
   e documenta qui nello stack tecnologico
@@ -1044,6 +1080,6 @@ chiudi un trade reale con P&L — il coordinator lo fa già automaticamente.
 - Quando si modifica `ai/prompts.py::SYSTEM_PROMPT`, ricorda che ogni byte
   cambia invalida la prompt cache lato Anthropic: mantieni dinamico solo il
   user prompt
-- I verdict cacheati in `data/ai_cache/<TICKER>_<YYYY-MM-DD>.json` hanno TTL
-  24h. Cancella il file se vuoi forzare una rivalidazione, oppure usa
-  `--force-validate`
+- I verdict sono cacheati in tabella `ai_verdicts` del DB con TTL 24h
+  (48h per ETF). Usa `--force-validate` per forzare una rivalidazione, oppure
+  `DELETE FROM ai_verdicts WHERE cache_key = '<TICKER>_v4_<YYYY-MM-DD>'` via sqlite3

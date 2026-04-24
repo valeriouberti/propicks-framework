@@ -75,7 +75,6 @@ def mock_verdict() -> ThesisVerdict:
 
 
 def test_validate_thesis_gate_skips_low_scores(sample_analysis, tmp_path, monkeypatch):
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
     low = {**sample_analysis, "score_composite": 30.0}
     assert thesis_validator.validate_thesis(low) is None
 
@@ -83,7 +82,6 @@ def test_validate_thesis_gate_skips_low_scores(sample_analysis, tmp_path, monkey
 def test_validate_thesis_calls_claude_and_caches(
     sample_analysis, mock_verdict, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
 
     with patch.object(thesis_validator, "call_validation", return_value=mock_verdict) as mocked:
         result = thesis_validator.validate_thesis(sample_analysis)
@@ -101,7 +99,6 @@ def test_validate_thesis_calls_claude_and_caches(
 
 
 def test_force_bypasses_cache_and_gate(sample_analysis, mock_verdict, tmp_path, monkeypatch):
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
     low = {**sample_analysis, "score_composite": 10.0}
 
     with patch.object(thesis_validator, "call_validation", return_value=mock_verdict):
@@ -132,7 +129,6 @@ def test_rr_overwritten_when_model_miscomputes(
     sample_analysis, mock_verdict, tmp_path, monkeypatch
 ):
     """NEM-style bug: Claude reports 2.34 but (entry, stop, target) gives 1.61."""
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
     nem = {**sample_analysis, "ticker": "NEM", "price": 119.30, "stop_suggested": 109.62}
     bad = _verdict_with(
         mock_verdict,
@@ -153,7 +149,6 @@ def test_rr_consistent_verdict_preserved(
     sample_analysis, mock_verdict, tmp_path, monkeypatch
 ):
     """When R/R is correct and >= 2.0, CONFIRM must survive."""
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
     good = _verdict_with(
         mock_verdict,
         verdict="CONFIRM",
@@ -173,7 +168,6 @@ def test_rr_guard_skips_when_target_missing(
     sample_analysis, mock_verdict, tmp_path, monkeypatch
 ):
     """If Claude declines to set a target, guard leaves verdict untouched."""
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
     no_target = _verdict_with(
         mock_verdict,
         verdict="CONFIRM",

@@ -1,71 +1,82 @@
-"""Persistenza append-only del journal dei trade.
+"""Persistenza append-only del journal dei trade — backend SQLite.
 
-I trade non vengono mai cancellati: ``close_trade`` aggiunge i campi
-``exit_*`` al record esistente senza rimuoverlo.
+I trade non vengono mai cancellati: ``close_trade`` aggiorna i campi ``exit_*``
+sulla stessa riga senza rimuoverla. La tabella ``trades`` ha PK auto-increment,
+conservando l'ordine di inserimento storico.
+
+API pubblica invariata rispetto alla versione JSON:
+- ``load_journal() -> list[dict]``
+- ``find_open(trades, ticker) -> dict | None``
+- ``add_trade(...)`` / ``close_trade(...)``
+
+Forma dei dict ritornati è compatibile byte-per-byte con la vecchia versione
+JSON per non rompere report, dashboard, journal stats, backtest engine.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime
 
-from propicks.config import DATE_FMT, JOURNAL_FILE
+from propicks.config import DATE_FMT
 from propicks.domain.validation import validate_date, validate_scores
-from propicks.io.atomic import atomic_write_json
-from propicks.io.migrations import CURRENT_VERSIONS, migrate
+from propicks.io.db import connect, transaction
 
 
-def load_journal() -> list[dict]:
-    """Carica il journal. Supporta array puro e schema legacy {"trades": [...]}.
-
-    Migra la chiave legacy ``pnl_abs`` (valore per-share) → ``pnl_per_share``.
-    Ritorna sempre ``list[dict]`` di trade: lo schema versioning vive nel
-    wrapper on-disk, non è esposto al resto del codice.
-    """
-    if not os.path.exists(JOURNAL_FILE):
-        _save_journal([])
-        return []
-
-    try:
-        with open(JOURNAL_FILE) as f:
-            data = json.load(f)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"[fatal] journal.json corrotto: {exc}. "
-            f"Ripristina da backup o correggi manualmente."
-        ) from exc
-
-    # Legacy: file come array puro → wrappa in dict per passare dalla migration.
-    if isinstance(data, list):
-        data = {"trades": data}
-    if not isinstance(data, dict) or "trades" not in data:
-        raise ValueError("Formato journal.json non valido.")
-
-    data = migrate(data, "journal")
-    trades = data["trades"]
-    if not isinstance(trades, list):
-        raise ValueError("Formato journal.json non valido: 'trades' non è una lista.")
-
-    for t in trades:
-        if "pnl_abs" in t and "pnl_per_share" not in t:
-            t["pnl_per_share"] = t.pop("pnl_abs")
-    return trades
-
-
-def _save_journal(trades: list[dict]) -> None:
-    payload = {
-        "schema_version": CURRENT_VERSIONS["journal"],
-        "trades": trades,
+# ---------------------------------------------------------------------------
+# Row ↔ dict converter
+# ---------------------------------------------------------------------------
+def _row_to_trade_dict(row) -> dict:
+    """Converte una riga di ``trades`` nel dict legacy-compatibile."""
+    return {
+        "id": row["id"],
+        "ticker": row["ticker"],
+        "direction": row["direction"],
+        "strategy": row["strategy"],
+        "entry_date": row["entry_date"],
+        "entry_price": row["entry_price"],
+        "shares": row["shares"],
+        "stop_loss": row["stop_loss"],
+        "target": row["target"],
+        "score_claude": row["score_claude"],
+        "score_tech": row["score_tech"],
+        "catalyst": row["catalyst"],
+        "notes": row["notes"],
+        "status": row["status"],
+        "exit_price": row["exit_price"],
+        "exit_date": row["exit_date"],
+        "exit_reason": row["exit_reason"],
+        "pnl_pct": row["pnl_pct"],
+        "pnl_per_share": row["pnl_per_share"],
+        "duration_days": row["duration_days"],
+        "post_trade_notes": row["post_trade_notes"],
+        "created_at": row["created_at"],
     }
-    atomic_write_json(JOURNAL_FILE, payload)
 
 
-def _next_id(trades: list[dict]) -> int:
-    return max((t.get("id", 0) for t in trades), default=0) + 1
+# ---------------------------------------------------------------------------
+# Read API
+# ---------------------------------------------------------------------------
+def load_journal() -> list[dict]:
+    """Carica tutti i trade in ordine di ``id`` crescente (= ordine cronologico).
+
+    Ritorna sempre ``list[dict]`` compatibile con la vecchia API JSON.
+    """
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM trades ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_trade_dict(r) for r in rows]
 
 
 def find_open(trades: list[dict], ticker: str) -> dict | None:
+    """Trova il trade aperto (status='open') per un ticker, o None.
+
+    Prende la lista ``trades`` come parametro per preservare la firma storica
+    — i caller la hanno già in memoria, evitiamo SELECT aggiuntivo.
+    """
     ticker = ticker.upper()
     for t in trades:
         if t.get("ticker") == ticker and t.get("status") == "open":
@@ -73,6 +84,9 @@ def find_open(trades: list[dict], ticker: str) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Mutating API
+# ---------------------------------------------------------------------------
 def add_trade(
     ticker: str,
     direction: str,
@@ -87,11 +101,30 @@ def add_trade(
     notes: str | None = None,
     shares: int | None = None,
 ) -> dict:
-    trades = load_journal()
+    """Inserisce un nuovo trade nel journal con tutte le validazioni.
+
+    Validazioni identiche alla versione JSON:
+    - ticker senza trade aperto esistente
+    - stop_loss vs entry_price coerente con direction
+    - shares > 0 se fornito
+    - score_claude/score_tech via validate_scores
+
+    Returns il dict del trade inserito (con id assegnato dal DB).
+    """
     ticker = ticker.upper()
 
-    if find_open(trades, ticker):
+    # Controllo trade aperto su questo ticker — unica SELECT prima del write.
+    conn = connect()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM trades WHERE ticker = ? AND status = 'open'",
+            (ticker,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if existing:
         raise ValueError(f"Esiste già un trade aperto per {ticker}.")
+
     if stop_loss >= entry_price and direction == "long":
         raise ValueError("Per un long, stop_loss deve essere < entry_price.")
     if direction == "short" and stop_loss <= entry_price:
@@ -100,18 +133,48 @@ def add_trade(
         raise ValueError(f"shares deve essere > 0 (ricevuto {shares}).")
     validate_scores(score_claude, score_tech)
 
-    trade = {
-        "id": _next_id(trades),
+    entry_date_val = validate_date(entry_date)
+    # ISO completo con secondi: serve a sqlite3.PARSE_DECLTYPES per colonne
+    # TIMESTAMP (altrimenti "not enough values to unpack" su secondi mancanti).
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with transaction() as conn:
+        cur = conn.execute(
+            """INSERT INTO trades (
+                ticker, direction, strategy, entry_date, entry_price,
+                shares, stop_loss, target, score_claude, score_tech,
+                catalyst, notes, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
+            (
+                ticker,
+                direction,
+                strategy,
+                entry_date_val,
+                round(entry_price, 2),
+                int(shares) if shares is not None else None,
+                round(stop_loss, 2),
+                round(target, 2) if target is not None else None,
+                score_claude,
+                score_tech,
+                catalyst,
+                notes,
+                created_at,
+            ),
+        )
+        new_id = cur.lastrowid
+
+    return {
+        "id": new_id,
         "ticker": ticker,
         "direction": direction,
+        "strategy": strategy,
         "entry_price": round(entry_price, 2),
-        "entry_date": validate_date(entry_date),
+        "entry_date": entry_date_val,
         "shares": int(shares) if shares is not None else None,
         "stop_loss": round(stop_loss, 2),
         "target": round(target, 2) if target is not None else None,
         "score_claude": score_claude,
         "score_tech": score_tech,
-        "strategy": strategy,
         "catalyst": catalyst,
         "notes": notes,
         "status": "open",
@@ -122,11 +185,8 @@ def add_trade(
         "pnl_per_share": None,
         "duration_days": None,
         "post_trade_notes": None,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "created_at": created_at,
     }
-    trades.append(trade)
-    _save_journal(trades)
-    return trade
 
 
 def close_trade(
@@ -136,12 +196,25 @@ def close_trade(
     reason: str | None = None,
     notes: str | None = None,
 ) -> dict:
-    trades = load_journal()
-    trade = find_open(trades, ticker)
-    if not trade:
-        raise ValueError(f"Nessun trade aperto per {ticker.upper()}.")
+    """Chiude un trade aperto calcolando P&L + duration in giorni."""
+    ticker = ticker.upper()
 
-    exit_date = validate_date(exit_date) if exit_date else datetime.now().strftime(DATE_FMT)
+    # Carica il trade aperto su ticker (necessario per P&L calc)
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM trades WHERE ticker = ? AND status = 'open'",
+            (ticker,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise ValueError(f"Nessun trade aperto per {ticker}.")
+
+    trade = _row_to_trade_dict(row)
+    exit_date_val = (
+        validate_date(exit_date) if exit_date else datetime.now().strftime(DATE_FMT)
+    )
 
     entry = trade["entry_price"]
     direction = trade.get("direction", "long")
@@ -153,22 +226,43 @@ def close_trade(
         pnl_per_share = entry - exit_price
 
     d_entry = datetime.strptime(trade["entry_date"], DATE_FMT)
-    d_exit = datetime.strptime(exit_date, DATE_FMT)
+    d_exit = datetime.strptime(exit_date_val, DATE_FMT)
     if d_exit < d_entry:
         raise ValueError(
-            f"exit_date {exit_date} precede entry_date {trade['entry_date']}."
+            f"exit_date {exit_date_val} precede entry_date {trade['entry_date']}."
         )
     duration = (d_exit - d_entry).days
 
-    trade.update({
+    updates = {
         "status": "closed",
         "exit_price": round(exit_price, 2),
-        "exit_date": exit_date,
+        "exit_date": exit_date_val,
         "exit_reason": reason,
         "pnl_pct": round(pnl_pct, 4),
         "pnl_per_share": round(pnl_per_share, 2),
         "duration_days": duration,
         "post_trade_notes": notes,
-    })
-    _save_journal(trades)
+    }
+
+    with transaction() as conn:
+        conn.execute(
+            """UPDATE trades SET
+                status = ?, exit_price = ?, exit_date = ?, exit_reason = ?,
+                pnl_pct = ?, pnl_per_share = ?, duration_days = ?,
+                post_trade_notes = ?
+               WHERE id = ?""",
+            (
+                updates["status"],
+                updates["exit_price"],
+                updates["exit_date"],
+                updates["exit_reason"],
+                updates["pnl_pct"],
+                updates["pnl_per_share"],
+                updates["duration_days"],
+                updates["post_trade_notes"],
+                trade["id"],
+            ),
+        )
+
+    trade.update(updates)
     return trade

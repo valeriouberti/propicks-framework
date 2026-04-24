@@ -1,19 +1,27 @@
-"""Persistenza e mutazioni del portafoglio.
+"""Persistenza e mutazioni del portafoglio — backend SQLite.
 
-Schema data/portfolio.json:
-    {"positions": {TICKER: {...}}, "cash": float, "initial_capital": float,
-     "last_updated": str|None}
+Source of truth: tabelle ``positions`` + ``portfolio_meta`` in SQLite. Le
+API pubbliche restano identiche a quelle dei file JSON precedenti:
 
-``initial_capital`` è il capitale di riferimento per i display/metrics (header
-dashboard, sidebar invariants). Non influisce sui calcoli di sizing, che usano
-``portfolio_value(portfolio) = cash + sum(shares*entry)`` come denominatore.
-Se assente (file legacy) viene inizializzato a ``config.CAPITAL``.
+- ``load_portfolio()`` → dict con stessa forma ``{positions, cash, initial_capital, last_updated}``
+- ``add_position(portfolio, ...)`` → accetta + muta il dict in-process per
+  compatibilità con pattern load→mutate→save dei caller; persiste al DB
+- ``close_position``, ``remove_position``, ``update_position``, ``unrealized_pl``
+  stesse firme.
+
+Differenza concettuale vs JSON: **ogni mutazione persiste subito** al DB via
+transazione. Il dict in memoria è una view che può essere ricaricata con
+``load_portfolio()``. I test che fanno multiple mutazioni sullo stesso dict
+devono sincronizzare il dict con il DB, o ri-caricare dopo ogni chiamata.
+
+``initial_capital`` è il capitale di riferimento per i display/metrics
+(header dashboard, sidebar invariants). Non influisce sui calcoli di sizing,
+che usano ``portfolio_value(portfolio) = cash + sum(shares*entry)`` come
+denominatore. Se assente viene inizializzato a ``config.CAPITAL``.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime
 
 from propicks.config import (
@@ -29,7 +37,6 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
     MIN_SCORE_CLAUDE,
     MIN_SCORE_TECH,
-    PORTFOLIO_FILE,
 )
 from propicks.domain.sizing import (
     contrarian_aggregate_exposure,
@@ -38,52 +45,76 @@ from propicks.domain.sizing import (
     portfolio_value,
 )
 from propicks.domain.validation import validate_scores
-from propicks.io.atomic import atomic_write_json
-from propicks.io.migrations import migrate, stamp_version
+from propicks.io.db import connect, meta_set_many, transaction
+
+# ---------------------------------------------------------------------------
+# Row ↔ dict converters
+# ---------------------------------------------------------------------------
+_POSITION_FIELDS = (
+    "entry_price", "entry_date", "shares", "stop_loss", "target",
+    "highest_price_since_entry", "trailing_enabled",
+    "strategy", "score_claude", "score_tech", "catalyst",
+)
 
 
-def _default_portfolio() -> dict:
+def _row_to_position_dict(row) -> dict:
+    """Converte una riga della tabella positions nel dict legacy-compatibile."""
     return {
-        "positions": {},
-        "cash": CAPITAL,
-        "initial_capital": CAPITAL,
-        "last_updated": None,
+        "entry_price": row["entry_price"],
+        "entry_date": row["entry_date"],
+        "shares": row["shares"],
+        "stop_loss": row["stop_loss"],
+        "target": row["target"],
+        "highest_price_since_entry": row["highest_price_since_entry"],
+        "trailing_enabled": bool(row["trailing_enabled"]),
+        "strategy": row["strategy"],
+        "score_claude": row["score_claude"],
+        "score_tech": row["score_tech"],
+        "catalyst": row["catalyst"],
     }
 
 
+# ---------------------------------------------------------------------------
+# Read API
+# ---------------------------------------------------------------------------
 def load_portfolio() -> dict:
-    """Carica il portafoglio, migrando schema legacy (positions come lista)."""
-    if not os.path.exists(PORTFOLIO_FILE):
-        pf = _default_portfolio()
-        save_portfolio(pf)
-        return pf
+    """Carica il portafoglio dal DB e ritorna il dict legacy-compatibile.
 
+    Schema ritornato:
+        {"positions": {TICKER: {...}}, "cash": float, "initial_capital": float,
+         "last_updated": str|None}
+
+    Se il DB è vuoto (prima esecuzione post-migration o nuovo install), ritorna
+    un portfolio default con ``cash = initial_capital = config.CAPITAL``.
+    """
+    conn = connect()
     try:
-        with open(PORTFOLIO_FILE) as f:
-            data = json.load(f)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"[fatal] portfolio.json corrotto: {exc}. "
-            f"Ripristina da backup o correggi manualmente."
-        ) from exc
+        rows = conn.execute(
+            "SELECT * FROM positions ORDER BY ticker"
+        ).fetchall()
+        meta_rows = conn.execute(
+            "SELECT key, value FROM portfolio_meta"
+        ).fetchall()
+    finally:
+        conn.close()
 
-    if isinstance(data.get("positions"), list):
-        positions = {p["ticker"]: {k: v for k, v in p.items() if k != "ticker"}
-                     for p in data.get("positions", [])}
-        cash = float(data.get("cash") or data.get("capital_current") or CAPITAL)
-        last = data.get("last_updated") or data.get("last_update")
-        data = {"positions": positions, "cash": cash, "last_updated": last}
+    meta = {r["key"]: r["value"] for r in meta_rows}
+    cash = float(meta.get("cash") or CAPITAL)
+    initial_capital = float(meta.get("initial_capital") or CAPITAL)
+    last_updated = meta.get("last_updated") or None
 
-    data.setdefault("positions", {})
-    data.setdefault("cash", CAPITAL)
-    data.setdefault("initial_capital", CAPITAL)
-    data.setdefault("last_updated", None)
-    data = migrate(data, "portfolio")
-    return data
+    positions = {row["ticker"]: _row_to_position_dict(row) for row in rows}
+
+    return {
+        "positions": positions,
+        "cash": cash,
+        "initial_capital": initial_capital,
+        "last_updated": last_updated,
+    }
 
 
 def get_initial_capital(portfolio: dict) -> float:
-    """Capitale di riferimento. Fallback su ``config.CAPITAL`` per file legacy."""
+    """Capitale di riferimento. Fallback su ``config.CAPITAL`` per edge case."""
     return float(portfolio.get("initial_capital") or CAPITAL)
 
 
@@ -97,7 +128,7 @@ def set_initial_capital(
 
     Con ``reset_cash=True`` azzera anche il ``cash`` corrente a ``value`` —
     consentito solo se non ci sono posizioni aperte, per evitare di rompere
-    il cash accounting di un portfolio live. Il journal NON viene toccato.
+    il cash accounting di un portfolio live.
     """
     if value <= 0:
         raise ValueError(f"initial_capital deve essere > 0 (ricevuto {value}).")
@@ -107,17 +138,72 @@ def set_initial_capital(
             f"({len(portfolio['positions'])} posizioni aperte). "
             "Chiudi o rimuovi le posizioni prima del reset."
         )
-    portfolio["initial_capital"] = round(float(value), 2)
+    new_value = round(float(value), 2)
+    updates: dict[str, str] = {
+        "initial_capital": str(new_value),
+        "last_updated": datetime.now().strftime(DATE_FMT),
+    }
     if reset_cash:
-        portfolio["cash"] = round(float(value), 2)
-    save_portfolio(portfolio)
+        updates["cash"] = str(new_value)
+    meta_set_many(updates)
+
+    portfolio["initial_capital"] = new_value
+    if reset_cash:
+        portfolio["cash"] = new_value
+    portfolio["last_updated"] = updates["last_updated"]
     return portfolio
 
 
 def save_portfolio(portfolio: dict) -> None:
-    portfolio["last_updated"] = datetime.now().strftime(DATE_FMT)
-    stamp_version(portfolio, "portfolio")
-    atomic_write_json(PORTFOLIO_FILE, portfolio)
+    """Sincronizza il dict in-memory con il DB.
+
+    Utile quando un caller ha mutato il dict direttamente (raro ma ammesso
+    dal pattern legacy). Fa un upsert completo di tutte le positions + meta.
+    Normalmente le API mutanti (``add_position``, ``close_position``, etc.)
+    persistono direttamente — non serve chiamare questa funzione.
+    """
+    cash = float(portfolio.get("cash") or 0)
+    initial_capital = float(portfolio.get("initial_capital") or CAPITAL)
+    last_updated = datetime.now().strftime(DATE_FMT)
+
+    with transaction() as conn:
+        # Sync positions: delete + insert (più semplice che UPSERT con n colonne)
+        conn.execute("DELETE FROM positions")
+        for ticker, pos in portfolio.get("positions", {}).items():
+            conn.execute(
+                """INSERT INTO positions (
+                    ticker, strategy, entry_price, entry_date, shares,
+                    stop_loss, target, highest_price_since_entry, trailing_enabled,
+                    score_claude, score_tech, catalyst
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ticker.upper(),
+                    pos.get("strategy"),
+                    float(pos["entry_price"]),
+                    pos.get("entry_date"),
+                    int(pos.get("shares") or 0),
+                    pos.get("stop_loss"),
+                    pos.get("target"),
+                    pos.get("highest_price_since_entry"),
+                    1 if pos.get("trailing_enabled") else 0,
+                    pos.get("score_claude"),
+                    pos.get("score_tech"),
+                    pos.get("catalyst"),
+                ),
+            )
+        for key, value in (
+            ("cash", str(cash)),
+            ("initial_capital", str(initial_capital)),
+            ("last_updated", last_updated),
+        ):
+            conn.execute(
+                """INSERT INTO portfolio_meta (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+    portfolio["last_updated"] = last_updated
 
 
 def unrealized_pl(portfolio: dict) -> tuple[float, dict[str, float]]:
@@ -142,6 +228,9 @@ def unrealized_pl(portfolio: dict) -> tuple[float, dict[str, float]]:
     return total, prices
 
 
+# ---------------------------------------------------------------------------
+# Mutating API
+# ---------------------------------------------------------------------------
 def add_position(
     portfolio: dict,
     ticker: str,
@@ -155,6 +244,14 @@ def add_position(
     catalyst: str | None,
     entry_date: str | None = None,
 ) -> dict:
+    """Apre una posizione con tutti i gate di business.
+
+    Muta il dict ``portfolio`` in-place AND scrive su DB (transazione unica
+    positions + cash meta).
+
+    Gate contrarian: size 8%, max 3 pos, 20% aggregate, loss 12%. Riconosce
+    il bucket da ``strategy.lower().startswith("contra")``.
+    """
     ticker = ticker.upper()
     positions = portfolio.setdefault("positions", {})
 
@@ -179,9 +276,6 @@ def add_position(
 
     total = portfolio_value(portfolio)
 
-    # Riconosci il bucket dal tag strategy. I gate contrarian sono più stretti
-    # del momentum (size cap 8%, bucket cap 20%, max 3 pos) e DEVONO essere
-    # enforced qui — altrimenti `add_position` diretto bypassa `calculate_position_size`.
     is_contra = isinstance(strategy, str) and strategy.lower().startswith("contra")
     if is_contra:
         size_cap_pct = CONTRA_MAX_POSITION_SIZE_PCT
@@ -204,7 +298,6 @@ def add_position(
                 f"Bucket contrarian pieno: {contra_n}/{CONTRA_MAX_POSITIONS} "
                 f"posizioni contrarian aperte."
             )
-        # Esposizione aggregata dopo l'aggiunta:
         new_contra_value = sum(
             float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
             for p in positions.values()
@@ -243,7 +336,7 @@ def add_position(
         )
 
     entry_date = entry_date or datetime.now().strftime(DATE_FMT)
-    positions[ticker] = {
+    new_position = {
         "entry_price": round(entry_price, 2),
         "entry_date": entry_date,
         "shares": int(shares),
@@ -254,9 +347,42 @@ def add_position(
         "score_tech": score_tech,
         "catalyst": catalyst,
     }
-    portfolio["cash"] = round(cash - cost, 2)
-    save_portfolio(portfolio)
-    return positions[ticker]
+    new_cash = round(cash - cost, 2)
+    now = datetime.now().strftime(DATE_FMT)
+
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO positions (
+                ticker, strategy, entry_price, entry_date, shares,
+                stop_loss, target, score_claude, score_tech, catalyst
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                ticker,
+                strategy,
+                new_position["entry_price"],
+                new_position["entry_date"],
+                new_position["shares"],
+                new_position["stop_loss"],
+                new_position["target"],
+                score_claude,
+                score_tech,
+                catalyst,
+            ),
+        )
+        for key, value in (("cash", str(new_cash)), ("last_updated", now)):
+            conn.execute(
+                """INSERT INTO portfolio_meta (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+
+    # Sync in-process dict
+    positions[ticker] = new_position
+    portfolio["cash"] = new_cash
+    portfolio["last_updated"] = now
+    return new_position
 
 
 def remove_position(portfolio: dict, ticker: str) -> dict:
@@ -271,19 +397,26 @@ def remove_position(portfolio: dict, ticker: str) -> dict:
         raise ValueError(f"Nessuna posizione aperta su {ticker}.")
     pos = positions.pop(ticker)
     refund = pos["shares"] * pos["entry_price"]
-    portfolio["cash"] = round(float(portfolio.get("cash") or 0) + refund, 2)
-    save_portfolio(portfolio)
+    new_cash = round(float(portfolio.get("cash") or 0) + refund, 2)
+    now = datetime.now().strftime(DATE_FMT)
+
+    with transaction() as conn:
+        conn.execute("DELETE FROM positions WHERE ticker = ?", (ticker,))
+        for key, value in (("cash", str(new_cash)), ("last_updated", now)):
+            conn.execute(
+                """INSERT INTO portfolio_meta (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+    portfolio["cash"] = new_cash
+    portfolio["last_updated"] = now
     return pos
 
 
 def close_position(portfolio: dict, ticker: str, exit_price: float) -> dict:
-    """Chiude una posizione con cash accounting corretto.
-
-    Il cash residuo aumenta di ``shares * exit_price`` (proventi dalla vendita),
-    non di ``shares * entry_price`` come fa ``remove_position``. La differenza
-    tra i due rappresenta il P&L realizzato — che NON viene tracciato qui:
-    il P&L vive nel journal, portfolio.json ha solo lo stato corrente.
-    """
+    """Chiude una posizione con cash accounting corretto (exit_price reali)."""
     ticker = ticker.upper()
     positions = portfolio.get("positions", {})
     if ticker not in positions:
@@ -292,8 +425,21 @@ def close_position(portfolio: dict, ticker: str, exit_price: float) -> dict:
         raise ValueError(f"exit_price deve essere > 0 (ricevuto {exit_price}).")
     pos = positions.pop(ticker)
     proceeds = pos["shares"] * exit_price
-    portfolio["cash"] = round(float(portfolio.get("cash") or 0) + proceeds, 2)
-    save_portfolio(portfolio)
+    new_cash = round(float(portfolio.get("cash") or 0) + proceeds, 2)
+    now = datetime.now().strftime(DATE_FMT)
+
+    with transaction() as conn:
+        conn.execute("DELETE FROM positions WHERE ticker = ?", (ticker,))
+        for key, value in (("cash", str(new_cash)), ("last_updated", now)):
+            conn.execute(
+                """INSERT INTO portfolio_meta (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+    portfolio["cash"] = new_cash
+    portfolio["last_updated"] = now
     return pos
 
 
@@ -305,6 +451,7 @@ def update_position(
     highest_price: float | None = None,
     trailing_enabled: bool | None = None,
 ) -> dict:
+    """Aggiorna uno o più campi di una posizione esistente."""
     ticker = ticker.upper()
     positions = portfolio.get("positions", {})
     if ticker not in positions:
@@ -314,10 +461,8 @@ def update_position(
         raise ValueError("Specificare almeno un campo da aggiornare.")
     pos = positions[ticker]
     entry = float(pos["entry_price"])
-    # Validazione difensiva contro data-entry errata. Lo stop può legittimamente
-    # finire SOPRA entry quando il trailing ratchet-up ha bloccato profitto (è
-    # lo scopo del trailing), quindi NON enforciamo stop < entry. Ma stop <= 0
-    # o target <= entry sono solo typo.
+
+    # Validazioni identiche alla versione JSON:
     if stop_loss is not None:
         if stop_loss <= 0:
             raise ValueError(f"stop_loss deve essere > 0 (ricevuto {stop_loss}).")
@@ -333,5 +478,36 @@ def update_position(
         pos["highest_price_since_entry"] = round(highest_price, 2)
     if trailing_enabled is not None:
         pos["trailing_enabled"] = bool(trailing_enabled)
-    save_portfolio(portfolio)
+
+    now = datetime.now().strftime(DATE_FMT)
+    with transaction() as conn:
+        # Aggiorna SOLO i campi non-None per non azzerare accidentalmente altri
+        setters: list[str] = []
+        params: list = []
+        if stop_loss is not None:
+            setters.append("stop_loss = ?")
+            params.append(pos["stop_loss"])
+        if target is not None:
+            setters.append("target = ?")
+            params.append(pos["target"])
+        if highest_price is not None:
+            setters.append("highest_price_since_entry = ?")
+            params.append(pos["highest_price_since_entry"])
+        if trailing_enabled is not None:
+            setters.append("trailing_enabled = ?")
+            params.append(1 if pos["trailing_enabled"] else 0)
+        setters.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(ticker)
+        conn.execute(
+            f"UPDATE positions SET {', '.join(setters)} WHERE ticker = ?",
+            params,
+        )
+        conn.execute(
+            """INSERT INTO portfolio_meta (key, value, updated_at)
+               VALUES ('last_updated', ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+            (now,),
+        )
+    portfolio["last_updated"] = now
     return pos

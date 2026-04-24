@@ -19,10 +19,7 @@ richiamare.
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import time
 from datetime import date
 
 from propicks.ai.budget import AIBudgetExceeded, check_budget, record_call
@@ -32,37 +29,35 @@ from propicks.ai.claude_client import (
     call_etf_validation,
 )
 from propicks.ai.etf_prompts import render_etf_user_prompt
-from propicks.config import AI_CACHE_DIR, get_etf_benchmark
+from propicks.config import get_etf_benchmark
+from propicks.io.db import ai_verdict_cache_get, ai_verdict_cache_put
 
 _CACHE_VERSION = "etf-v1"
 _CACHE_TTL_HOURS = 48
+_STRATEGY_TAG = "etf_rotation"
 
 
-def _cache_path(region: str, regime_code: int | None, day: str) -> str:
+def _cache_key(region: str, regime_code: int | None, day: str) -> str:
+    """Chiave stabile identica al naming legacy: ``rotation_US_3_etf-v1_2026-04-24``."""
     rc = regime_code if regime_code is not None else "NA"
-    return os.path.join(AI_CACHE_DIR, f"rotation_{region}_{rc}_{_CACHE_VERSION}_{day}.json")
+    return f"rotation_{region}_{rc}_{_CACHE_VERSION}_{day}"
 
 
 def _load_cached(region: str, regime_code: int | None, day: str) -> dict | None:
-    path = _cache_path(region, regime_code, day)
-    if not os.path.exists(path):
-        return None
-    age_h = (time.time() - os.path.getmtime(path)) / 3600.0
-    if age_h > _CACHE_TTL_HOURS:
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    return ai_verdict_cache_get(
+        _cache_key(region, regime_code, day), ttl_hours=_CACHE_TTL_HOURS
+    )
 
 
 def _save_cache(region: str, regime_code: int | None, day: str, payload: dict) -> None:
-    path = _cache_path(region, regime_code, day)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    ai_verdict_cache_put(
+        _cache_key(region, regime_code, day),
+        strategy=_STRATEGY_TAG,
+        # La rotation non ha un ticker singolo → usa il top sector verdict
+        # come handle, con fallback a region
+        ticker=payload.get("top_sector_verdict") or region.upper(),
+        payload=payload,
+    )
 
 
 def validate_rotation(

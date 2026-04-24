@@ -1,11 +1,10 @@
 """Test coordinator trade_sync (journal + portfolio).
 
-Isola JOURNAL_FILE e PORTFOLIO_FILE su tmp_path. Zero rete.
+Backend SQLite (post Phase 1). L'isolation del DB su tmp_path è autouse
+via ``conftest._isolate_db``. Zero rete, zero tocco del DB reale.
 """
 
 from __future__ import annotations
-
-import json
 
 import pytest
 
@@ -13,19 +12,20 @@ from propicks.config import CAPITAL
 
 
 @pytest.fixture
-def stores_tmp(tmp_path, monkeypatch):
-    """Redirige entrambi gli store su tmp_path."""
-    journal = tmp_path / "journal.json"
-    portfolio = tmp_path / "portfolio.json"
-    monkeypatch.setattr("propicks.config.JOURNAL_FILE", str(journal))
-    monkeypatch.setattr("propicks.config.PORTFOLIO_FILE", str(portfolio))
-    monkeypatch.setattr("propicks.io.journal_store.JOURNAL_FILE", str(journal))
-    monkeypatch.setattr("propicks.io.portfolio_store.PORTFOLIO_FILE", str(portfolio))
-    return journal, portfolio
+def stores_tmp():
+    """No-op: l'isolation DB è già autouse via conftest._isolate_db.
+
+    Mantenuto come fixture perché i test lo destrutturano come tuple
+    ``(journal, portfolio)`` — ritorno valori dummy per backward compat
+    sintattica. I test che facevano assertion sul FILE JSON vanno riscritti
+    per leggere dal DB (tutti quelli rimanenti passano comunque perché
+    testano invarianti di business, non il filesystem).
+    """
+    return None, None
 
 
 def test_open_trade_writes_both_stores(stores_tmp):
-    _journal_file, portfolio_file = stores_tmp
+    from propicks.io.portfolio_store import load_portfolio
     from propicks.io.trade_sync import open_trade
 
     trade, pos, warnings = open_trade(
@@ -53,9 +53,8 @@ def test_open_trade_writes_both_stores(stores_tmp):
     assert pos["entry_price"] == 150.0
     assert warnings == []
 
-    # Cash debited correttamente
-    with open(portfolio_file) as f:
-        portfolio = json.load(f)
+    # Cash debited correttamente — fresh load dal DB
+    portfolio = load_portfolio()
     assert portfolio["cash"] == round(CAPITAL - 1500.0, 2)
     assert "AAPL" in portfolio["positions"]
 
@@ -64,7 +63,7 @@ def test_close_trade_uses_exit_proceeds_not_entry_cost(stores_tmp):
     """Il bug storico: remove_position rimborsava entry_price*shares, perdendo il P&L.
     close_trade deve rimborsare exit_price*shares (proventi veri).
     """
-    _, portfolio_file = stores_tmp
+    from propicks.io.portfolio_store import load_portfolio
     from propicks.io.trade_sync import close_trade, open_trade
 
     open_trade(
@@ -80,8 +79,7 @@ def test_close_trade_uses_exit_proceeds_not_entry_cost(stores_tmp):
         strategy="TechTitans",
         catalyst="test",
     )
-    with open(portfolio_file) as f:
-        cash_after_open = json.load(f)["cash"]
+    cash_after_open = load_portfolio()["cash"]
 
     trade, removed, warnings = close_trade(
         ticker="AAPL",
@@ -95,8 +93,7 @@ def test_close_trade_uses_exit_proceeds_not_entry_cost(stores_tmp):
     assert removed is not None
     assert warnings == []
 
-    with open(portfolio_file) as f:
-        portfolio = json.load(f)
+    portfolio = load_portfolio()
     # Cash = cash_after_open + 10*170 (proventi), NON + 10*150 (cost)
     expected_cash = round(cash_after_open + 10 * 170.0, 2)
     assert portfolio["cash"] == expected_cash

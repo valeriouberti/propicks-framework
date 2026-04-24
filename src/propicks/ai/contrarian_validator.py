@@ -15,10 +15,7 @@ Regime gate inverso rispetto a ``thesis_validator``:
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import time
 from datetime import date
 
 from propicks.ai.budget import AIBudgetExceeded, check_budget, record_call
@@ -29,12 +26,13 @@ from propicks.ai.claude_client import (
 )
 from propicks.ai.contrarian_prompts import render_contrarian_user_prompt
 from propicks.config import (
-    AI_CACHE_DIR,
     CONTRA_AI_CACHE_TTL_HOURS,
     CONTRA_AI_MIN_SCORE_FOR_VALIDATION,
 )
+from propicks.io.db import ai_verdict_cache_get, ai_verdict_cache_put
 
 _CACHE_VERSION = "contra_v1"
+_STRATEGY_TAG = "contrarian"
 
 # Stessa filosofia di thesis_validator._RR_CONFIRM_FLOOR: un CONFIRM deve
 # avere R/R matematicamente >= 2.0. Sotto → downgrade automatico.
@@ -43,9 +41,10 @@ _RR_REJECT_FLOOR = 1.0  # R/R < 1 significa "stop più distante del target" → 
 _RR_TOLERANCE = 0.05
 
 
-def _cache_path(ticker: str, day: str) -> str:
+def _cache_key(ticker: str, day: str) -> str:
+    """Chiave stabile identica al naming file-based legacy: ``AAPL_contra_v1_2026-04-24``."""
     safe = ticker.upper().replace("/", "_")
-    return os.path.join(AI_CACHE_DIR, f"{safe}_{_CACHE_VERSION}_{day}.json")
+    return f"{safe}_{_CACHE_VERSION}_{day}"
 
 
 def _enforce_contrarian_sanity(analysis: dict, payload: dict) -> None:
@@ -123,25 +122,20 @@ def _enforce_contrarian_sanity(analysis: dict, payload: dict) -> None:
 
 
 def _load_cached(ticker: str, day: str) -> dict | None:
-    path = _cache_path(ticker, day)
-    if not os.path.exists(path):
-        return None
-    age_h = (time.time() - os.path.getmtime(path)) / 3600.0
-    if age_h > CONTRA_AI_CACHE_TTL_HOURS:
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Lookup verdict nella tabella ``ai_verdicts`` con TTL applicato in SQL."""
+    return ai_verdict_cache_get(
+        _cache_key(ticker, day), ttl_hours=CONTRA_AI_CACHE_TTL_HOURS
+    )
 
 
 def _save_cache(ticker: str, day: str, verdict: dict) -> None:
-    path = _cache_path(ticker, day)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(verdict, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    """Inserisce il verdict nella tabella ``ai_verdicts``."""
+    ai_verdict_cache_put(
+        _cache_key(ticker, day),
+        strategy=_STRATEGY_TAG,
+        ticker=ticker,
+        payload=verdict,
+    )
 
 
 def validate_contrarian_thesis(

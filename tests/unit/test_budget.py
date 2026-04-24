@@ -1,13 +1,12 @@
 """Test del budget cap Anthropic.
 
-``conftest.py`` ha già un autouse fixture che redirige ``config.AI_CACHE_DIR``
-su tmp, quindi questi test NON scrivono mai sul ``data/ai_cache/`` reale.
+Post Phase 1 il budget è persistito in tabella ``daily_budget`` del DB SQLite.
+``conftest.py`` autouse fixture isola ``config.DB_FILE`` su tmp — questi test
+NON toccano mai il DB reale.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -20,11 +19,23 @@ from propicks.ai.budget import (
     current_usage,
     record_call,
 )
+from propicks.io.db import connect
 
 
-def _usage_file() -> Path:
+def _usage_from_db() -> dict:
+    """Helper per i test: legge la riga del giorno dalla tabella daily_budget."""
     from datetime import date
-    return Path(config.AI_CACHE_DIR) / f"usage_{date.today().isoformat()}.json"
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT calls, est_cost_usd FROM daily_budget WHERE date = ?",
+            (date.today().isoformat(),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {"calls": 0, "est_cost_usd": 0.0}
+    return {"calls": int(row["calls"]), "est_cost_usd": float(row["est_cost_usd"])}
 
 
 def _full_analysis() -> dict:
@@ -74,9 +85,9 @@ def test_record_call_increments_and_persists():
     record_call(est_cost_usd=0.05)
     record_call(est_cost_usd=0.07)
 
-    on_disk = json.loads(_usage_file().read_text())
-    assert on_disk["calls"] == 2
-    assert on_disk["est_cost_usd"] == pytest.approx(0.12, abs=0.001)
+    on_db = _usage_from_db()
+    assert on_db["calls"] == 2
+    assert on_db["est_cost_usd"] == pytest.approx(0.12, abs=0.001)
 
 
 def test_check_budget_raises_when_calls_exceeded(monkeypatch):
@@ -97,9 +108,8 @@ def test_check_budget_raises_when_cost_exceeded(monkeypatch):
         check_budget()
 
 
-def test_corrupted_usage_file_resets_to_zero():
-    """File corrotto viene resettato invece di bloccare la CLI."""
-    _usage_file().write_text("not json {")
+def test_empty_db_returns_zero_usage():
+    """Prima chiamata del giorno, tabella daily_budget vuota → (0, 0.0)."""
     usage = current_usage()
     assert usage["calls"] == 0
     assert usage["est_cost_usd"] == 0.0
@@ -168,13 +178,13 @@ def test_validator_records_call_on_success(monkeypatch):
 
 
 def test_cache_hit_does_not_increment_budget(monkeypatch, tmp_path):
-    """Cache hit non deve toccare il budget — l'API non viene colpita."""
-    from propicks.ai.claude_client import ConfidenceByDimension, ThesisVerdict
+    """Cache hit non deve toccare il budget — l'API non viene colpita.
 
-    # thesis_validator scrive la cache su thesis_validator.AI_CACHE_DIR:
-    # patcho QUELLO (modulo locale), NON config.AI_CACHE_DIR che è già
-    # isolato dalla autouse fixture ma riutilizzato anche dal budget.
-    monkeypatch.setattr(thesis_validator, "AI_CACHE_DIR", str(tmp_path))
+    Post Phase 1 la cache è nella tabella ``ai_verdicts`` del DB SQLite.
+    L'isolation è già garantita dalla fixture autouse ``_isolate_db`` (ogni
+    test ha DB ephemeral in tmp_path), quindi non serve patchare path.
+    """
+    from propicks.ai.claude_client import ConfidenceByDimension, ThesisVerdict
 
     verdict = ThesisVerdict(
         verdict="CONFIRM",

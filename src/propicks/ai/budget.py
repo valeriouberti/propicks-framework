@@ -1,9 +1,9 @@
-"""Budget cap giornaliero sulle chiamate Anthropic.
+"""Budget cap giornaliero sulle chiamate Anthropic — backend SQLite.
 
-Persistenza leggera: un file JSON al giorno in ``data/ai_cache/`` con
-``{"calls": int, "est_cost_usd": float}``. Niente lock tra processi —
-il trader è single-user, il worst-case è che due scan paralleli
-superino di 1-2 chiamate il cap. Accettabile.
+Persistenza: tabella ``daily_budget`` con una riga per giorno
+``(date, calls, est_cost_usd, updated_at)``. Il bucket giornaliero si resetta
+automaticamente al cambio di data (nuova riga viene creata lazy al primo
+record_call del giorno).
 
 Cache hit NON chiama ``record_call`` — il budget si spende solo quando
 si tocca davvero l'API.
@@ -11,44 +11,37 @@ si tocca davvero l'API.
 
 from __future__ import annotations
 
-import json
-import os
-import sys
 from datetime import date
 
 from propicks import config
-from propicks.io.atomic import atomic_write_json
+from propicks.io.db import connect, transaction
 
 
 class AIBudgetExceeded(RuntimeError):
     """Budget giornaliero superato: la chiamata non è stata fatta."""
 
 
-def _usage_path(day: str | None = None) -> str:
-    # Letto lazy da config per permettere ai test di monkeypatchare
-    # ``propicks.config.AI_CACHE_DIR`` senza duplicarsi il patching.
-    day = day or date.today().isoformat()
-    return os.path.join(config.AI_CACHE_DIR, f"usage_{day}.json")
+def _today(day: str | None = None) -> str:
+    return day or date.today().isoformat()
 
 
 def _load_usage(day: str | None = None) -> dict:
-    path = _usage_path(day)
-    if not os.path.exists(path):
-        return {"calls": 0, "est_cost_usd": 0.0}
+    """Legge il counter del giorno dal DB. Zero se riga assente."""
+    d = _today(day)
+    conn = connect()
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        # File corrotto: meglio ripartire da zero che bloccare la CLI.
-        # Un utente che ha già buttato il file probabilmente voleva resettare.
-        print(
-            f"[ai.budget] usage file {path} illeggibile, reset a zero",
-            file=sys.stderr,
-        )
+        row = conn.execute(
+            "SELECT calls, est_cost_usd FROM daily_budget WHERE date = ?",
+            (d,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
         return {"calls": 0, "est_cost_usd": 0.0}
-    data.setdefault("calls", 0)
-    data.setdefault("est_cost_usd", 0.0)
-    return data
+    return {
+        "calls": int(row["calls"]),
+        "est_cost_usd": float(row["est_cost_usd"]),
+    }
 
 
 def check_budget(day: str | None = None) -> dict:
@@ -64,7 +57,7 @@ def check_budget(day: str | None = None) -> dict:
         raise AIBudgetExceeded(
             f"daily call limit reached: {calls}/{config.AI_MAX_CALLS_PER_DAY}. "
             f"Override con PROPICKS_AI_MAX_CALLS_PER_DAY=<N> o aspetta "
-            f"mezzanotte UTC (reset file giornaliero)."
+            f"mezzanotte UTC (reset giornaliero automatico)."
         )
     if cost >= config.AI_MAX_COST_USD_PER_DAY:
         raise AIBudgetExceeded(
@@ -79,24 +72,32 @@ def record_call(
     *,
     day: str | None = None,
 ) -> dict:
-    """Incrementa il contatore giornaliero dopo una chiamata reale all'API.
+    """Incrementa il counter giornaliero via UPSERT atomic.
 
     Se ``est_cost_usd`` è None, usa il default da config. Va chiamato
     SOLO per chiamate che hanno effettivamente toccato la rete — cache
     hit e skip di gate non spendono.
     """
-    est_cost_usd = (
+    est_cost = (
         config.AI_EST_COST_PER_CALL_USD
         if est_cost_usd is None
         else float(est_cost_usd)
     )
-    usage = _load_usage(day)
-    usage["calls"] = int(usage.get("calls", 0)) + 1
-    usage["est_cost_usd"] = round(
-        float(usage.get("est_cost_usd", 0.0)) + est_cost_usd, 4
-    )
-    atomic_write_json(_usage_path(day), usage)
-    return usage
+    d = _today(day)
+
+    with transaction() as conn:
+        # UPSERT: crea la riga se non esiste, altrimenti incrementa.
+        conn.execute(
+            """INSERT INTO daily_budget (date, calls, est_cost_usd, updated_at)
+               VALUES (?, 1, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(date) DO UPDATE SET
+                 calls = calls + 1,
+                 est_cost_usd = ROUND(est_cost_usd + ?, 4),
+                 updated_at = CURRENT_TIMESTAMP""",
+            (d, est_cost, est_cost),
+        )
+    # Ritorna lo stato aggiornato (secondo SELECT — più semplice del RETURNING)
+    return _load_usage(day)
 
 
 def current_usage(day: str | None = None) -> dict:
