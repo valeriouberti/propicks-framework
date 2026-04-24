@@ -4,9 +4,50 @@ from __future__ import annotations
 
 from propicks.domain.sizing import (
     calculate_position_size,
+    contrarian_aggregate_exposure,
+    contrarian_position_count,
+    is_contrarian_position,
     portfolio_market_value,
     portfolio_value,
 )
+
+
+def test_is_contrarian_position_matches_prefix():
+    """Case-insensitive prefix match su 'contra'."""
+    assert is_contrarian_position({"strategy": "Contrarian"}) is True
+    assert is_contrarian_position({"strategy": "contrarian"}) is True
+    assert is_contrarian_position({"strategy": "CONTRA — macro_flush"}) is True
+    assert is_contrarian_position({"strategy": "contrarian-pullback"}) is True
+    # Non-match
+    assert is_contrarian_position({"strategy": "TechTitans"}) is False
+    assert is_contrarian_position({"strategy": None}) is False
+    assert is_contrarian_position({}) is False
+
+
+def test_contrarian_position_count_mixed_portfolio():
+    pf = {
+        "positions": {
+            "A": {"strategy": "Contrarian"},
+            "B": {"strategy": "TechTitans"},
+            "C": {"strategy": "contra — flush"},
+            "D": {"strategy": "DominaDow"},
+        }
+    }
+    assert contrarian_position_count(pf) == 2
+
+
+def test_contrarian_aggregate_exposure_mixed_portfolio():
+    pf = {
+        "cash": 5_000.0,
+        "positions": {
+            "A": {"shares": 10, "entry_price": 100, "strategy": "Contrarian"},  # 1000
+            "B": {"shares": 10, "entry_price": 100, "strategy": "TechTitans"},  # 1000 (non contra)
+        },
+    }
+    # total = 5000 + 1000 + 1000 = 7000; contra = 1000 → ~14.28%
+    expo = contrarian_aggregate_exposure(pf)
+    assert round(expo, 4) == round(1000 / 7000, 4)
+
 
 
 def _empty_portfolio(cash: float = 10_000.0) -> dict:
@@ -200,6 +241,32 @@ def test_sizing_contrarian_aggregate_cap():
     )
     assert r["ok"] is False
     assert "cap aggregato" in r["error"]
+
+
+def test_sizing_contrarian_explicit_headroom_error_message():
+    """Bug fix #3: quando il binder è l'headroom contrarian, l'errore lo dice
+    esplicitamente invece di 'cash insufficient'.
+    """
+    # Portfolio a ~10k con expo contrarian JUST BELOW 20% → headroom ~0.03% = 3€.
+    # Entry price 100 > headroom → shares=0, ma l'errore deve dire "bucket quasi al cap".
+    pf2 = {
+        "cash": 8_010.0,
+        "positions": {
+            "X": {"shares": 19, "entry_price": 100, "strategy": "Contrarian"},
+            "Y": {"shares": 1, "entry_price": 99, "strategy": "Contrarian"},
+        },
+    }
+    # portfolio_value = 8010 + 1900 + 99 = 10009; contra_value = 1999; expo ~ 19.97% < 20%
+    # Headroom ~ 0.03% = 3€. Entry price 100 > headroom → shares=0.
+    r = calculate_position_size(
+        entry_price=100, stop_price=92,
+        score_claude=10, score_tech=100,
+        portfolio=pf2, strategy_bucket="contrarian",
+    )
+    assert r["ok"] is False
+    # Deve dire "bucket quasi al cap", NON "cash insufficient"
+    assert "Bucket contrarian" in r["error"]
+    assert "headroom" in r["error"].lower()
 
 
 def test_sizing_momentum_ignores_contrarian_bucket_rules():

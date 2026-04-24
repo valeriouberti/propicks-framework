@@ -6,9 +6,9 @@ Questa è la pagina di default (sidebar top entry).
 
 from __future__ import annotations
 
-import streamlit as st
-
 from datetime import date
+
+import streamlit as st
 
 from propicks.config import MAX_LOSS_WEEKLY_PCT, MAX_POSITIONS, MIN_CASH_RESERVE_PCT
 from propicks.dashboard._shared import (
@@ -24,8 +24,8 @@ from propicks.dashboard._shared import (
     regime_badge,
     score_badge,
 )
-from propicks.domain.sizing import portfolio_value
 from propicks.dashboard.cadence import DAY_NAMES_IT, WEEKLY_CADENCE, today_block
+from propicks.domain.sizing import portfolio_value
 from propicks.domain.trade_mgmt import (
     DEFAULT_FLAT_THRESHOLD_PCT,
     DEFAULT_TIME_STOP_DAYS,

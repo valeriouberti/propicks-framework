@@ -21,6 +21,8 @@ from propicks.config import (
 )
 from propicks.domain.contrarian_scoring import (
     _consecutive_down_bars,
+    _drawdown_5d_atr,
+    apply_regime_cap,
     classify_contra,
     score_market_context,
     score_oversold,
@@ -120,12 +122,17 @@ def test_quality_gate_too_deep():
     assert r["score"] == 20.0
 
 
-def test_quality_gate_no_ema_returns_neutral():
-    """Senza EMA200w disponibile → score neutro 50."""
+def test_quality_gate_no_ema_fail_closed():
+    """Senza EMA200w disponibile → score 0 (fail-closed per sicurezza).
+
+    Bug fix #5: il gate è hard filter, non soft proxy. Un IPO <60 settimane
+    non passa il quality gate — il trader valuta a mano via altri strumenti.
+    """
     r = score_quality_gate(
         close=105.0, ema_200_weekly=None, distance_from_high=-0.15
     )
-    assert r["score"] == 50.0
+    assert r["score"] == 0.0
+    assert "fail-closed" in r["note"]
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +283,173 @@ def test_contra_regime_fit_inverse_shape():
 
 def test_contra_vix_thresholds_ordered():
     assert CONTRA_VIX_COMPLACENT < CONTRA_VIX_SPIKE
+
+
+# ---------------------------------------------------------------------------
+# apply_regime_cap (fix #4)
+# ---------------------------------------------------------------------------
+def test_regime_cap_strong_bull_zeroes_composite():
+    """Composite in STRONG_BULL (5) → 0 per evitare Class A fuorvianti."""
+    assert apply_regime_cap(85.0, regime_code=5) == 0.0
+
+
+def test_regime_cap_strong_bear_zeroes_composite():
+    """Composite in STRONG_BEAR (1) → 0 (falling knife, no mean reversion)."""
+    assert apply_regime_cap(80.0, regime_code=1) == 0.0
+
+
+def test_regime_cap_neutral_no_cap():
+    """In NEUTRAL (3) il composite è invariato."""
+    assert apply_regime_cap(85.0, regime_code=3) == 85.0
+
+
+def test_regime_cap_bull_bear_no_cap():
+    """BULL (4) e BEAR (2) sono range operativi, nessun cap."""
+    assert apply_regime_cap(75.0, regime_code=4) == 75.0
+    assert apply_regime_cap(75.0, regime_code=2) == 75.0
+
+
+def test_regime_cap_none_no_cap():
+    """Regime ignoto → composite invariato (non si penalizza alla cieca)."""
+    assert apply_regime_cap(70.0, regime_code=None) == 70.0
+
+
+# ---------------------------------------------------------------------------
+# drawdown_5d_atr (fix #8)
+# ---------------------------------------------------------------------------
+def test_drawdown_5d_atr_single_big_red():
+    """1 big red candle: peak alto, current basso, dd/atr grande."""
+    high = pd.Series([100, 100, 100, 100, 100])
+    close = pd.Series([100, 100, 100, 100, 94])
+    # peak_5d = 100, current = 94, atr = 2 → dd = 6/2 = 3.0
+    assert _drawdown_5d_atr(high, close, atr=2.0) == 3.0
+
+
+def test_drawdown_5d_atr_slow_bleed():
+    """5 small reds: peak all'inizio, trend continuo al ribasso."""
+    high = pd.Series([100, 99, 98, 97, 96])
+    close = pd.Series([100, 99, 98, 97, 96])
+    # peak = 100, current = 96, atr = 2 → dd = 2.0
+    assert _drawdown_5d_atr(high, close, atr=2.0) == 2.0
+
+
+def test_drawdown_5d_atr_no_drawdown():
+    """Price al peak → dd = 0."""
+    high = pd.Series([95, 96, 97, 98, 100])
+    close = pd.Series([95, 96, 97, 98, 100])
+    assert _drawdown_5d_atr(high, close, atr=2.0) == 0.0
+
+
+def test_drawdown_5d_atr_invalid_atr():
+    """ATR <= 0 → None."""
+    high = pd.Series([100, 100, 100, 100, 100])
+    close = pd.Series([100, 100, 100, 100, 94])
+    assert _drawdown_5d_atr(high, close, atr=0.0) is None
+
+
+def test_oversold_with_drawdown_primary():
+    """Un flush verticale (dd=3 ATR) ma solo 1 bar rossa → capitulation via drawdown."""
+    r = score_oversold(
+        rsi=28.0, close=95.0, ema_slow=110.0, atr=4.0,
+        consecutive_down=1, drawdown_5d_atr=3.0,
+    )
+    # RSI 40 + ATR distance (3.75) 40 + capitulation max(20 dd, 0 consec) = 100
+    assert r["score"] == 100.0
+    assert r["capitulation_source"] == "drawdown"
+
+
+def test_oversold_with_consecutive_fallback():
+    """Slow bleed (dd=0.5 ATR) ma 5 bar rosse → capitulation via consecutive."""
+    r = score_oversold(
+        rsi=28.0, close=95.0, ema_slow=110.0, atr=4.0,
+        consecutive_down=5, drawdown_5d_atr=0.5,
+    )
+    # max(3 dd pts, 20 consec pts) = 20
+    assert r["capitulation_pts"] == 20.0
+    assert r["capitulation_source"] == "consecutive"
+
+
+def test_oversold_no_double_counting():
+    """Con drawdown=3 E consecutive=5, capitulation è max() non sum() — no double count."""
+    r = score_oversold(
+        rsi=28.0, close=95.0, ema_slow=110.0, atr=4.0,
+        consecutive_down=5, drawdown_5d_atr=3.0,
+    )
+    # max(20, 20) = 20, NOT 40. Total score = 40 + 40 + 20 = 100
+    assert r["score"] == 100.0
+    assert r["capitulation_pts"] == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Claude verdict sanity enforcement (fix #6, #7)
+# ---------------------------------------------------------------------------
+def test_enforce_contrarian_sanity_rr_downgrade_confirm():
+    """CONFIRM con R/R < 2 (matematico) → CAUTION."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 105.0,  # reward 5
+        "invalidation_price": 97.0,  # risk 3 → R/R 1.67
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["verdict"] == "CAUTION"
+    assert payload["_rr_computed"] == 1.67
+
+
+def test_enforce_contrarian_sanity_rr_below_1_rejected():
+    """R/R < 1 → REJECT (setup strutturalmente rotto)."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 103.0,  # reward 3
+        "invalidation_price": 96.0,  # risk 4 → R/R 0.75
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["verdict"] == "REJECT"
+
+
+def test_enforce_contrarian_sanity_target_below_price():
+    """Target <= current price (assurdo per long) → REJECT."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 98.0,  # sotto price!
+        "invalidation_price": 95.0,
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["verdict"] == "REJECT"
+    assert payload["_sanity_override"] == "target_below_price"
+
+
+def test_enforce_contrarian_sanity_invalidation_above_price():
+    """Invalidation >= current price (stop sopra entry) → REJECT."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 105.0,
+        "invalidation_price": 102.0,  # sopra price!
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["verdict"] == "REJECT"
+    assert payload["_sanity_override"] == "invalidation_above_price"
+
+
+def test_enforce_contrarian_sanity_valid_confirm_unchanged():
+    """CONFIRM valido (R/R 2.0) resta CONFIRM."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 106.0,  # reward 6
+        "invalidation_price": 97.0,  # risk 3 → R/R 2.0
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["verdict"] == "CONFIRM"
+    assert payload["_rr_computed"] == 2.0
 
 
 def test_contrarian_scoring_weights_sum_to_one():
