@@ -66,7 +66,8 @@ propicks-ai-framework/
 │   │   ├── report.py          # propicks-report
 │   │   ├── rotate.py          # propicks-rotate (sector rotation ETF)
 │   │   ├── backtest.py        # propicks-backtest (walk-forward single-stock)
-│   │   └── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
+│   │   ├── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
+│   │   └── cache.py           # propicks-cache (stats/warm/clear OHLCV cache)
 │   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
 │       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
 │       ├── _shared.py         # Cached readers, formatters, UI primitives
@@ -114,7 +115,7 @@ propicks-ai-framework/
 ## Stack Tecnologico
 
 - **Python 3.10+** con layout `src/` (editable install via pyproject.toml)
-- **yfinance** — dati di mercato real-time e storici
+- **yfinance** — dati di mercato real-time e storici, **con cache read-through SQLite** (Phase 2, TTL daily 8h / weekly 7gg / meta 7gg)
 - **pandas / numpy** — calcoli tecnici e statistici
 - **tabulate** — output formattato per terminale
 - **SQLite** (stdlib ``sqlite3``) — source of truth per tutto lo stato transazionale: positions, trades, watchlist, AI verdicts, daily budget, strategy runs, regime history, portfolio snapshots. DB file: ``data/propicks.db``. Schema DDL in ``src/propicks/io/schema.sql``. Migrazione one-shot dai JSON legacy via ``propicks-migrate`` (backup ``*.json.bak`` conservato).
@@ -169,6 +170,52 @@ commodity/FX/indici, date e risultati di earnings, short interest e performance
 settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
+
+## Market data cache (post Phase 2)
+
+Cache **read-through con TTL** per yfinance. Tutti i calls via
+``market/yfinance_client.py`` passano dalla cache. Benchmark reali:
+
+- **Scan singolo ticker**: 3.0s → 0.42s (**speedup 7×**)
+- **Scan batch 3 ticker**: 4.5s → 0.44s (**speedup 10×**)
+
+Tabelle (in ``data/propicks.db``, stessa SQLite di Phase 1):
+
+| Tabella | Contenuto | TTL | Miss behavior |
+|---------|-----------|-----|--------------|
+| ``market_ohlcv_daily`` | bar daily (PK ticker, date) | 8h | fetch yfinance.Ticker.history + UPSERT |
+| ``market_ohlcv_weekly`` | bar weekly (PK ticker, week_start) | 7gg | fetch interval=1wk + UPSERT |
+| ``market_ticker_meta`` | sector, beta, name (PK ticker) | 7gg | fetch yfinance.Ticker.info + UPSERT |
+
+**TTL rationale**: 8h daily copre una sessione intera (scan alle 9am e alle
+3pm riusano lo stesso set). 7gg weekly è stabile post-Fri close. 7gg meta
+perché Yahoo aggiorna beta settimanale.
+
+**Public API invariata**: ``download_history``, ``download_weekly_history``,
+``download_benchmark``, ``download_benchmark_weekly``, ``get_ticker_sector``,
+``get_ticker_beta``, ``get_current_prices``, ``download_returns`` —
+firme identiche al pre-cache. CLI/domain/dashboard non cambiano.
+
+**CLI ``propicks-cache``** per operations:
+
+```bash
+propicks-cache stats                    # righe totali + range date
+propicks-cache warm AAPL MSFT NVDA      # prefetch daily+weekly
+propicks-cache warm AAPL --force        # invalida + refetch
+propicks-cache clear --ticker AAPL      # rimuovi solo AAPL
+propicks-cache clear --all              # wipe totale (ricrea al primo scan)
+propicks-cache clear --stale            # solo righe fuori TTL
+propicks-cache clear --interval daily   # solo una granularità
+```
+
+**Offline resilience**: se la cache è popolata e fresh, uno scan completo
+funziona senza rete. Test: `propicks-cache warm` + disconnetti WiFi +
+`propicks-scan` → funziona fino a scadenza TTL (8h daily).
+
+**Data quality**: il cache drop rows con `Close IS NULL` (skip silenzioso
+dei bar yfinance parziali). `PRIMARY KEY (ticker, date)` previene
+duplicati da fetch ripetuti. UPSERT aggiorna i bar esistenti (refresh
+garantito sui close revisionati post-market).
 
 ## Storage — SQLite (post Phase 1)
 
@@ -308,6 +355,14 @@ propicks-portfolio size AAPL --entry 180 --stop 162 \
 # post-upgrade. Idempotente: se il DB è già popolato fa no-op su quella tabella)
 propicks-migrate --dry-run             # anteprima senza toccare nulla
 propicks-migrate                        # esegue + backup JSON → *.json.bak
+
+# Cache OHLCV (Phase 2) — speedup 7-10× su scan ripetuti
+propicks-cache stats                    # righe totali + range date + last fetch
+propicks-cache warm AAPL MSFT NVDA      # prefetch daily+weekly
+propicks-cache warm AAPL --force        # invalida + refetch (garantito fresh)
+propicks-cache clear --ticker AAPL      # wipe solo AAPL
+propicks-cache clear --all              # wipe totale (si ricrea al primo scan)
+propicks-cache clear --stale            # solo righe fuori TTL (8h daily / 7gg weekly)
 
 # Test unit (solo domain/ + backtest, nessuna rete, DB SQLite ephemeral per test)
 pytest

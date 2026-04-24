@@ -44,6 +44,7 @@ propicks-backtest  = "propicks.cli.backtest:main"
 propicks-watchlist = "propicks.cli.watchlist:main"
 propicks-dashboard = "propicks.dashboard.launcher:main"
 propicks-migrate   = "propicks.scripts.migrate_json_to_sqlite:main"
+propicks-cache     = "propicks.cli.cache:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

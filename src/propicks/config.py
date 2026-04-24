@@ -630,6 +630,22 @@ os.makedirs(AI_CACHE_DIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
+# MARKET DATA CACHE (Phase 2)
+# ---------------------------------------------------------------------------
+# TTL per livello di granularità. Daily cache fresh 8h: copre tutta la sessione
+# di trading (un scan alle 10am usa cache di uno scan alle 9am). Weekly 7gg:
+# i weekly bar sono stabili dopo la chiusura di venerdì. Ticker meta 7gg:
+# sector GICS cambia mai, beta aggiornato settimanale da Yahoo.
+MARKET_CACHE_TTL_DAILY_HOURS: float = 8.0
+MARKET_CACHE_TTL_WEEKLY_HOURS: float = 24.0 * 7
+MARKET_CACHE_TTL_META_HOURS: float = 24.0 * 7
+
+# Numero minimo di barre daily richieste (EMA50 warmup + 52w high lookback).
+# Re-esposto qui per evitare di duplicare la costante in yfinance_client.
+MARKET_MIN_DAILY_BARS: int = EMA_SLOW * 3 + 5  # = 155
+
+
+# ---------------------------------------------------------------------------
 # FORMATI
 # ---------------------------------------------------------------------------
 DATE_FMT: str = "%Y-%m-%d"

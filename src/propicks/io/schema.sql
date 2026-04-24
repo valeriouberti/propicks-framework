@@ -171,6 +171,57 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ----------------------------------------------------------------------------
+-- 5. MARKET DATA CACHE (Phase 2)
+-- ----------------------------------------------------------------------------
+-- Cache OHLCV read-through con TTL. Il fetch yfinance avviene solo su miss
+-- o stale. fetched_at è tracked per-row per permettere TTL fine e invalidation
+-- selettiva via ``propicks-cache clear --stale``.
+
+-- Bar giornaliere. PK (ticker, date). adj_close include dividendi/split già
+-- aggiustati (yfinance auto_adjust=False ritorna entrambi).
+CREATE TABLE IF NOT EXISTS market_ohlcv_daily (
+  ticker TEXT NOT NULL,
+  date DATE NOT NULL,
+  open REAL,
+  high REAL,
+  low REAL,
+  close REAL NOT NULL,
+  adj_close REAL,
+  volume INTEGER,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ticker, date)
+);
+CREATE INDEX IF NOT EXISTS idx_ohlcv_daily_ticker ON market_ohlcv_daily(ticker);
+
+-- Bar settimanali — fetched separatamente da yfinance (interval="1wk") invece
+-- di derivate dal daily, per preservare l'allineamento del calendario
+-- settimanale di yfinance (week ending Fri) ed evitare edge case di gap/holidays.
+CREATE TABLE IF NOT EXISTS market_ohlcv_weekly (
+  ticker TEXT NOT NULL,
+  week_start DATE NOT NULL,
+  open REAL,
+  high REAL,
+  low REAL,
+  close REAL NOT NULL,
+  adj_close REAL,
+  volume INTEGER,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ticker, week_start)
+);
+CREATE INDEX IF NOT EXISTS idx_ohlcv_weekly_ticker ON market_ohlcv_weekly(ticker);
+
+-- Ticker meta: sector (per RS mapping + exposure), beta (vs SPX 5y monthly),
+-- name (fallback ETF). TTL lungo (7gg) — questi campi cambiano di rado.
+CREATE TABLE IF NOT EXISTS market_ticker_meta (
+  ticker TEXT PRIMARY KEY,
+  sector TEXT,
+  beta REAL,
+  name TEXT,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
 -- Daily AI budget counter — 1 riga per giorno.
 -- Popolato da ``ai/budget.py`` ad ogni chiamata all'API; TTL implicito del
 -- bucket giornaliero è la data key stessa (domani = nuova riga, reset a 0).
