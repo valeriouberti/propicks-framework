@@ -46,8 +46,6 @@ Per architettura + invarianti → [../CLAUDE.md](../CLAUDE.md).
 
 | Phase | Motivo |
 |-------|--------|
-| **10** — Paper trading mode | Out-of-scope — il DB già permette separazione via strategy tag |
-| **11** — Broker IBKR integration | Out-of-scope — decisione trader, desktop-only non ha bisogno |
 | **12** — Intraday real-time layer | Out-of-scope — EOD è sufficiente per holding 2-8 settimane |
 | **FE dedicato** | Eliminata — Streamlit è fit-for-purpose, no duplicate surface |
 
