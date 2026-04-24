@@ -8,8 +8,6 @@ Mirror CLI di ``propicks-calendar earnings/macro/check``. Mostra:
 
 from __future__ import annotations
 
-from datetime import date
-
 import streamlit as st
 
 from propicks.config import EARNINGS_HARD_GATE_DAYS
@@ -65,7 +63,7 @@ with tab_earn:
                     get_next_earnings_date(t, force_refresh=True)
                     ok_count += 1
                     st.write(f"✓ {t}")
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     st.write(f"✗ {t}: {exc}")
             status.update(
                 label=f"Refresh completato: {ok_count}/{len(tickers)} ok",
@@ -185,7 +183,7 @@ with tab_check:
         with st.spinner(f"Fetching earnings date per {ticker}…"):
             try:
                 ed = get_next_earnings_date(ticker, force_refresh=force_refresh)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 st.error(f"Fetch fallito: {exc}")
                 ed = None
 

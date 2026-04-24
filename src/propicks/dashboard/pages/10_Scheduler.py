@@ -186,5 +186,5 @@ with tab_trigger:
                         f"items={result.get('n_items', '?')}, "
                         f"notes: _{result.get('notes', '—')}_"
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     st.error(f"❌ **{selected}** fallito: {type(exc).__name__}: {exc}")

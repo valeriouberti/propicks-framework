@@ -30,7 +30,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal
 
 import pandas as pd
 
@@ -161,7 +160,7 @@ def simulate_portfolio(
         initial_capital=config.initial_capital,
     )
 
-    for t_idx, t in enumerate(all_dates):
+    for t in all_dates:
         today = _as_date(t)
 
         # Prices di oggi per mark-to-market + exit check
@@ -214,7 +213,7 @@ def simulate_portfolio(
 
             try:
                 score = scoring_fn(ticker, hist_slice)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
             if score is None or score < config.score_threshold:
@@ -223,7 +222,7 @@ def simulate_portfolio(
 
         # 4. Ordina per score desc, apri top-N che stanno nel budget
         candidates.sort(key=lambda x: -x[1])
-        for ticker, score in candidates:
+        for ticker, _score in candidates:
             if len(state.open_positions) >= config.max_positions:
                 break
             # Compute sizing + try to open

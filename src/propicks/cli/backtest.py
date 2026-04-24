@@ -113,6 +113,7 @@ def _run_portfolio_backtest(args: argparse.Namespace) -> int:
         monte_carlo_bootstrap,
         walk_forward_split,
     )
+    from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi
     from propicks.domain.scoring import (
         score_distance_from_high,
         score_ma_cross,
@@ -121,7 +122,6 @@ def _run_portfolio_backtest(args: argparse.Namespace) -> int:
         score_volatility,
         score_volume,
     )
-    from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi
     from propicks.market.yfinance_client import download_history
 
     print(f"[portfolio] fetching {len(args.tickers)} ticker…", file=sys.stderr)

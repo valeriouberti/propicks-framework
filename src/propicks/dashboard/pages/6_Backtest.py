@@ -21,10 +21,11 @@ from propicks.market.yfinance_client import DataUnavailable
 
 st.set_page_config(page_title="Backtest · Propicks", layout="wide")
 page_header(
-    "Backtest walk-forward",
+    "Backtest walk-forward (single-ticker)",
     "Mirror di `propicks-backtest`. Rigira la stessa formula composite "
     "su storia point-in-time. **No slippage / no commissioni / no survivorship**: "
-    "scopo è validare il *segno* della strategia, non proiettare equity futura.",
+    "scopo è validare il *segno* della strategia. Per portfolio-level backtest "
+    "con TC/slippage/OOS/Monte Carlo usa la page dedicata *Backtest Portfolio*.",
 )
 invariants_note()
 

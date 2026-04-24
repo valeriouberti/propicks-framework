@@ -17,12 +17,10 @@ from __future__ import annotations
 
 import math
 import statistics
-from datetime import date
 
 import pandas as pd
 
-from propicks.backtest.portfolio_engine import ClosedTrade, PortfolioState
-
+from propicks.backtest.portfolio_engine import PortfolioState
 
 TRADING_DAYS_PER_YEAR = 252
 

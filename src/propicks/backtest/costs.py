@@ -35,7 +35,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-
 # ---------------------------------------------------------------------------
 # Default cost params
 # ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ class CostModel:
     slippage_bps: float = DEFAULT_SLIPPAGE_BPS
 
     @classmethod
-    def zero(cls) -> "CostModel":
+    def zero(cls) -> CostModel:
         """Helper: no cost (per confronto con legacy backtest)."""
         return cls(
             commission_us=0.0, commission_eu=0.0,
@@ -74,7 +73,7 @@ class CostModel:
         )
 
     @classmethod
-    def from_bps(cls, total_bps: float, commission_us: float = 0.0, commission_eu: float = 2.0) -> "CostModel":
+    def from_bps(cls, total_bps: float, commission_us: float = 0.0, commission_eu: float = 2.0) -> CostModel:
         """Shortcut: un singolo bps value per TUTTI i costi di spread+slip,
         applicato a ogni asset. Utile per sensitivity analysis (``--tc-bps 20``)."""
         return cls(
