@@ -116,7 +116,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
 
     Pattern: ogni migration è idempotent via check ``_column_exists``.
     """
-    # Phase 4: delivery tracking su alerts
+    # Phase 4: delivery tracking su alerts (ALTER per DB esistenti pre-Phase 4)
     for column, ddl in (
         ("delivered", "ALTER TABLE alerts ADD COLUMN delivered INTEGER DEFAULT 0"),
         ("delivered_at", "ALTER TABLE alerts ADD COLUMN delivered_at TIMESTAMP"),
@@ -126,9 +126,19 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
-                # Tabella alerts non esiste ancora (es. DB nuovo, già gestito dallo
-                # schema.sql CREATE TABLE IF NOT EXISTS). Safe ignore.
+                # Tabella alerts non esiste ancora (edge case, race con CREATE).
+                # Safe ignore: CREATE TABLE IF NOT EXISTS in schema.sql la creerà.
                 pass
+
+    # Index su ``delivered`` creato qui dopo che la colonna esiste (o già è stata
+    # creata dallo schema.sql per DB nuovi). ``IF NOT EXISTS`` idempotente.
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_undelivered "
+            "ON alerts(delivered, created_at)"
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:

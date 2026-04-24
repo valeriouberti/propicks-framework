@@ -23,6 +23,7 @@ from propicks.scheduler.jobs import (
     snapshot_portfolio,
     trailing_stop_check,
     warm_cache,
+    weekly_attribution_report_job,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "snapshot_portfolio",
     "trailing_stop_check",
     "warm_cache",
+    "weekly_attribution_report_job",
 ]

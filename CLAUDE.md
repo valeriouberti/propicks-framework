@@ -28,6 +28,7 @@ propicks-ai-framework/
 │   │   ├── etf_universe.py    # Query helpers su SECTOR_ETFS_US/EU
 │   │   ├── stock_rs.py        # Peer RS stock vs sector ETF (solo US, campo informativo)
 │   │   ├── regime.py          # Classifier macro weekly (5-bucket, mirror Pine weekly)
+│   │   ├── attribution.py     # Phase 9: decompose trade (α/β/sector/timing) + gate Phase 7
 │   │   ├── sizing.py          # calculate_position_size (stock + ETF cap), portfolio_value
 │   │   ├── trade_mgmt.py      # Trailing stop ATR-based + time stop (gestione in-vita)
 │   │   ├── exposure.py        # Concentrazione settoriale + beta-weighted + correlazioni
@@ -57,7 +58,8 @@ propicks-ai-framework/
 │   │   ├── benchmark.py       # get_benchmark_performance (^GSPC, FTSEMIB.MI)
 │   │   ├── common.py          # parse_date, trades_*_between, fmt_pct
 │   │   ├── weekly.py
-│   │   └── monthly.py
+│   │   ├── monthly.py
+│   │   └── attribution_report.py # Phase 9: weekly P&L decomposition markdown
 │   ├── cli/                   # Thin argparse wrappers (entry points)
 │   │   ├── scanner.py         # propicks-scan (momentum/quality)
 │   │   ├── contrarian.py      # propicks-contra (quality-filtered mean reversion)
@@ -68,12 +70,18 @@ propicks-ai-framework/
 │   │   ├── backtest.py        # propicks-backtest (walk-forward single-stock)
 │   │   ├── watchlist.py       # propicks-watchlist (add/remove/update/list/status)
 │   │   ├── cache.py           # propicks-cache (stats/warm/clear OHLCV cache)
-│   │   └── scheduler.py       # propicks-scheduler (run/job/alerts/history)
+│   │   ├── scheduler.py       # propicks-scheduler (run/job/alerts/history)
+│   │   └── bot.py             # propicks-bot (Telegram daemon + queue helpers)
 │   ├── scheduler/             # Phase 3 — automazione EOD
 │   │   ├── jobs.py            # 6 job functions idempotenti + @run_job decorator
 │   │   ├── alerts.py          # alert queue CRUD + dedup_key logic
 │   │   ├── history.py         # scheduler_runs audit + stats
 │   │   └── runner.py          # APScheduler daemon (BlockingScheduler)
+│   ├── notifications/         # Phase 4 — Telegram bot
+│   │   ├── formatter.py       # alert dict → Telegram Markdown (pure)
+│   │   ├── dispatcher.py      # async poll + send + mark delivered
+│   │   ├── bot_commands.py    # handlers /status /alerts /ack /help
+│   │   └── bot.py             # Application wiring + polling + dispatcher task
 │   └── dashboard/             # UI Streamlit parallela alla CLI (non la sostituisce)
 │       ├── launcher.py        # Entry point propicks-dashboard (bootstrap.run)
 │       ├── _shared.py         # Cached readers, formatters, UI primitives
@@ -129,6 +137,8 @@ propicks-ai-framework/
 - **pydantic** — validazione strutturata del verdict AI (`ThesisVerdict`)
 - **python-dotenv** — caricamento `.env` per `ANTHROPIC_API_KEY`
 - **apscheduler** (Phase 3) — cron-based scheduler per i 6 job EOD (``BlockingScheduler`` + ``CronTrigger`` tz ``Europe/Rome``)
+- **python-telegram-bot** (Phase 4, extras ``[telegram]``) — async bot daemon: polling per comandi bidirezionali + task concorrente dispatcher per push notifications
+- **pytest-asyncio** (dev) — supporto async test per il dispatcher
 - **streamlit** (extra `[dashboard]`) — UI multi-page parallela alla CLI
 - **plotly** (extra `[dashboard]`) — chart interattivi opzionali (placeholder)
 - **pytest** (dev) — test unit su `domain/` e `ai/` (SDK mockato)
@@ -178,13 +188,274 @@ settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
 
+## P&L attribution + weekly report (post Phase 9)
+
+Decomposizione automatica del P&L per ogni trade chiuso in **4 componenti additive**:
+
+```
+total_pnl = market (β × SPX_return) + sector (ETF - SPX) + alpha + timing
+```
+
+**Perché**: capire *perché* vinci/perdi, non solo *quanto*. Lo stesso +10% di P&L
+può essere:
+- +8% market (tutto beta — stai solo prendendo rischio SPX) → **no alpha**
+- +8% alpha (selezione ticker ha aggiunto valore indipendente dal mercato) → **vero edge**
+
+### Metriche per-trade
+
+- **market (β)**: `beta × spx_return(entry→exit)` — quanto è spiegato dal mercato
+- **sector**: `sector_ETF_return - spx_return` — rotazione settoriale (solo US; EU=0)
+- **alpha (residuo)**: `total - market - sector - timing` — selection edge
+- **timing**: `(actual_bench_return - median_hold_bench_return) × beta` — edge del timing exit vs hold passivo
+
+### Gate Phase 7 (quando promuovere nuove strategie)
+
+Ogni strategia deve raggiungere:
+
+| Criterio | Soglia |
+|----------|--------|
+| Trade chiusi | ≥ 15 |
+| Profit factor | ≥ 1.3 |
+| Sharpe (trade-level) | ≥ 0.8 |
+| Win rate momentum | ≥ 50% |
+| Win rate contrarian | ≥ 55% |
+| Max drawdown | ≥ -15% |
+| Correlation con SPX | ≤ 0.70 |
+
+Se dopo 6 mesi una strategia non raggiunge queste soglie, **si ritira** invece di
+aggiungere una strategia nuova per compensare. Questo è il gate concreto:
+niente Phase 7 (nuove strategie) finché le 3 attuali non mostrano edge.
+
+### Weekly report automatico
+
+Il job ``weekly_attribution_report`` gira ogni **sabato 21:00 CET** e genera:
+
+```
+reports/attribution_YYYY-WW.md
+```
+
+Struttura markdown:
+1. **📊 Portfolio KPIs**: total value, cash %, MTD/YTD vs SPX, alpha, max DD
+2. **📈 Trade della settimana**: tabella per-trade con decomposition
+3. **🎯 Per-strategy**: 30gg / 90gg / 365gg aggregati + Phase 7 gate status
+4. **🌊 Per-regime breakdown**: win rate + avg P&L per regime macro (entry date)
+5. **🚧 Gate detail**: strategie under threshold con failure reason esplicita
+6. **⚠️ Attention**: trade con loss > 10% ultimi 30gg
+
+Dopo la generazione, un alert ``report_ready`` viene creato → Telegram bot lo
+delivera (Phase 4) → il trader riceve la notifica sabato sera mentre
+pianifica la settimana.
+
+### Comandi
+
+```bash
+# CLI on-demand (genera + stampa + salva)
+propicks-report attribution
+
+# Scheduler one-shot (backfill o manual trigger)
+propicks-scheduler job attribution       # alias: job report
+# Alert 'report_ready' con dedup_key per-week
+
+# Dalla chat Telegram (Phase 4)
+/report   # summary inline: per-strategy 30gg + gate status + heavy losses
+```
+
+### Architettura
+
+```
+┌────────────────┐   ┌──────────────┐   ┌───────────────────┐
+│ trades (Phase 1│   │ portfolio_   │   │ regime_history    │
+│  + closed P&L) │   │  snapshots   │   │  (Phase 3)        │
+└───────┬────────┘   └──────┬───────┘   └─────────┬─────────┘
+        │                   │                     │
+        ▼                   ▼                     ▼
+       ┌────────────────────────────────────────────────┐
+       │  domain/attribution.py                         │
+       │  - decompose_trade (con OHLCV cache Phase 2)   │
+       │  - aggregate_by_strategy                       │
+       │  - aggregate_by_regime                         │
+       │  - strategy_gate_status (Phase 7 check)        │
+       │  - portfolio_vs_benchmark                      │
+       └──────────────────┬─────────────────────────────┘
+                          │
+                          ▼
+                   ┌─────────────────┐
+                   │ reports/        │
+                   │  attribution_   │
+                   │  YYYY-WW.md     │
+                   └────────┬────────┘
+                            │
+                            ▼
+                   ┌─────────────────┐      /report
+                   │ alert 'report_  │◄─────────┐
+                   │  ready'         │          │
+                   └────────┬────────┘          │
+                            ▼                   │
+                   ┌─────────────────┐          │
+                   │ Telegram user   │──────────┘
+                   └─────────────────┘
+```
+
+### Design highlights
+
+- **Pure functions**: `domain/attribution.py` testabile senza rete (tutte le series sono injectable).
+- **Cache-aware**: benchmark + sector ETF letti direttamente dal OHLCV cache (Phase 2). Offline-resilient.
+- **Sector mapping**: solo ticker US (via `YF_SECTOR_TO_KEY` + `SECTOR_KEY_TO_US_ETF`). Per .MI/EU il sector component è 0 (skippato, non stimato) per evitare confounders.
+- **Regime at entry**: il regime viene assegnato all'entry_date del trade, non exit. Un trade aperto in BULL e chiuso in BEAR resta "BULL" per attribution.
+- **Timing computed on benchmark**: il timing è "hai beccato il momento giusto di USCIRE *rispetto al mercato*?", misurato via benchmark return durante actual holding vs median holding — non su ticker specifico.
+- **Gate thresholds in `GATE_THRESHOLDS` dict**: modificabili centralmente se l'evidence empirica suggerisce soglie diverse. Win rate differenziato momentum vs contrarian (55% per contrarian riflette il profilo short-gamma).
+- **Formatter report alert**: il bot Telegram invia un summary inline via `/report`, non il markdown completo (troppo lungo per Telegram).
+
+### Trade-off accettati
+
+- **No Brinson-Hood-Beebower rigorous**: un attribution professional-grade richiede weights timeseries e factor loadings rolling. Qui facciamo trade-level additive decomposition. Sufficiente per retail; insufficiente per fund-level due diligence.
+- **Beta statico**: usiamo `market_ticker_meta.beta` (TTL 7gg, da Yahoo 5y monthly). Se il beta è stale o il titolo ha cambiato profile (es. acquisizione), alpha è rumoroso. Accettabile per trader retail.
+- **Timing semplice**: confronta total return su actual holding vs total return su median holding sul benchmark. Ignora volatility timing e path-dependence. Sufficient per detection macroscopica.
+- **Gate conservativo**: un singolo criterio che fallisce → la strategia è "fail". In realtà molte strategie passano 5/6 criteri ma falliscono 1 (es. correlation 0.72 vs soglia 0.70). Il report mostra tutti i failure esplicitamente per decisione informata.
+
+## Telegram bot (post Phase 4)
+
+Consuma la queue ``alerts`` generata dallo scheduler e invia push notifications
+via Telegram + accetta comandi bidirezionali dal bot. **Dep opzionale**:
+``pip install -e '.[telegram]'`` (richiede ``python-telegram-bot>=20``).
+
+### Setup BotFather (one-time)
+
+```
+1. Telegram → @BotFather → /newbot
+2. Scegli nome ("Propicks Personal Bot") e username finito in _bot
+3. BotFather ritorna un token tipo 1234567890:ABCdef...
+4. Invia /start al tuo bot nuovo
+5. Manda un messaggio al tuo bot (anche solo "ciao")
+6. Apri https://api.telegram.org/bot<TOKEN>/getUpdates → prendi "chat":{"id": NUMERO}
+   Alternativa: @userinfobot → /start → mostra il tuo chat_id
+```
+
+### Configurazione env (``.env``)
+
+```bash
+PROPICKS_TELEGRAM_BOT_TOKEN=1234567890:ABCdef...
+PROPICKS_TELEGRAM_CHAT_ID=123456789           # il tuo chat_id
+# PROPICKS_TELEGRAM_CHAT_ID=id1,id2,id3       # CSV per multi-chat (famiglia, co-trader)
+PROPICKS_TELEGRAM_POLL_INTERVAL=60             # sec tra cicli dispatcher (default 60)
+```
+
+### First setup: silenzia backlog storico
+
+```bash
+# Evita spam al primo avvio se hai già alert in DB dallo scheduler
+propicks-bot mute-backlog
+
+# Test connettività: manda 1 messaggio di conferma
+propicks-bot test
+
+# Avvia bot daemon
+propicks-bot run
+```
+
+### Comandi bot (invia questi dalla chat Telegram)
+
+| Comando | Azione |
+|---------|--------|
+| `/status` | Portfolio summary: cash %, posizioni aperte, P&L unrealized |
+| `/portfolio` | Dettaglio per ticker con P&L % live |
+| `/alerts` | Alert pending (non-ack) con ID per /ack |
+| `/ack N` | Acknowledge alert N |
+| `/ackall` | Mark all as read |
+| `/history` | Ultimi 10 job scheduler con status/duration |
+| `/cache` | Stats cache OHLCV (rows, ticker, date max) |
+| `/regime` | Regime macro corrente con emoji severity |
+| `/help` | Lista comandi |
+
+### Daemon management
+
+```bash
+propicks-bot run                # foreground, Ctrl+C per fermare
+# In tmux / nohup:
+nohup propicks-bot run > /tmp/propicks-bot.log 2>&1 &
+
+# macOS launchd plist (esempio):
+# ~/Library/LaunchAgents/com.propicks.bot.plist
+# <plist>
+#   <ProgramArguments><array>
+#     <string>/path/to/.venv/bin/propicks-bot</string>
+#     <string>run</string>
+#   </array></ProgramArguments>
+#   <RunAtLoad><true/></RunAtLoad>
+#   <KeepAlive><true/></KeepAlive>
+# </plist>
+# launchctl load ~/Library/LaunchAgents/com.propicks.bot.plist
+```
+
+### Dispatcher: semantica retry
+
+- Alert in `alerts` con ``delivered=0`` → candidati per invio ogni ciclo
+- Invio OK → ``delivered=1, delivered_at=now``
+- Invio fallito → ``delivery_error='try:N|last_err'``, ``delivered=0`` (retry prossimo ciclo)
+- Dopo **3 fallimenti** (`try:3|...`), l'alert viene **skippato** per evitare flood infinito
+- Recovery: ``propicks-bot reset-retries`` → azzera counter di tutti i failed, retry dal prossimo ciclo
+
+### Architettura
+
+```
+           ┌───────────────┐
+           │   Scheduler   │  (Phase 3)
+           │ scheduler_runs│
+           └───────┬───────┘
+                   │ INSERT INTO alerts (delivered=0)
+                   ▼
+           ┌───────────────┐       polling 60s
+           │    alerts     │◄─────────────────┐
+           │   (SQLite)    │                  │
+           └───────┬───────┘                  │
+                   │ SELECT WHERE delivered=0 │
+                   ▼                          │
+           ┌───────────────┐                  │
+           │   Dispatcher  │──────────────────┘
+           │ (notifications│
+           │   /dispatcher)│ UPDATE delivered=1
+           └───────┬───────┘
+                   │ send_message()
+                   ▼
+           ┌───────────────┐       /status /alerts /ack
+           │ Telegram Bot  │◄─────────────────┐
+           │ (async poll)  │                  │
+           └───────┬───────┘                  │
+                   ▼                          │
+           ┌───────────────┐                  │
+           │  User's phone │──────────────────┘
+           └───────────────┘
+```
+
+### Sicurezza
+
+- **Token** resta in ``.env`` (gitignored)
+- **Chat whitelist**: i comandi da chat non in ``PROPICKS_TELEGRAM_CHAT_ID`` sono ignorati silenziosamente (no ack, no error)
+- **No inbound webhook**: polling-based, nessun server esposto pubblicamente
+- **Scheduler → DB → Bot**: loose coupling. Lo scheduler non sa di Telegram. Il bot non sa dei job. Si parlano via tabella ``alerts``.
+
+### Operations quotidiane
+
+```bash
+propicks-bot stats                      # quanti alert pending/delivered/failed
+propicks-bot reset-retries              # reset counter per recovery
+propicks-bot reset-retries --alert-id 42  # solo uno specifico
+propicks-bot mute-backlog               # flag pending come delivered (setup)
+```
+
+### Trade-off accettati
+
+- **Nessun rate limiting attivo**: python-telegram-bot gestisce il rate limit API di Telegram (30 msg/sec), ma se accumuli 100+ alert pending il dispatcher li invia tutti nel ciclo — possibile batching spam. Accettabile per trader retail (normalmente <10 alert/giorno).
+- **Delivery non garantita cross-instance**: se lanci 2 bot daemon con stesso token, ciascuno processerà gli alert e finirai per ricevere doppio. Un solo daemon per DB (stessa regola del scheduler).
+- **Command args quotate male**: parsed da python-telegram-bot come lista di token. `/ack 42` → args=["42"]. Niente string parsing avanzato: i comandi sono intenzionalmente semplici.
+
 ## Scheduler + alerts (post Phase 3)
 
 Automazione EOD via **APScheduler** (daemon) + **cron-callable jobs**.
 Ogni job idempotente, UPSERT-based, con audit trail in ``scheduler_runs``
 e alert queue in ``alerts``. Zero notifiche esterne (sono Phase 4 Telegram).
 
-### I 6 job
+### I 7 job
 
 | Job | Trigger default | Azione | Alert generati |
 |-----|-----------------|--------|----------------|
@@ -193,6 +464,7 @@ e alert queue in ``alerts``. Zero notifiche esterne (sono Phase 4 Telegram).
 | ``snapshot_portfolio`` | Mon-Fri 18:30 | Mark-to-market, exposure per bucket, MTD/YTD, benchmark SPX+FTSEMIB | — |
 | ``scan_watchlist`` | Mon-Fri 18:30 | Score live, populate strategy_runs, READY detection | ``watchlist_ready`` |
 | ``trailing_stop_check`` | Mon-Fri 18:30 | Suggest trailing stop update su posizioni con trailing_enabled | ``trailing_stop_update``, ``stale_position`` |
+| ``weekly_attribution_report`` | Sat 21:00 | Phase 9: decomposition α/β/sector/timing + Phase 7 gate check | ``report_ready`` |
 | ``cleanup_stale_watchlist`` | Sun 20:00 | Flag watchlist entries > 60gg + contrarian near-cap warning | ``stale_watchlist``, ``contra_near_cap`` |
 
 ### Modalità operative
@@ -418,6 +690,8 @@ propicks-journal stats --strategy TechTitans
 # Report settimanale e mensile (stampa + salva in reports/)
 propicks-report weekly
 propicks-report monthly
+propicks-report attribution           # Phase 9: decomposition α/β/sector/timing
+                                       # salva in reports/attribution_YYYY-WW.md
 
 # Rotazione settoriale ETF — ranking dell'universo Select Sector SPDR / UCITS
 propicks-rotate                         # US universe, top 3
@@ -480,6 +754,15 @@ propicks-scheduler alerts --ack 42      # acknowledge singolo
 propicks-scheduler alerts --ack-all     # mark all as read
 propicks-scheduler history              # ultimi 20 job run
 propicks-scheduler history --days 7     # stats aggregate per job ultimi 7gg
+
+# Telegram bot (Phase 4) — push + comandi bidirezionali (extras [telegram])
+propicks-bot test                        # test connettività: invia 1 msg
+propicks-bot mute-backlog                # first-setup: flag pending come delivered
+propicks-bot run                         # daemon bloccante (polling + dispatcher)
+propicks-bot stats                       # counters queue delivery
+propicks-bot reset-retries               # recovery dopo errori persistenti
+propicks-bot reset-retries --alert-id 42 # reset solo uno specifico
+# Dalla chat Telegram: /status /portfolio /alerts /ack N /history /cache /regime /help
 
 # Test unit (solo domain/ + backtest, nessuna rete, DB SQLite ephemeral per test)
 pytest

@@ -1,4 +1,4 @@
-"""CLI per la generazione dei report settimanali e mensili.
+"""CLI per la generazione dei report settimanali, mensili e attribution.
 
 I report vengono sia stampati su terminale sia salvati in reports/
 con filename datato.
@@ -6,6 +6,7 @@ con filename datato.
 Esempi:
     propicks-report weekly
     propicks-report monthly
+    propicks-report attribution
 """
 
 from __future__ import annotations
@@ -44,11 +45,35 @@ def cmd_monthly(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_attribution(_: argparse.Namespace) -> int:
+    """Genera il weekly attribution report (Phase 9)."""
+    from propicks.reports.attribution_report import weekly_attribution_report
+
+    result = weekly_attribution_report()
+    path = result["path"]
+    # Stampa il contenuto come per gli altri report
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+    print(content)
+    print(f"\n>>> report salvato in: {path}")
+    print(
+        f">>> {result['n_closed_this_week']} trade chiusi questa settimana, "
+        f"{result['n_trades']} totali nel journal"
+    )
+    return 0
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Report settimanali e mensili.")
+    parser = argparse.ArgumentParser(
+        description="Report settimanali, mensili e attribution.",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("weekly", help="Report ultimi 7 giorni").set_defaults(func=cmd_weekly)
     sub.add_parser("monthly", help="Report ultimi 30 giorni").set_defaults(func=cmd_monthly)
+    sub.add_parser(
+        "attribution",
+        help="Attribution report (Phase 9): decomposition alpha/beta/sector/timing",
+    ).set_defaults(func=cmd_attribution)
     args = parser.parse_args()
     return args.func(args)
 

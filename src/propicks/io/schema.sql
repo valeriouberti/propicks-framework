@@ -277,7 +277,8 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_pending ON alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key);
-CREATE INDEX IF NOT EXISTS idx_alerts_undelivered ON alerts(delivered, created_at);
+-- NB: idx_alerts_undelivered viene creato nella migration function (db.py)
+-- dopo che la colonna ``delivered`` è stata aggiunta via ALTER per i DB esistenti.
 
 
 -- ----------------------------------------------------------------------------

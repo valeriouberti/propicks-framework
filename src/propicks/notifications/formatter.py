@@ -166,6 +166,22 @@ def _fmt_job_failed(alert: dict, meta: dict) -> str:
     return f"🚨 *JOB FAILED*: `{job}`\n`{err[:200]}`"
 
 
+def _fmt_report_ready(alert: dict, meta: dict) -> str:
+    """📊 WEEKLY REPORT READY"""
+    iso_week = meta.get("iso_week", "?")
+    n_closed = meta.get("n_closed_this_week", 0)
+    n_total = meta.get("n_trades", 0)
+
+    lines = [
+        f"📊 *ATTRIBUTION REPORT* — {iso_week}",
+        f"{n_closed} trade chiusi questa settimana ({n_total} totali).",
+        "",
+        "_Invia_ `/report` _per il summary inline, o apri il file markdown_",
+        "_in `reports/attribution_*.md` per il dettaglio completo._",
+    ]
+    return "\n".join(lines)
+
+
 def _fmt_generic(alert: dict, meta: dict) -> str:
     """Fallback: usa il `message` plain. Non dovrebbe accadere in produzione."""
     sev = alert.get("severity", "info")
@@ -185,6 +201,7 @@ _FORMATTERS = {
     "stale_watchlist": _fmt_stale_watchlist,
     "contra_near_cap": _fmt_contra_near_cap,
     "job_failed": _fmt_job_failed,
+    "report_ready": _fmt_report_ready,
 }
 
 

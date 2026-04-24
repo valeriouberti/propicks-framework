@@ -61,6 +61,7 @@ def handle_help(_args: list[str]) -> dict:
             "/history — ultimi 10 job scheduler\n"
             "/cache — stats cache OHLCV\n"
             "/regime — regime macro corrente\n"
+            "/report — attribution summary ultimi 30gg\n"
             "/help — questo messaggio"
         ),
         "parse_mode": _MARKDOWN,
@@ -218,6 +219,73 @@ def handle_cache(_args: list[str]) -> dict:
     return {"text": "\n".join(lines), "parse_mode": _MARKDOWN}
 
 
+def handle_report(_args: list[str]) -> dict:
+    """Invia il summary dell'ultimo attribution report (Phase 9).
+
+    Il report completo è un markdown file. Per Telegram usiamo un *summary
+    inline*: KPI portfolio + per-strategy stats + attention. Se l'utente
+    vuole il full markdown, lo legge da filesystem locale.
+    """
+    from propicks.domain.attribution import (
+        aggregate_by_strategy,
+        filter_trades_by_period,
+        strategy_gate_status,
+    )
+    from propicks.io.journal_store import load_journal
+    from propicks.reports.attribution_report import latest_report_path
+
+    report_path = latest_report_path()
+
+    # Generate inline summary (not read markdown — re-compute per-freshness)
+    trades = load_journal()
+    closed_30d = filter_trades_by_period(trades, period_days=30)
+
+    lines = ["📊 *ATTRIBUTION SUMMARY*"]
+    if report_path:
+        import os
+        name = os.path.basename(report_path)
+        lines.append(f"_Full markdown:_ `{name}`")
+    lines.append("")
+
+    if not closed_30d:
+        lines.append("_Nessun trade chiuso ultimi 30gg._")
+        return {"text": "\n".join(lines), "parse_mode": _MARKDOWN}
+
+    aggs = aggregate_by_strategy(closed_30d)
+    gate = strategy_gate_status(
+        aggregate_by_strategy(filter_trades_by_period(trades, period_days=180))
+    )
+
+    lines.append("*Ultimi 30gg per strategia*")
+    for strat, stats in sorted(aggs.items(), key=lambda x: -x[1]["n_trades"]):
+        wr = f"{stats['win_rate'] * 100:.0f}%" if stats.get("win_rate") else "—"
+        avg = f"{stats['avg_pnl_pct']:+.2f}%" if stats.get("avg_pnl_pct") is not None else "—"
+        pf = stats.get("profit_factor")
+        pf_str = f"{pf:.2f}" if pf is not None and pf != float("inf") else "—"
+        lines.append(
+            f"  • `{strat}` — {stats['n_trades']} trade, win {wr}, "
+            f"avg {avg}, PF {pf_str}"
+        )
+
+    # Gate status (6mo) per strategie
+    gate_failed = {k: v for k, v in gate.items() if not v["passed"]}
+    if gate_failed:
+        lines.append("")
+        lines.append("⚠️ *Gate Phase 7 — strategie under threshold (180gg):*")
+        for strat, info in gate_failed.items():
+            lines.append(f"  • `{strat}` ({info['n_trades']} trade)")
+
+    # Heavy losses ultimi 30gg
+    heavy = [t for t in closed_30d if (t.get("pnl_pct") or 0) <= -10.0]
+    if heavy:
+        lines.append("")
+        lines.append(f"🚨 *{len(heavy)} trade con loss > 10% (30gg)*")
+        for t in heavy[:3]:
+            lines.append(f"  • `{t['ticker']}` {t.get('pnl_pct', 0):+.2f}%")
+
+    return {"text": "\n".join(lines), "parse_mode": _MARKDOWN}
+
+
 def handle_regime(_args: list[str]) -> dict:
     from propicks.io.db import connect
 
@@ -262,4 +330,5 @@ COMMANDS: dict[str, Any] = {
     "history": handle_history,
     "cache": handle_cache,
     "regime": handle_regime,
+    "report": handle_report,
 }

@@ -35,6 +35,7 @@ from propicks.scheduler.jobs import (
     snapshot_portfolio,
     trailing_stop_check,
     warm_cache,
+    weekly_attribution_report_job,
 )
 
 _log = get_logger("scheduler.runner")
@@ -102,6 +103,16 @@ def _add_jobs(scheduler) -> None:
         misfire_grace_time=7200,
     )
 
+    # Weekly attribution report: sabato 21:00 CET (mercati chiusi, dati stabili)
+    scheduler.add_job(
+        weekly_attribution_report_job,
+        trigger=CronTrigger(day_of_week="sat", hour=21, minute=0, timezone=_TZ),
+        id="weekly_attribution_report",
+        name="weekly_attribution_report",
+        replace_existing=True,
+        misfire_grace_time=7200,
+    )
+
 
 def run_daemon() -> int:
     """Avvia il BlockingScheduler daemon. Bloccante fino a SIGINT/SIGTERM."""
@@ -129,16 +140,17 @@ def run_daemon() -> int:
     print(
         f"[scheduler] avviato (tz={_TZ})\n"
         "Jobs registrati:\n"
-        "  • warm_cache           Mon-Fri 17:45\n"
-        "  • record_regime        Mon-Fri 18:00\n"
-        "  • snapshot_portfolio   Mon-Fri 18:30\n"
-        "  • scan_watchlist       Mon-Fri 18:30\n"
-        "  • trailing_stop_check  Mon-Fri 18:30\n"
-        "  • cleanup_stale_watchlist  Sun 20:00\n"
+        "  • warm_cache                 Mon-Fri 17:45\n"
+        "  • record_regime              Mon-Fri 18:00\n"
+        "  • snapshot_portfolio         Mon-Fri 18:30\n"
+        "  • scan_watchlist             Mon-Fri 18:30\n"
+        "  • trailing_stop_check        Mon-Fri 18:30\n"
+        "  • weekly_attribution_report  Sat 21:00\n"
+        "  • cleanup_stale_watchlist    Sun 20:00\n"
         "\nCtrl+C per fermare.",
         file=sys.stderr,
     )
-    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 6}})
+    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 7}})
 
     try:
         scheduler.start()

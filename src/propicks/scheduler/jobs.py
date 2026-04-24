@@ -482,7 +482,45 @@ def trailing_stop_check() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 6. Cleanup stale watchlist (weekly)
+# 7. Weekly attribution report (Phase 9)
+# ---------------------------------------------------------------------------
+@run_job("weekly_attribution_report")
+def weekly_attribution_report_job() -> dict:
+    """Genera il weekly attribution report e crea alert con path per /report bot.
+
+    Scope: trade chiusi + portfolio_snapshots + regime_history + OHLCV cache.
+    Output: reports/attribution_YYYY-WW.md + alert 'report_ready'.
+    """
+    from propicks.reports.attribution_report import weekly_attribution_report
+
+    result = weekly_attribution_report()
+    path = result["path"]
+
+    create_alert(
+        alert_type="report_ready",
+        severity="info",
+        message=(
+            f"📊 Weekly attribution report pronto ({result['iso_week']}) — "
+            f"{result['n_closed_this_week']} trade chiusi questa settimana, "
+            f"{result['n_trades']} totali"
+        ),
+        metadata={
+            "path": path,
+            "iso_week": result["iso_week"],
+            "n_trades": result["n_trades"],
+            "n_closed_this_week": result["n_closed_this_week"],
+        },
+        dedup_key=f"report_ready_{result['iso_week']}",
+    )
+
+    return {
+        "n_items": result["n_trades"],
+        "notes": f"saved={path} week={result['iso_week']}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 8. Cleanup stale watchlist (weekly)
 # ---------------------------------------------------------------------------
 @run_job("cleanup_stale_watchlist")
 def cleanup_stale_watchlist(days: int = 60) -> dict:

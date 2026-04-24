@@ -32,6 +32,9 @@ _JOB_REGISTRY: dict[str, str] = {
     "trailing": "trailing_stop_check",
     "cleanup_stale_watchlist": "cleanup_stale_watchlist",
     "cleanup": "cleanup_stale_watchlist",
+    "weekly_attribution_report": "weekly_attribution_report_job",
+    "attribution": "weekly_attribution_report_job",  # alias
+    "report": "weekly_attribution_report_job",
 }
 
 
