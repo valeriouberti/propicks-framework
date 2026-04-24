@@ -208,7 +208,7 @@ def add_position(
         new_contra_value = sum(
             float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
             for p in positions.values()
-            if _is_contrarian_position(p)
+            if is_contrarian_position(p)
         ) + cost
         new_contra_pct = new_contra_value / total if total > 0 else 0.0
         if new_contra_pct > CONTRA_MAX_AGGREGATE_EXPOSURE_PCT:
