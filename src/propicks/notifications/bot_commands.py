@@ -62,6 +62,7 @@ def handle_help(_args: list[str]) -> dict:
             "/cache — stats cache OHLCV\n"
             "/regime — regime macro corrente\n"
             "/report — attribution summary ultimi 30gg\n"
+            "/calendar — earnings + macro events upcoming\n"
             "/help — questo messaggio"
         ),
         "parse_mode": _MARKDOWN,
@@ -286,6 +287,62 @@ def handle_report(_args: list[str]) -> dict:
     return {"text": "\n".join(lines), "parse_mode": _MARKDOWN}
 
 
+def handle_calendar(_args: list[str]) -> dict:
+    """Lista earnings + macro events upcoming (Phase 8)."""
+    from propicks.config import EARNINGS_HARD_GATE_DAYS
+    from propicks.domain.calendar import (
+        earnings_gate_check,
+        upcoming_macro_events,
+    )
+    from propicks.io.db import market_earnings_all_from_cache
+    from propicks.io.portfolio_store import load_portfolio
+    from propicks.io.watchlist_store import load_watchlist
+
+    lines = ["📅 *CALENDAR*"]
+
+    # Earnings
+    portfolio = load_portfolio()
+    watchlist = load_watchlist()
+    tickers = set(
+        list(portfolio.get("positions", {}).keys())
+        + list(watchlist.get("tickers", {}).keys())
+    )
+    meta_earnings = market_earnings_all_from_cache()
+
+    upcoming = []
+    for t in tickers:
+        ed = meta_earnings.get(t)
+        if not ed:
+            continue
+        check = earnings_gate_check(t, ed, days_threshold=14)
+        if check["days_to_earnings"] is not None and 0 <= check["days_to_earnings"] <= 14:
+            upcoming.append((t, ed, check["days_to_earnings"], check["blocked"]))
+
+    upcoming.sort(key=lambda x: x[2])
+    if upcoming:
+        lines.append("")
+        lines.append("*Earnings upcoming (portfolio/watchlist, 14gg)*")
+        for t, ed, days, blocked in upcoming[:10]:
+            icon = "🚨" if blocked else "📅"
+            lines.append(f"  {icon} `{t}` — `{ed}` ({days}gg)")
+        n_blocked = sum(1 for u in upcoming if u[3])
+        if n_blocked:
+            lines.append(f"_{n_blocked} ticker bloccati da hard gate ({EARNINGS_HARD_GATE_DAYS}gg)_")
+
+    # Macro
+    events = upcoming_macro_events(days_ahead=14)
+    if events:
+        lines.append("")
+        lines.append("*Macro events (14gg)*")
+        for ev in events[:10]:
+            lines.append(f"  • `{ev['date']}` ({ev['days_from_now']}gg) — *{ev['type']}*")
+
+    if not upcoming and not events:
+        lines.append("_Nessun evento nei prossimi 14 giorni._")
+
+    return {"text": "\n".join(lines), "parse_mode": _MARKDOWN}
+
+
 def handle_regime(_args: list[str]) -> dict:
     from propicks.io.db import connect
 
@@ -331,4 +388,5 @@ COMMANDS: dict[str, Any] = {
     "cache": handle_cache,
     "regime": handle_regime,
     "report": handle_report,
+    "calendar": handle_calendar,
 }

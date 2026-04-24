@@ -70,7 +70,22 @@ MIN_SCORE_TECH: int = 60
 MAX_LOSS_PER_TRADE_PCT: float = 0.08
 MAX_LOSS_WEEKLY_PCT: float = 0.05
 MAX_LOSS_MONTHLY_PCT: float = 0.15
-EARNINGS_WARNING_DAYS: int = 5
+
+# Earnings hard gate (Phase 8): se earnings entro N giorni, add_position blocca
+# l'apertura a meno che non sia passato ``ignore_earnings=True``. Precedente
+# ``EARNINGS_WARNING_DAYS`` promosso a hard gate.
+EARNINGS_HARD_GATE_DAYS: int = 5
+# Backward-compat alias (vecchio nome usato altrove)
+EARNINGS_WARNING_DAYS: int = EARNINGS_HARD_GATE_DAYS
+
+# TTL del cache earnings date. 168h (7gg) — le date non cambiano spesso,
+# refresh settimanale sufficiente. Se un ticker rilascia earnings, la data
+# scompare o diventa passata (gestito dal check).
+EARNINGS_CACHE_TTL_HOURS: float = 168.0
+
+# Soft warning (non block) se macro event entro N giorni. Coinvolge l'intero
+# mercato (non ticker-specific), quindi blocca sarebbe troppo aggressivo.
+MACRO_WARNING_DAYS: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +658,71 @@ MARKET_CACHE_TTL_META_HOURS: float = 24.0 * 7
 # Numero minimo di barre daily richieste (EMA50 warmup + 52w high lookback).
 # Re-esposto qui per evitare di duplicare la costante in yfinance_client.
 MARKET_MIN_DAILY_BARS: int = EMA_SLOW * 3 + 5  # = 155
+
+
+# ---------------------------------------------------------------------------
+# MACRO CALENDAR 2026 (Phase 8)
+# ---------------------------------------------------------------------------
+# Date hardcoded per 2026 — da aggiornare annualmente. Source:
+# - FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm
+# - CPI: bls.gov/schedule/news_release/cpi.htm
+# - NFP: bls.gov/schedule/news_release/empsit.htm (first Fri of month, employment situation)
+# - ECB: ecb.europa.eu/press/calendars/mgcgc
+#
+# Struttura: dict {ISO_DATE: [(event_type, description)]}.
+# Un giorno può avere più eventi (es. FOMC + press conf).
+#
+# NB: queste date sono **stimate** per 2026 (calendario ufficiale pubblicato
+# a fine anno precedente). Aggiornale quando il real calendar è disponibile.
+MACRO_EVENTS_2026: dict[str, list[tuple[str, str]]] = {
+    # FOMC meetings (8 per year, typically Tue-Wed)
+    "2026-01-28": [("FOMC", "FOMC meeting + statement + press conf")],
+    "2026-03-18": [("FOMC", "FOMC meeting + SEP + press conf")],
+    "2026-04-29": [("FOMC", "FOMC meeting + statement + press conf")],
+    "2026-06-17": [("FOMC", "FOMC meeting + SEP + press conf")],
+    "2026-07-29": [("FOMC", "FOMC meeting + statement + press conf")],
+    "2026-09-16": [("FOMC", "FOMC meeting + SEP + press conf")],
+    "2026-10-28": [("FOMC", "FOMC meeting + statement + press conf")],
+    "2026-12-16": [("FOMC", "FOMC meeting + SEP + press conf")],
+
+    # CPI release (typically 2nd Tue-Wed of month, 8:30am ET)
+    "2026-01-14": [("CPI", "CPI December 2025")],
+    "2026-02-11": [("CPI", "CPI January 2026")],
+    "2026-03-11": [("CPI", "CPI February 2026")],
+    "2026-04-15": [("CPI", "CPI March 2026")],
+    "2026-05-13": [("CPI", "CPI April 2026")],
+    "2026-06-10": [("CPI", "CPI May 2026")],
+    "2026-07-15": [("CPI", "CPI June 2026")],
+    "2026-08-12": [("CPI", "CPI July 2026")],
+    "2026-09-09": [("CPI", "CPI August 2026")],
+    "2026-10-14": [("CPI", "CPI September 2026")],
+    "2026-11-12": [("CPI", "CPI October 2026")],
+    "2026-12-09": [("CPI", "CPI November 2026")],
+
+    # NFP / Employment Situation (1st Fri of month, 8:30am ET)
+    "2026-01-02": [("NFP", "December 2025 Employment Situation")],
+    "2026-02-06": [("NFP", "January 2026 Employment Situation")],
+    "2026-03-06": [("NFP", "February 2026 Employment Situation")],
+    "2026-04-03": [("NFP", "March 2026 Employment Situation")],
+    "2026-05-01": [("NFP", "April 2026 Employment Situation")],
+    "2026-06-05": [("NFP", "May 2026 Employment Situation")],
+    "2026-07-02": [("NFP", "June 2026 Employment Situation")],
+    "2026-08-07": [("NFP", "July 2026 Employment Situation")],
+    "2026-09-04": [("NFP", "August 2026 Employment Situation")],
+    "2026-10-02": [("NFP", "September 2026 Employment Situation")],
+    "2026-11-06": [("NFP", "October 2026 Employment Situation")],
+    "2026-12-04": [("NFP", "November 2026 Employment Situation")],
+
+    # ECB Governing Council monetary policy meetings (8 per year)
+    "2026-01-22": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-03-12": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-04-23": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-06-11": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-07-23": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-09-10": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-10-22": [("ECB", "ECB monetary policy decision + press conf")],
+    "2026-12-10": [("ECB", "ECB monetary policy decision + press conf")],
+}
 
 
 # ---------------------------------------------------------------------------

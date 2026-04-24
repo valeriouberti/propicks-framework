@@ -458,6 +458,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             score_tech=args.score_tech,
             catalyst=args.catalyst,
             entry_date=args.entry_date,
+            ignore_earnings=getattr(args, "ignore_earnings", False),
         )
     except ValueError as exc:
         print(f"[errore] {exc}", file=sys.stderr)
@@ -661,6 +662,14 @@ def main() -> int:
     p_add.add_argument("--score-tech", type=int, default=None)
     p_add.add_argument("--catalyst", default=None)
     p_add.add_argument("--entry-date", default=None, help="YYYY-MM-DD (default: oggi)")
+    p_add.add_argument(
+        "--ignore-earnings",
+        action="store_true",
+        help=(
+            "Bypass earnings hard gate (5gg). Usa per trade intentional "
+            "post-earnings flush (contrarian strategy)."
+        ),
+    )
     p_add.set_defaults(func=cmd_add)
 
     p_upd = sub.add_parser("update", help="Aggiorna stop o target")

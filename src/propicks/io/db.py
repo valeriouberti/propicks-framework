@@ -140,6 +140,30 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
 
+    # Phase 8: earnings date columns su market_ticker_meta
+    for column, ddl in (
+        (
+            "next_earnings_date",
+            "ALTER TABLE market_ticker_meta ADD COLUMN next_earnings_date DATE",
+        ),
+        (
+            "earnings_fetched_at",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_fetched_at TIMESTAMP",
+        ),
+    ):
+        if not _column_exists(conn, "market_ticker_meta", column):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_next_earnings "
+            "ON market_ticker_meta(next_earnings_date)"
+        )
+    except sqlite3.OperationalError:
+        pass
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Applica lo schema + migrations incrementali.
@@ -520,6 +544,63 @@ def market_meta_upsert(
                    fetched_at = CURRENT_TIMESTAMP""",
             (ticker.upper(), sector, beta, name),
         )
+
+
+def market_earnings_read(
+    ticker: str,
+    ttl_hours: float,
+    *,
+    path: str | None = None,
+) -> str | None:
+    """Ritorna next_earnings_date ISO se in cache e non scaduto. Else None."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            """SELECT next_earnings_date FROM market_ticker_meta
+               WHERE ticker = ?
+                 AND earnings_fetched_at IS NOT NULL
+                 AND earnings_fetched_at >= datetime('now', ?)""",
+            (ticker.upper(), f"-{ttl_hours} hours"),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return row["next_earnings_date"]
+
+
+def market_earnings_upsert(
+    ticker: str,
+    next_earnings_date: str | None,
+    *,
+    path: str | None = None,
+) -> None:
+    """UPSERT earnings date. None valido = ticker senza earnings annunciato."""
+    with transaction(path) as conn:
+        conn.execute(
+            """INSERT INTO market_ticker_meta (
+                    ticker, next_earnings_date, earnings_fetched_at, fetched_at
+               ) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT(ticker) DO UPDATE SET
+                   next_earnings_date = excluded.next_earnings_date,
+                   earnings_fetched_at = CURRENT_TIMESTAMP""",
+            (ticker.upper(), next_earnings_date),
+        )
+
+
+def market_earnings_all_from_cache(*, path: str | None = None) -> dict[str, str | None]:
+    """Ritorna mappa {ticker: next_earnings_date} di TUTTE le righe in cache
+    (anche stale). Usato per report / bulk check.
+    """
+    conn = connect(path)
+    try:
+        rows = conn.execute(
+            """SELECT ticker, next_earnings_date FROM market_ticker_meta
+               WHERE next_earnings_date IS NOT NULL"""
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["ticker"]: r["next_earnings_date"] for r in rows}
 
 
 # ---------------------------------------------------------------------------

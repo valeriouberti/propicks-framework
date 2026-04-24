@@ -17,6 +17,7 @@ in ``scheduler_runs``. Gli alert generati dai job vengono scritti in
 """
 
 from propicks.scheduler.jobs import (
+    check_earnings_calendar,
     cleanup_stale_watchlist,
     record_regime,
     scan_watchlist,
@@ -27,6 +28,7 @@ from propicks.scheduler.jobs import (
 )
 
 __all__ = [
+    "check_earnings_calendar",
     "cleanup_stale_watchlist",
     "record_regime",
     "scan_watchlist",

@@ -218,8 +218,13 @@ CREATE TABLE IF NOT EXISTS market_ticker_meta (
   sector TEXT,
   beta REAL,
   name TEXT,
-  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  -- Phase 8: earnings date cache (TTL separato, refresh settimanale)
+  next_earnings_date DATE,
+  earnings_fetched_at TIMESTAMP
 );
+-- NB: idx_meta_next_earnings viene creato in ``db._apply_migrations`` dopo che
+-- la colonna ``next_earnings_date`` esiste anche sui DB esistenti pre-Phase 8.
 
 
 -- Daily AI budget counter — 1 riga per giorno.

@@ -52,6 +52,7 @@ propicks-migrate   = "propicks.scripts.migrate_json_to_sqlite:main"
 propicks-cache     = "propicks.cli.cache:main"
 propicks-scheduler = "propicks.cli.scheduler:main"
 propicks-bot       = "propicks.cli.bot:main"
+propicks-calendar  = "propicks.cli.calendar:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

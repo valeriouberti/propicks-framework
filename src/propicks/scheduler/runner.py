@@ -29,6 +29,7 @@ import sys
 
 from propicks.obs.log import get_logger
 from propicks.scheduler.jobs import (
+    check_earnings_calendar,
     cleanup_stale_watchlist,
     record_regime,
     scan_watchlist,
@@ -93,6 +94,16 @@ def _add_jobs(scheduler) -> None:
         misfire_grace_time=3600,
     )
 
+    # Earnings check Phase 8: daily Mon-Fri 17:30, pre warm_cache
+    scheduler.add_job(
+        check_earnings_calendar,
+        trigger=weekday_cron(17, 30),
+        id="check_earnings_calendar",
+        name="check_earnings_calendar",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     # Weekly: domenica 20:00 CET
     scheduler.add_job(
         cleanup_stale_watchlist,
@@ -140,6 +151,7 @@ def run_daemon() -> int:
     print(
         f"[scheduler] avviato (tz={_TZ})\n"
         "Jobs registrati:\n"
+        "  • check_earnings_calendar    Mon-Fri 17:30\n"
         "  • warm_cache                 Mon-Fri 17:45\n"
         "  • record_regime              Mon-Fri 18:00\n"
         "  • snapshot_portfolio         Mon-Fri 18:30\n"
@@ -150,7 +162,7 @@ def run_daemon() -> int:
         "\nCtrl+C per fermare.",
         file=sys.stderr,
     )
-    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 7}})
+    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 8}})
 
     try:
         scheduler.start()

@@ -166,6 +166,43 @@ def _fmt_job_failed(alert: dict, meta: dict) -> str:
     return f"🚨 *JOB FAILED*: `{job}`\n`{err[:200]}`"
 
 
+def _fmt_earnings_upcoming(alert: dict, meta: dict) -> str:
+    """📅 EARNINGS UPCOMING AAPL in 3 days"""
+    ticker = alert.get("ticker", "?")
+    days = meta.get("days_to_earnings")
+    ed = meta.get("earnings_date", "?")
+    in_port = meta.get("in_portfolio", False)
+    in_wl = meta.get("in_watchlist", False)
+
+    # Emoji severity-aware
+    if days is not None and days <= 1:
+        emoji = "🚨"
+        urgency = "*IMMINENTE*"
+    elif days is not None and days <= 3:
+        emoji = "⚠️"
+        urgency = "*entro 3gg*"
+    else:
+        emoji = "📅"
+        urgency = f"in {days}gg"
+
+    lines = [f"{emoji} *EARNINGS {urgency}* `{ticker}`"]
+    lines.append(f"Data: `{ed}` ({days}gg)")
+    if in_port:
+        lines.append("📊 Posizione APERTA in portfolio")
+    if in_wl:
+        lines.append("📋 Ticker in watchlist")
+    lines.append("")
+    if in_port:
+        lines.append(
+            "_Rivedi stop/target. Considera chiusura pre-earnings o trailing tight._"
+        )
+    else:
+        lines.append(
+            "_Nuovi entry bloccati da hard gate. Override con `--ignore-earnings`._"
+        )
+    return "\n".join(lines)
+
+
 def _fmt_report_ready(alert: dict, meta: dict) -> str:
     """📊 WEEKLY REPORT READY"""
     iso_week = meta.get("iso_week", "?")
@@ -202,6 +239,7 @@ _FORMATTERS = {
     "contra_near_cap": _fmt_contra_near_cap,
     "job_failed": _fmt_job_failed,
     "report_ready": _fmt_report_ready,
+    "earnings_upcoming": _fmt_earnings_upcoming,
 }
 
 

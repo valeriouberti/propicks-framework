@@ -26,6 +26,23 @@ def _isolate_db(tmp_path, monkeypatch):
     monkeypatch.setattr("propicks.config.DB_FILE", str(db_path))
 
 
+@pytest.fixture(autouse=True)
+def _no_network_earnings(monkeypatch):
+    """Mock ``get_next_earnings_date`` → None globalmente nei test.
+
+    Dalla Phase 8, ``add_position`` chiama yfinance per il earnings hard gate.
+    Senza questo mock, ogni test che usa ``add_position`` farebbe una chiamata
+    di rete reale. Default None = "no earnings" → gate non blocca.
+
+    I test specifici per l'earnings gate (test_earnings_gate.py) ri-patchano
+    la funzione con return values specifici — il monkeypatch più recente vince.
+    """
+    monkeypatch.setattr(
+        "propicks.market.yfinance_client.get_next_earnings_date",
+        lambda ticker, force_refresh=False: None,
+    )
+
+
 @pytest.fixture
 def sample_portfolio() -> dict:
     """Portfolio dict per test che NON persistono (test puri su domain).

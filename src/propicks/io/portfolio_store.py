@@ -31,6 +31,7 @@ from propicks.config import (
     CONTRA_MAX_POSITION_SIZE_PCT,
     CONTRA_MAX_POSITIONS,
     DATE_FMT,
+    EARNINGS_HARD_GATE_DAYS,
     MAX_LOSS_PER_TRADE_PCT,
     MAX_POSITION_SIZE_PCT,
     MAX_POSITIONS,
@@ -243,6 +244,8 @@ def add_position(
     score_tech: int | None,
     catalyst: str | None,
     entry_date: str | None = None,
+    *,
+    ignore_earnings: bool = False,
 ) -> dict:
     """Apre una posizione con tutti i gate di business.
 
@@ -251,8 +254,29 @@ def add_position(
 
     Gate contrarian: size 8%, max 3 pos, 20% aggregate, loss 12%. Riconosce
     il bucket da ``strategy.lower().startswith("contra")``.
+
+    Phase 8 gate: hard block se earnings entro ``EARNINGS_HARD_GATE_DAYS``
+    (default 5). Override con ``ignore_earnings=True`` per trade contrarian
+    intentional post-earnings.
     """
     ticker = ticker.upper()
+
+    # Earnings hard gate (Phase 8) — first check per fail-fast prima di validazioni
+    # costose (sizing, cash). Skippato se ignore_earnings=True.
+    if not ignore_earnings:
+        from propicks.domain.calendar import earnings_gate_check
+        from propicks.market.yfinance_client import get_next_earnings_date
+        try:
+            earnings_date = get_next_earnings_date(ticker)
+        except Exception:
+            earnings_date = None  # fail-open se yfinance giù
+        check = earnings_gate_check(ticker, earnings_date, EARNINGS_HARD_GATE_DAYS)
+        if check["blocked"]:
+            raise ValueError(
+                f"Earnings gate: {ticker} ha earnings in {check['days_to_earnings']}gg "
+                f"({earnings_date}). Usa ignore_earnings=True per trade intentional "
+                f"(contrarian post-earnings flush), oppure aspetta che passi l'evento."
+            )
     positions = portfolio.setdefault("positions", {})
 
     if ticker in positions:

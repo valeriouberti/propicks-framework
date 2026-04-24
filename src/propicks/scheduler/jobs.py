@@ -482,7 +482,74 @@ def trailing_stop_check() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 7. Weekly attribution report (Phase 9)
+# 7. Earnings calendar check (Phase 8)
+# ---------------------------------------------------------------------------
+@run_job("check_earnings_calendar")
+def check_earnings_calendar(days_threshold: int = 5) -> dict:
+    """Daily: fetch earnings dates per portfolio + watchlist, alert se entro 5gg.
+
+    - Per ogni ticker in portfolio + watchlist: refresh earnings_date (cache TTL 7gg)
+    - Alert 'earnings_upcoming' per ogni ticker con earnings entro threshold
+    - Dedup: una alert per ticker per settimana (stessa week ISO → no duplicati)
+    """
+    from propicks.config import EARNINGS_HARD_GATE_DAYS
+    from propicks.domain.calendar import earnings_gate_check
+    from propicks.market.yfinance_client import get_next_earnings_date
+
+    portfolio = load_portfolio()
+    watchlist = load_watchlist()
+
+    tickers = set(portfolio.get("positions", {}).keys())
+    tickers.update(watchlist.get("tickers", {}).keys())
+
+    if not tickers:
+        return {"n_items": 0, "notes": "no tickers"}
+
+    threshold = days_threshold or EARNINGS_HARD_GATE_DAYS
+    n_upcoming = 0
+    n_errors = 0
+    iso_year, iso_week, _ = date.today().isocalendar()
+    week_tag = f"{iso_year}-W{iso_week:02d}"
+
+    for ticker in sorted(tickers):
+        try:
+            earnings_date = get_next_earnings_date(ticker)
+        except Exception:
+            n_errors += 1
+            continue
+        check = earnings_gate_check(ticker, earnings_date, threshold)
+        if not check["blocked"]:
+            continue
+        n_upcoming += 1
+        # Dedup per ticker per settimana (evita spam giornaliero)
+        dedup = f"earnings_upcoming_{ticker}_{week_tag}"
+        is_critical = check["days_to_earnings"] is not None and check["days_to_earnings"] <= 2
+        create_alert(
+            alert_type="earnings_upcoming",
+            severity="critical" if is_critical else "warning",
+            ticker=ticker,
+            message=(
+                f"{ticker}: earnings in {check['days_to_earnings']}gg "
+                f"({earnings_date})"
+            ),
+            metadata={
+                "ticker": ticker,
+                "earnings_date": earnings_date,
+                "days_to_earnings": check["days_to_earnings"],
+                "in_portfolio": ticker in portfolio.get("positions", {}),
+                "in_watchlist": ticker in watchlist.get("tickers", {}),
+            },
+            dedup_key=dedup,
+        )
+
+    notes = f"checked={len(tickers)} upcoming={n_upcoming}"
+    if n_errors:
+        notes += f" errors={n_errors}"
+    return {"n_items": n_upcoming, "notes": notes}
+
+
+# ---------------------------------------------------------------------------
+# 8. Weekly attribution report (Phase 9)
 # ---------------------------------------------------------------------------
 @run_job("weekly_attribution_report")
 def weekly_attribution_report_job() -> dict:

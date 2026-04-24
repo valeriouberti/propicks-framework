@@ -33,6 +33,7 @@ import pandas as pd
 import yfinance as yf
 
 from propicks.config import (
+    EARNINGS_CACHE_TTL_HOURS,
     EMA_SLOW,
     MARKET_CACHE_TTL_DAILY_HOURS,
     MARKET_CACHE_TTL_META_HOURS,
@@ -41,6 +42,8 @@ from propicks.config import (
     REGIME_MIN_WEEKLY_BARS,
 )
 from propicks.io.db import (
+    market_earnings_read,
+    market_earnings_upsert,
     market_meta_read,
     market_meta_upsert,
     market_ohlcv_is_fresh,
@@ -347,6 +350,89 @@ def get_ticker_sector(ticker: str) -> str | None:
     name = info.get("shortName") or info.get("longName")
     market_meta_upsert(ticker, sector=sector, beta=beta, name=name)
     return sector
+
+
+def get_next_earnings_date(ticker: str, *, force_refresh: bool = False) -> str | None:
+    """Ritorna next earnings date ISO (``YYYY-MM-DD``) o None. Cache TTL 7gg.
+
+    Yahoo espone la earnings date via ``yf.Ticker(t).calendar`` (dict) o
+    ``get_earnings_dates(limit=N)`` (DataFrame con date future + past).
+    Per robustezza priviligiamo ``calendar`` quando disponibile, con fallback
+    a ``get_earnings_dates``.
+
+    ``force_refresh=True`` bypass cache.
+
+    Returns None se:
+    - earnings non pubblicati / ticker non ha earnings (ETF, index)
+    - yfinance fallisce o ritorna date passate
+    - ticker non valido
+
+    Note: questo call può essere lento (~300-500ms per info). Il TTL 7gg
+    riduce fortemente il carico.
+    """
+    ticker = ticker.upper()
+
+    if not force_refresh:
+        cached = market_earnings_read(ticker, EARNINGS_CACHE_TTL_HOURS)
+        if cached is not None:
+            return cached
+
+    # Fetch from yfinance
+    earnings_iso: str | None = None
+    try:
+        tk = yf.Ticker(ticker)
+        # Pattern 1: .calendar (new API)
+        cal = getattr(tk, "calendar", None)
+        if isinstance(cal, dict):
+            date_val = cal.get("Earnings Date")
+            if isinstance(date_val, list) and date_val:
+                # Prende la prima data futura nella lista
+                import pandas as _pd
+                for d in date_val:
+                    if hasattr(d, "strftime"):
+                        earnings_iso = d.strftime("%Y-%m-%d")
+                        break
+                    if isinstance(d, str):
+                        earnings_iso = d
+                        break
+                    try:
+                        earnings_iso = _pd.to_datetime(d).strftime("%Y-%m-%d")
+                        break
+                    except Exception:
+                        continue
+
+        # Pattern 2: get_earnings_dates (fallback o supplementare)
+        if earnings_iso is None:
+            try:
+                import pandas as _pd
+                df = tk.get_earnings_dates(limit=12)
+                if df is not None and not df.empty:
+                    today = _pd.Timestamp.now(tz=df.index.tz) if df.index.tz is not None else _pd.Timestamp.now()
+                    future = df.index[df.index >= today]
+                    if len(future) > 0:
+                        earnings_iso = future[0].strftime("%Y-%m-%d")
+            except Exception:
+                pass
+    except Exception as exc:
+        _log.warning(
+            "yf_earnings_unavailable",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
+
+    # Sanity: se la data è nel passato, scartala
+    if earnings_iso:
+        from datetime import date as _date
+        from datetime import datetime as _dt
+        try:
+            parsed = _dt.strptime(earnings_iso, "%Y-%m-%d").date()
+            if parsed < _date.today():
+                earnings_iso = None
+        except ValueError:
+            earnings_iso = None
+
+    # Cache sia il valore (anche None, per evitare re-fetch spam)
+    market_earnings_upsert(ticker, earnings_iso)
+    return earnings_iso
 
 
 def get_ticker_beta(ticker: str) -> float | None:
