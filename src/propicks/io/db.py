@@ -101,9 +101,44 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Check se una colonna esiste già in ``table`` via PRAGMA table_info."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r[1] == column for r in rows)
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Applica schema migrations incrementali per DB esistenti.
+
+    Le nuove tabelle sono gestite da CREATE TABLE IF NOT EXISTS nello
+    schema.sql. Le colonne aggiunte a tabelle esistenti (Phase 4+)
+    richiedono ALTER TABLE — ecco dove vanno.
+
+    Pattern: ogni migration è idempotent via check ``_column_exists``.
+    """
+    # Phase 4: delivery tracking su alerts
+    for column, ddl in (
+        ("delivered", "ALTER TABLE alerts ADD COLUMN delivered INTEGER DEFAULT 0"),
+        ("delivered_at", "ALTER TABLE alerts ADD COLUMN delivered_at TIMESTAMP"),
+        ("delivery_error", "ALTER TABLE alerts ADD COLUMN delivery_error TEXT"),
+    ):
+        if not _column_exists(conn, "alerts", column):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                # Tabella alerts non esiste ancora (es. DB nuovo, già gestito dallo
+                # schema.sql CREATE TABLE IF NOT EXISTS). Safe ignore.
+                pass
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
-    """Applica lo schema via executescript (supporta multiple statements)."""
+    """Applica lo schema + migrations incrementali.
+
+    Ordine: CREATE TABLE IF NOT EXISTS (nuove tabelle) → ALTER TABLE per
+    colonne aggiunte (migrations). Entrambi idempotenti.
+    """
     conn.executescript(_load_schema_sql())
+    _apply_migrations(conn)
     conn.commit()
 
 

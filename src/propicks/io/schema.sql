@@ -267,10 +267,17 @@ CREATE TABLE IF NOT EXISTS alerts (
   metadata TEXT,                  -- JSON blob con dettaglio (target, score, ecc.)
   dedup_key TEXT,                 -- per evitare duplicati same-day (es. "AAPL_ready_2026-04-24")
   acknowledged INTEGER DEFAULT 0,
-  acknowledged_at TIMESTAMP
+  acknowledged_at TIMESTAMP,
+  -- Phase 4: delivery tracking per Telegram bot dispatcher.
+  -- delivered=0: pending da inviare. delivered=1: inviato con successo.
+  -- delivery_error non-null: tentativo fallito, resta a delivered=0 per retry.
+  delivered INTEGER DEFAULT 0,
+  delivered_at TIMESTAMP,
+  delivery_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_pending ON alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_alerts_undelivered ON alerts(delivered, created_at);
 
 
 -- ----------------------------------------------------------------------------
