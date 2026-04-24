@@ -143,6 +143,11 @@ def simulate_portfolio(
     if not universe:
         raise ValueError("Universe vuoto")
 
+    # Normalizza tutti gli index a tz-naive — yfinance ritorna indici tz-aware
+    # con fusi diversi (NYSE → America/New_York, Xetra → Europe/Berlin).
+    # Il sorted union fallisce se mischiati (TypeError: compare tz-naive and tz-aware).
+    universe = {t: _strip_tz(df) for t, df in universe.items()}
+
     # Unione di tutte le date disponibili
     all_dates = sorted(set(
         d for df in universe.values() for d in df.index
@@ -244,6 +249,27 @@ def _as_date(t) -> date:
     if hasattr(t, "date"):
         return t.date()
     return t
+
+
+def _strip_tz(df: pd.DataFrame) -> pd.DataFrame:
+    """Ritorna una copia di ``df`` con index tz-naive.
+
+    yfinance ritorna DatetimeIndex tz-aware (con fuso locale dell'exchange).
+    Su universo multi-market (US + EU), sorted union tra tz diverse fallisce
+    ``TypeError: Cannot compare tz-naive and tz-aware timestamps``. La nostra
+    simulazione lavora in "calendar day" (no intraday), quindi possiamo
+    strippare tz senza perdita di informazione.
+    """
+    if df is None or df.empty:
+        return df
+    idx = df.index
+    if hasattr(idx, "tz") and idx.tz is not None:
+        df = df.copy()
+        # tz_localize(None) droppa la tz senza conversione UTC — preserva
+        # il wall-clock time. Per bar giornaliere (timestamp = close time
+        # dell'exchange), il .date() component è invariato comunque.
+        df.index = idx.tz_localize(None)
+    return df
 
 
 def _is_pre_earnings(

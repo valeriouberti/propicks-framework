@@ -437,6 +437,34 @@ def test_monte_carlo_empty_trades():
     assert mc.sharpe_mean == 0.0
 
 
+def test_portfolio_handles_mixed_tz_aware_indexes():
+    """Regression test: universe con indici tz-aware misti (NY + Berlin)
+    non deve sollevare TypeError (real bug found in Phase 6 smoke)."""
+    from propicks.backtest.costs import CostModel
+    from propicks.backtest.portfolio_engine import BacktestConfig, simulate_portfolio
+
+    # 2 DataFrame: uno con tz NY, uno con tz Berlin
+    df_us = _synthetic_ohlcv(n_days=300)
+    df_us.index = df_us.index.tz_localize("America/New_York")
+
+    df_eu = _synthetic_ohlcv(n_days=300)
+    df_eu.index = df_eu.index.tz_localize("Europe/Berlin")
+
+    universe = {"US": df_us, "EU": df_eu}
+
+    def _scorer(ticker, hist_slice):
+        return 70.0
+
+    config = BacktestConfig(
+        initial_capital=10_000.0,
+        cost_model=CostModel.zero(),
+        use_earnings_gate=False,
+    )
+    # Non deve sollevare TypeError
+    state = simulate_portfolio(universe=universe, scoring_fn=_scorer, config=config)
+    assert state.equity_curve  # ha prodotto output
+
+
 def test_monte_carlo_deterministic_with_seed():
     """Stesso seed → stessi risultati."""
     from propicks.backtest.walkforward import monte_carlo_bootstrap

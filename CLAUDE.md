@@ -192,6 +192,145 @@ settoriale recente. Costo: **$0.01 a ricerca** più i token del contenuto
 recuperato (conteggiati come input). Il count viene loggato su stderr dopo
 ogni chiamata fresca.
 
+## Backtest v2 portfolio-level (post Phase 6)
+
+Engine che simula il portfolio **cross-ticker** nel tempo con TC + slippage
++ portfolio constraints (max positions, size cap, cash reserve, earnings gate).
+Sostituisce/estende il single-ticker legacy (``backtest/engine.py``) per
+validazione più realistica pre-Phase 7.
+
+### Differenze vs legacy
+
+| Aspetto | Legacy (single-ticker) | Phase 6 (portfolio) |
+|---------|------------------------|---------------------|
+| Scope | 1 ticker per loop | Cross-ticker simultaneo |
+| Cash management | Full-cash per trade | Share allocato, rispetta MIN_CASH_RESERVE |
+| Position cap | 1 per ticker | MAX_POSITIONS (10) + size cap per bucket |
+| TC + slippage | No (ottimistic fills) | Configurabile (default 5-10bp US, 10-15bp EU) |
+| Earnings gate | No | Opzionale (attivabile con earnings_dates fornite) |
+| OOS split | No | Sì, walk-forward train/test |
+| Monte Carlo | No | Sì, bootstrap 500-1000 samples |
+
+### Moduli
+
+```
+src/propicks/backtest/
+├── engine.py            # Legacy single-ticker (invariato)
+├── metrics.py           # Legacy trade-level metrics
+├── portfolio_engine.py  # Phase 6: simulate_portfolio state machine
+├── costs.py             # TC + slippage model (CostModel, apply_entry_costs, apply_exit_costs)
+├── metrics_v2.py        # Portfolio KPIs (Sharpe/Sortino ann., max DD, Calmar, by-strategy)
+└── walkforward.py       # OOS split + Monte Carlo bootstrap
+```
+
+### Cost model default
+
+| Asset class | Commission | Spread (bp) | Slippage (bp) |
+|-------------|------------|-------------|---------------|
+| Stock US | $0 | 5 | 2 |
+| Stock EU (.MI/.DE) | €2 | 10 | 2 |
+| ETF US | $0 | 2 | 2 |
+| ETF EU | €2 | 5 | 2 |
+
+Roundtrip cost ≈ spread + 2×slippage = **9-14 bps** retail. Override via
+`--tc-bps N` per sensitivity.
+
+### CLI
+
+```bash
+# Single-shot portfolio backtest
+propicks-backtest AAPL MSFT NVDA --portfolio --period 3y --threshold 65
+
+# Con cost override + Monte Carlo
+propicks-backtest AAPL MSFT NVDA --portfolio --tc-bps 10 --monte-carlo 500
+
+# Walk-forward OOS split
+propicks-backtest AAPL MSFT NVDA --portfolio --oos-split 0.70
+
+# Combo: walk-forward + MC
+propicks-backtest AAPL MSFT NVDA --portfolio --oos-split 0.70 --monte-carlo 1000
+```
+
+### Dashboard
+
+Page dedicata ``11_Backtest_Portfolio.py``:
+- Form universe + period + threshold + TC + OOS split + MC samples
+- Equity curve + drawdown chart (line + area)
+- KPI metric cards (total return, CAGR, Sharpe, max DD, win rate, PF, Calmar)
+- Per-strategy breakdown (se mixed)
+- Trade table ordinata per exit date
+- Monte Carlo CI display con robustness score + emoji (🟢🟡🔴)
+
+### Architettura engine
+
+```
+simulate_portfolio(universe, scoring_fn, ...):
+    for each trading day t:
+        1. Process exits:
+           - Stop hit (priority 1, conservative)
+           - Target hit (priority 2)
+           - Time stop (|P&L| < 2% for 30 bars)
+        2. Record equity_curve (mark-to-market)
+        3. Score all candidates cross-ticker
+        4. Filter: score >= threshold + regime OK + no earnings gate hit
+        5. Rank candidates by score desc
+        6. Open top-N that fit in budget (cash, size cap, MAX_POSITIONS)
+    Force close at end-of-period (eod)
+```
+
+### Walk-forward OOS
+
+```python
+wf = walk_forward_split(universe, scoring_fn, split_ratio=0.70)
+# wf.degradation_score = test_sharpe - train_sharpe
+# >= 0 → ok (test not worse than train, no overfitting evidence)
+# < 0 → overfitting suspect (train outperforms test)
+```
+
+### Monte Carlo bootstrap
+
+```python
+mc = monte_carlo_bootstrap(closed_trades, n_samples=500)
+# CI 95% per Sharpe, WinRate, TotalReturn, MaxDD
+# robustness_score = sharpe_lower_95 / sharpe_mean
+# > 0.7 = robusto (CI stretto)
+# < 0.4 = fragile (risultato dominato dal luck)
+```
+
+### Design highlights
+
+- **Safety first**: se il simulation state viola un'invariante (cash < 0,
+  positions > MAX), è **bug grave** — test esplicito
+  (`test_portfolio_respects_max_positions_cap`).
+- **Stop > target priority**: su bar dove sia stop che target vengono
+  toccati intraday, priorità stop → conservative worst-case. Documented.
+- **Point-in-time scoring**: scoring_fn riceve hist_slice fino a bar t,
+  no lookahead. Garantito dall'engine, ma deve essere preservato dalla
+  scoring_fn (es. no ``.shift(-1)``).
+- **Separation of concerns**: engine non conosce la formula scoring
+  (iniettata via ``scoring_fn``). Test sostituiscono con mock. In
+  produzione CLI usa ``domain.scoring``.
+- **CostModel frozen**: immutable dataclass per evitare cambio
+  accidentale durante il backtest loop.
+
+### Trade-off espliciti
+
+- **No survivorship bias correction**: ticker delisted non nel set. Il
+  backtest può sovrastimare il return. Documented.
+- **Earnings gap non modellato**: stop filla a stop level, non al gap
+  reale. Sottostima loss su earnings shocks. Per stimarlo servirebbe
+  intraday data.
+- **Corporate actions ignored**: splits/dividends non applicati. Impact
+  minore su holding 2-8 settimane.
+- **Scoring su ticker singolo point-in-time**: no "market context"
+  in backtest. Il regime classifier che usiamo in live non è ricalcolato
+  storicamente (pre-Phase 3 non c'era regime_history popolata). Accettabile
+  per MVP.
+- **Single-strategy per run**: il CLI/dashboard supportano un solo
+  `strategy_tag` per simulation. Multi-strategy requires manual
+  combination (run separato per momentum + contrarian, combine equity
+  curves posteriori). Future work.
+
 ## Catalyst calendar (post Phase 8)
 
 **Hard gate** su earnings (ticker-specific) + **soft warning** su macro events
