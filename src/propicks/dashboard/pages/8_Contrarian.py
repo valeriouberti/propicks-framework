@@ -22,7 +22,7 @@ page_header(
     "Quality-filtered mean reversion. Cerca setup oversold su titoli di qualità con trend strutturale intatto. "
     "Parallelo allo Scanner momentum, NON lo sostituisce.",
 )
-invariants_note()
+invariants_note(strategy_bucket="contrarian")
 
 st.info(
     "**Strategia contrarian — invarianti diverse dal momentum:**  \n"

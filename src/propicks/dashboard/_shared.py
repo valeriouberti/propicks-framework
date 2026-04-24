@@ -15,6 +15,10 @@ from __future__ import annotations
 import streamlit as st
 
 from propicks.config import (
+    CONTRA_MAX_AGGREGATE_EXPOSURE_PCT,
+    CONTRA_MAX_LOSS_PER_TRADE_PCT,
+    CONTRA_MAX_POSITION_SIZE_PCT,
+    CONTRA_MAX_POSITIONS,
     MAX_LOSS_WEEKLY_PCT,
     MAX_POSITIONS,
     MIN_CASH_RESERVE_PCT,
@@ -221,9 +225,20 @@ def _status_weekly_risk(risk_pct: float) -> str:
     return "ok"
 
 
-def invariants_note() -> None:
-    """Sidebar con stato live + regole. I semafori leggono il portfolio corrente."""
-    from propicks.domain.sizing import portfolio_value
+def invariants_note(strategy_bucket: str = "momentum") -> None:
+    """Sidebar con stato live + regole. I semafori leggono il portfolio corrente.
+
+    Args:
+        strategy_bucket: ``"momentum"`` (default, regole stock/ETF classiche) o
+            ``"contrarian"`` (regole 8%/3pos/20% del bucket mean reversion).
+            Ogni page della dashboard passa il bucket appropriato per evitare
+            di mostrare regole fuorvianti a chi opera sulla strategia sbagliata.
+    """
+    from propicks.domain.sizing import (
+        contrarian_aggregate_exposure,
+        contrarian_position_count,
+        portfolio_value,
+    )
     from propicks.io.portfolio_store import get_initial_capital
 
     portfolio = load_portfolio()
@@ -257,16 +272,52 @@ def invariants_note() -> None:
         f"{_dot(_status_weekly_risk(risk_pct))} Rischio settimanale · "
         f"**{risk_pct * 100:.2f}%** (max {MAX_LOSS_WEEKLY_PCT * 100:.0f}%)"
     )
+
+    # Stato bucket contrarian — visibile solo sulla page contrarian per
+    # non rumorare le altre page con info non rilevanti.
+    if strategy_bucket == "contrarian":
+        contra_n = contrarian_position_count(portfolio)
+        contra_pct = contrarian_aggregate_exposure(portfolio)
+        contra_n_status = (
+            "bad" if contra_n >= CONTRA_MAX_POSITIONS
+            else "warn" if contra_n >= CONTRA_MAX_POSITIONS - 1
+            else "ok"
+        )
+        contra_pct_status = (
+            "bad" if contra_pct >= CONTRA_MAX_AGGREGATE_EXPOSURE_PCT
+            else "warn" if contra_pct >= CONTRA_MAX_AGGREGATE_EXPOSURE_PCT * 0.75
+            else "ok"
+        )
+        st.sidebar.markdown(
+            f"{_dot(contra_n_status)} Contrarian pos · "
+            f"**{contra_n}** / {CONTRA_MAX_POSITIONS}"
+        )
+        st.sidebar.markdown(
+            f"{_dot(contra_pct_status)} Contrarian expo · "
+            f"**{contra_pct * 100:.1f}%** / {CONTRA_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}%"
+        )
+
     st.sidebar.caption(f"Capitale rif.: € {ref_capital:,.0f}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption(
-        "**Regole**  \n"
-        f"• Max posizioni: {MAX_POSITIONS}  \n"
-        "• Max size: 15% stock / 20% ETF  \n"
-        f"• Min cash: {MIN_CASH_RESERVE_PCT * 100:.0f}%  \n"
-        f"• Max loss week: {MAX_LOSS_WEEKLY_PCT * 100:.0f}% → stop"
-    )
+    if strategy_bucket == "contrarian":
+        st.sidebar.caption(
+            "**Regole contrarian (bucket)**  \n"
+            f"• Max posizioni bucket: {CONTRA_MAX_POSITIONS}  \n"
+            f"• Max size/trade: {CONTRA_MAX_POSITION_SIZE_PCT * 100:.0f}%  \n"
+            f"• Max expo aggregata: {CONTRA_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}%  \n"
+            f"• Max loss/trade: {CONTRA_MAX_LOSS_PER_TRADE_PCT * 100:.0f}% (stop −3×ATR)  \n"
+            f"• Cap globale condiviso: {MAX_POSITIONS} pos totali  \n"
+            "• Regime gate: skip STRONG_BULL/BEAR"
+        )
+    else:
+        st.sidebar.caption(
+            "**Regole**  \n"
+            f"• Max posizioni: {MAX_POSITIONS}  \n"
+            "• Max size: 15% stock / 20% ETF / 8% contrarian  \n"
+            f"• Min cash: {MIN_CASH_RESERVE_PCT * 100:.0f}%  \n"
+            f"• Max loss week: {MAX_LOSS_WEEKLY_PCT * 100:.0f}% → stop"
+        )
 
 
 # ---------------------------------------------------------------------------
