@@ -29,7 +29,13 @@ from propicks.domain.contrarian_discovery import (
 )
 from propicks.domain.contrarian_scoring import analyze_contra_ticker
 from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
-from propicks.market.index_constituents import get_sp500_universe
+from propicks.market.index_constituents import (
+    INDEX_NAME_FTSEMIB,
+    INDEX_NAME_SP500,
+    INDEX_NAME_STOXX600,
+    get_index_universe,
+    index_label,
+)
 from propicks.market.yfinance_client import download_benchmark
 
 
@@ -47,6 +53,27 @@ def _regime_row(regime: dict | None) -> str:
     )
 
 
+def _earnings_badge(r: dict) -> str:
+    """Badge earnings per output CLI contrarian.
+
+    - Earnings entro 5gg → 🚨 hard gate (add_position bloccato senza --ignore-earnings)
+    - Earnings 6-14gg   → ⚠️  warning
+    - Earnings recenti (last_perf_1w molto negativa) → 📰 possibile post-flush
+    - Altrimenti → "—"
+    """
+    days = r.get("days_to_earnings")
+    next_date = r.get("next_earnings_date") or "—"
+    if isinstance(days, int):
+        if days < 0:
+            return f"📰 earnings {abs(days)}gg fa ({next_date})"
+        if days <= 5:
+            return f"🚨 EARNINGS {days}gg ({next_date}) — add bloccato senza --ignore-earnings"
+        if days <= 14:
+            return f"⚠️ earnings {days}gg ({next_date})"
+        return f"earnings in {days}gg ({next_date})"
+    return "—"
+
+
 def print_analysis(r: dict) -> None:
     """Output dettagliato per un singolo ticker contrarian."""
     sub = r.get("sub_scores_detail") or {}
@@ -62,6 +89,7 @@ def print_analysis(r: dict) -> None:
         ["Recent low (5-bar)", f"{r.get('recent_low', r['price']):.2f}"],
         ["Regime weekly", _regime_row(r.get("regime"))],
         ["VIX", f"{r['vix']:.2f}" if r.get("vix") is not None else "n/a"],
+        ["Earnings", _earnings_badge(r)],
         ["", ""],
         [
             "RSI(14)",
@@ -154,6 +182,20 @@ def print_analysis(r: dict) -> None:
     print(tabulate(trade_rows, tablefmt="simple"))
 
 
+def _earnings_short(r: dict) -> str:
+    """Badge earnings compatto per summary table."""
+    days = r.get("days_to_earnings")
+    if not isinstance(days, int):
+        return "—"
+    if days < 0:
+        return f"📰{abs(days)}d"
+    if days <= 5:
+        return f"🚨{days}d"
+    if days <= 14:
+        return f"⚠️{days}d"
+    return f"{days}d"
+
+
 def print_summary_table(results: list[dict]) -> None:
     """Tabella compatta per batch."""
     headers = [
@@ -169,6 +211,7 @@ def print_summary_table(results: list[dict]) -> None:
         "Dist ATR",
         "Stop",
         "Target",
+        "Earn.",
     ]
     rows = []
     for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
@@ -200,6 +243,7 @@ def print_summary_table(results: list[dict]) -> None:
                 if isinstance(r.get("stop_suggested"), (int, float))
                 else "—",
                 f"{target:.2f}" if target_valid else "—",
+                _earnings_short(r),
             ]
         )
     print(tabulate(rows, headers=headers, tablefmt="github"))
@@ -352,12 +396,26 @@ def main() -> int:
         action="store_true",
         help="Non aggiungere i ticker classe A/B alla watchlist",
     )
-    parser.add_argument(
+    discover_group = parser.add_mutually_exclusive_group()
+    discover_group.add_argument(
         "--discover-sp500",
         action="store_true",
         help=(
-            "Discovery automatico su tutto S&P 500 (constituents da Wikipedia, "
-            "cache 7gg). Pipeline 3-stage: prefilter cheap → full scoring → top N."
+            "Discovery automatico su tutto S&P 500 (~500 nomi US). Pipeline "
+            "3-stage: prefilter cheap → full scoring → top N."
+        ),
+    )
+    discover_group.add_argument(
+        "--discover-ftsemib",
+        action="store_true",
+        help="Discovery su FTSE MIB (40 large-cap italiani).",
+    )
+    discover_group.add_argument(
+        "--discover-stoxx600",
+        action="store_true",
+        help=(
+            "Discovery su STOXX Europe 600 (~600 nomi multi-paese — universo "
+            "ampio, costo full scoring più alto)."
         ),
     )
     parser.add_argument(
@@ -369,8 +427,11 @@ def main() -> int:
     parser.add_argument(
         "--min-score",
         type=float,
-        default=0.0,
-        help="Score composito minimo per inclusione (es. 60 per classe A+B).",
+        default=None,
+        help=(
+            "Score composito minimo per inclusione. Default: CONTRA_SCORE_C "
+            "(45) per filtrare almeno tier C; usa 60 per A+B, 0 per nessun filtro."
+        ),
     )
     parser.add_argument(
         "--prefilter-rsi-max",
@@ -398,16 +459,28 @@ def main() -> int:
     parser.add_argument(
         "--refresh-universe",
         action="store_true",
-        help="Forza re-fetch della lista S&P 500 da Wikipedia (bypass cache 7gg).",
+        help="Forza re-fetch della lista index da Wikipedia (bypass cache 7gg).",
     )
     args = parser.parse_args()
 
+    # Determina se è in modalità discovery e quale index
+    discover_index: str | None = None
+    if args.discover_sp500:
+        discover_index = INDEX_NAME_SP500
+    elif args.discover_ftsemib:
+        discover_index = INDEX_NAME_FTSEMIB
+    elif args.discover_stoxx600:
+        discover_index = INDEX_NAME_STOXX600
+
     # Validation: o ticker espliciti o discovery, ma non entrambi vuoti
-    if not args.tickers and not args.discover_sp500:
-        parser.error("Specifica almeno un ticker oppure usa --discover-sp500.")
-    if args.tickers and args.discover_sp500:
+    if not args.tickers and discover_index is None:
         parser.error(
-            "--discover-sp500 e ticker espliciti sono mutually exclusive: "
+            "Specifica almeno un ticker oppure usa "
+            "--discover-sp500 / --discover-ftsemib / --discover-stoxx600."
+        )
+    if args.tickers and discover_index is not None:
+        parser.error(
+            "Discovery flags e ticker espliciti sono mutually exclusive: "
             "scegli uno dei due flussi."
         )
 
@@ -418,25 +491,38 @@ def main() -> int:
         vix = float(vix_series.iloc[-1])
 
     results: list[dict] = []
-    if args.discover_sp500:
+    if discover_index is not None:
+        label = index_label(discover_index)
         try:
-            universe = get_sp500_universe(force_refresh=args.refresh_universe)
+            universe = get_index_universe(
+                discover_index, force_refresh=args.refresh_universe
+            )
         except Exception as exc:
-            print(f"[errore] impossibile ottenere universo S&P 500: {exc}", file=sys.stderr)
+            print(
+                f"[errore] impossibile ottenere universo {label}: {exc}",
+                file=sys.stderr,
+            )
             return 1
 
         print(
-            f"[discovery] universo S&P 500: {len(universe)} ticker. "
+            f"[discovery] universo {label}: {len(universe)} ticker. "
             f"Stage 1 (prefilter RSI<={args.prefilter_rsi_max}, "
             f"distance>={args.prefilter_atr_min}×ATR)...",
             file=sys.stderr,
+        )
+        # Default min_score = CONTRA_SCORE_C (45) per filtrare il rumore: un
+        # discovery senza filtro su S&P 500 ritorna spesso top-N con score < 30
+        # (setup borderline che non passerebbero il quality gate).
+        from propicks.config import CONTRA_SCORE_C
+        effective_min_score = (
+            args.min_score if args.min_score is not None else CONTRA_SCORE_C
         )
         out = discover_contra_candidates(
             universe,
             top_n=args.top,
             rsi_max=args.prefilter_rsi_max,
             atr_distance_min=args.prefilter_atr_min,
-            min_score=args.min_score,
+            min_score=effective_min_score,
             vix=vix,
             prefilter_cap=args.prefilter_cap,
             progress_callback=_discovery_progress,
@@ -456,7 +542,7 @@ def main() -> int:
                 results.append(r)
 
     if not results:
-        if args.discover_sp500:
+        if discover_index is not None:
             print(
                 "[discovery] nessun candidato qualificato dopo full scoring.",
                 file=sys.stderr,
@@ -485,7 +571,7 @@ def main() -> int:
     # In discovery mode default a summary table (n risultati ≥ 5 tipicamente):
     # l'analysis dettagliata × 10 è troppo rumorosa. Brief flag esplicito
     # forza summary anche su single-ticker.
-    if args.brief or args.discover_sp500:
+    if args.brief or discover_index is not None:
         print_summary_table(results)
         return 0
 

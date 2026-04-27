@@ -211,3 +211,124 @@ def test_suggest_default_current_date():
         current_date=None,
     )
     assert "highest_price" in result
+
+
+# ---------------------------------------------------------------------------
+# Target hit detection + dynamic target (Phase contrarian fix)
+# ---------------------------------------------------------------------------
+def test_target_hit_triggered_when_price_reaches_target():
+    """Posizione con target=120 e prezzo 121 → target_hit_triggered=True."""
+    pos = _base_position(target=120.0)
+    result = suggest_stop_update(
+        position=pos,
+        current_price=121.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+    )
+    assert result["target_hit_triggered"] is True
+    assert any("Target hit" in r for r in result["rationale"])
+
+
+def test_target_hit_skipped_when_below_target():
+    """Prezzo sotto target → target_hit_triggered=False."""
+    pos = _base_position(target=120.0)
+    result = suggest_stop_update(
+        position=pos,
+        current_price=115.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+    )
+    assert result["target_hit_triggered"] is False
+
+
+def test_target_skipped_when_trailing_active():
+    """Trailing enabled → target hit non valutato (il trailing manage il TP)."""
+    pos = _base_position(target=120.0, trailing_enabled=True)
+    result = suggest_stop_update(
+        position=pos,
+        current_price=125.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+    )
+    assert result["target_hit_triggered"] is False
+
+
+def test_dynamic_target_updates_for_contrarian():
+    """Posizione contrarian: dynamic_target sostituisce target statico (drift > 0.5%)."""
+    pos = _base_position(target=120.0, strategy="Contrarian")
+    result = suggest_stop_update(
+        position=pos,
+        current_price=110.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+        dynamic_target=125.0,  # EMA50 corrente è salito
+    )
+    assert result["target_changed"] is True
+    assert result["new_target"] == 125.0
+    assert any("Target dinamico" in r for r in result["rationale"])
+
+
+def test_dynamic_target_ignored_for_momentum():
+    """Posizione non-contrarian: dynamic_target non applicato anche se passato."""
+    pos = _base_position(target=120.0, strategy="TechTitans")
+    result = suggest_stop_update(
+        position=pos,
+        current_price=110.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+        dynamic_target=125.0,
+    )
+    assert result["target_changed"] is False
+    assert result["new_target"] is None
+
+
+def test_dynamic_target_jitter_below_threshold_ignored():
+    """Drift dinamico < 0.5% non triggera update (anti-jitter)."""
+    pos = _base_position(target=120.0, strategy="Contrarian")
+    result = suggest_stop_update(
+        position=pos,
+        current_price=110.0,
+        current_atr=2.0,
+        current_date=date(2026, 1, 10),
+        dynamic_target=120.30,  # +0.25% drift, sotto 0.5% threshold
+    )
+    assert result["target_changed"] is False
+
+
+def test_contrarian_uses_15d_time_stop_by_default():
+    """Posizione contrarian con default max_days_flat (30) → effettivo 15gg."""
+    pos = _base_position(entry_date="2026-01-01", strategy="Contrarian")
+    # 16gg flat: scatta per contrarian (15), non per momentum (30)
+    result = suggest_stop_update(
+        position=pos,
+        current_price=99.5,  # flat
+        current_atr=2.0,
+        current_date=date(2026, 1, 17),
+    )
+    assert result["time_stop_triggered"] is True
+
+
+def test_momentum_uses_30d_time_stop_by_default():
+    """Posizione momentum con stesso scenario → time stop NON scatta a 16gg."""
+    pos = _base_position(entry_date="2026-01-01", strategy="TechTitans")
+    result = suggest_stop_update(
+        position=pos,
+        current_price=99.5,
+        current_atr=2.0,
+        current_date=date(2026, 1, 17),
+    )
+    assert result["time_stop_triggered"] is False
+
+
+def test_explicit_max_days_flat_overrides_bucket_default():
+    """Caller passa max_days_flat=20 esplicitamente → usato anche per contrarian."""
+    pos = _base_position(entry_date="2026-01-01", strategy="Contrarian")
+    result = suggest_stop_update(
+        position=pos,
+        current_price=99.5,
+        current_atr=2.0,
+        current_date=date(2026, 1, 17),  # 16gg
+        max_days_flat=20,  # override esplicito
+    )
+    # 16gg < 20 → no trigger
+    assert result["time_stop_triggered"] is False

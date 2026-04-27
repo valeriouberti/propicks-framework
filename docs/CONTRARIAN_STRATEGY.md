@@ -220,23 +220,33 @@ La strategia contrarian **NON include**:
 ### 10.2 Discovery flow (universe-wide screening)
 
 ```
-1. propicks-contra --discover-sp500 --top 10 --min-score 60
-   → fetch S&P 500 da Wikipedia (cache 7gg)
-   → stage 1 prefilter cheap (RSI<35, distance≥1×ATR) ~10s su 500 nomi
-   → stage 2 full scoring sui ~30 sopravvissuti
+1. propicks-contra --discover-{sp500|ftsemib|stoxx600} --top 10 --min-score 60
+   → fetch lista costituents da Wikipedia (cache 7gg)
+   → stage 1 prefilter cheap (RSI<35, distance≥1×ATR)
+   → stage 2 full scoring sui sopravvissuti
    → ranking top N per composite, classificazione A/B/C/D
 2. propicks-contra TICKER --validate   → AI validation sui top picks
 3. → step 3-6 del manual flow
 ```
+
+**Universi supportati:**
+
+| Index           | Flag                  | N. nomi | Note |
+|-----------------|-----------------------|---------|------|
+| S&P 500         | `--discover-sp500`    | ~500    | US large cap. Universo più liquido. |
+| FTSE MIB        | `--discover-ftsemib`  | 40      | Italia. Universo piccolo, fetch veloce (<1 min). |
+| STOXX Europe 600| `--discover-stoxx600` | ~600    | 17 paesi EU. Multi-suffix exchange (.L .DE .PA .AS .SW .MI). Costo full scoring più alto. |
 
 **Pipeline a 3 stadi a costo decrescente:**
 - Stage 1 (~5-15ms/ticker, cache-hit): RSI + distanza ATR da daily — elimina 80-90%
 - Stage 2 (~200-400ms/ticker): full `analyze_contra_ticker` con weekly + regime + R/R
 - Stage 3 (post-scoring): ranking + tagliato a `--top N`
 
-**Costo tipico:** ~$1-2/giorno se schedulato daily con `--validate`, latency 5-10 min con cache calda. Output sempre in summary table compatta.
+**Costo tipico:** ~$1-2/giorno se schedulato daily con `--validate`, latency 5-10 min su S&P 500/STOXX 600 con cache calda; <1 min su FTSE MIB. Output sempre in summary table compatta.
 
-**Universe management:** Wikipedia è la fonte de facto, parsata via `pandas.read_html`. Cache SQLite TTL 7gg. Sanity check: < 480 nomi → fallback su cache stale → fallback su snapshot hardcoded `SP500_FALLBACK` (~50 mega-cap stabili). Mai hardcoded da soli — Wikipedia è sempre il primary path.
+**Universe management:** Wikipedia è la fonte de facto, parsata via `pandas.read_html`. Cache SQLite TTL 7gg per ogni index. Sanity check per index (480/35/550 nomi minimi) → fallback su cache stale → fallback su snapshot hardcoded. Mai hardcoded da soli — Wikipedia è sempre il primary path.
+
+**Dashboard:** la page `8_Contrarian.py` ha due tab — **Manual scan** (ticker espliciti) e **Discovery** (universe selector con S&P 500 / FTSE MIB / STOXX 600 + parametri prefilter + progress bar live). Stessa pipeline della CLI.
 
 ---
 

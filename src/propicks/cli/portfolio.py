@@ -31,9 +31,10 @@ from propicks.domain.exposure import (
     compute_sector_exposure,
     find_correlated_pairs,
 )
-from propicks.domain.indicators import compute_atr
+from propicks.domain.indicators import compute_atr, compute_ema
 from propicks.domain.sizing import (
     calculate_position_size,
+    is_contrarian_position,
     portfolio_market_value,
     portfolio_value,
 )
@@ -511,6 +512,18 @@ def _fetch_current_atr(ticker: str) -> float | None:
     return val if val > 0 else None
 
 
+def _fetch_current_ema(ticker: str, period: int) -> float | None:
+    """Scarica history e ritorna l'EMA daily corrente per un dato periodo."""
+    try:
+        hist = download_history(ticker)
+    except DataUnavailable:
+        return None
+    ema = compute_ema(hist["Close"], period)
+    val = float(ema.iloc[-1])
+    import math
+    return val if math.isfinite(val) and val > 0 else None
+
+
 def cmd_manage(args: argparse.Namespace) -> int:
     """Suggerisci trailing stop update e flagga time stop su posizioni aperte."""
     portfolio = load_portfolio()
@@ -531,6 +544,14 @@ def cmd_manage(args: argparse.Namespace) -> int:
         if cur_atr is None:
             print(f"[warning] {ticker}: ATR non disponibile, skip", file=sys.stderr)
             continue
+
+        # Per posizioni contrarian con target dinamico EMA50: ricalcola EMA50
+        # corrente per drift tracking. Per momentum/altri il target resta statico.
+        dynamic_target: float | None = None
+        if is_contrarian_position(pos) and pos.get("target") is not None:
+            from propicks.config import CONTRA_TARGET_EMA_PERIOD
+            dynamic_target = _fetch_current_ema(ticker, CONTRA_TARGET_EMA_PERIOD)
+
         suggestion = suggest_stop_update(
             position=pos,
             current_price=cur_price,
@@ -538,6 +559,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
             atr_mult=args.atr_mult,
             max_days_flat=args.time_stop,
             flat_threshold_pct=args.flat_threshold,
+            dynamic_target=dynamic_target,
         )
         suggestions.append((ticker, pos, suggestion, cur_price))
 
@@ -549,6 +571,10 @@ def cmd_manage(args: argparse.Namespace) -> int:
         flags = []
         if sug["stop_changed"]:
             flags.append(f"trail→{sug['new_stop']:.2f}")
+        if sug.get("target_changed"):
+            flags.append(f"target→{sug['new_target']:.2f}")
+        if sug.get("target_hit_triggered"):
+            flags.append("TARGET-HIT")
         if sug["time_stop_triggered"]:
             flags.append("TIME-STOP")
         if not flags:
@@ -559,13 +585,14 @@ def cmd_manage(args: argparse.Namespace) -> int:
             f"{cur:.2f}",
             f"{(cur - pos['entry_price']) / pos['entry_price'] * 100:+.2f}%",
             f"{pos['stop_loss']:.2f}",
+            f"{pos.get('target'):.2f}" if pos.get("target") else "—",
             f"{sug['highest_price']:.2f}",
             "Y" if pos.get("trailing_enabled") else "N",
             ", ".join(flags),
         ])
     print(tabulate(
         rows,
-        headers=["Ticker", "Entry", "Current", "P&L%", "Stop", "Highest", "Trail?", "Action"],
+        headers=["Ticker", "Entry", "Current", "P&L%", "Stop", "Target", "Highest", "Trail?", "Action"],
         tablefmt="github",
     ))
 
@@ -576,7 +603,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
                 print(f"  - {r}")
 
     if not args.apply:
-        print("\n(Run senza modifiche. Usa --apply per scrivere stop/highest_price su portfolio.json.)")
+        print("\n(Run senza modifiche. Usa --apply per scrivere stop/target/highest_price su DB.)")
         return 0
 
     applied = 0
@@ -584,29 +611,50 @@ def cmd_manage(args: argparse.Namespace) -> int:
         kwargs: dict = {"highest_price": sug["highest_price"]}
         if sug["stop_changed"]:
             kwargs["stop_loss"] = sug["new_stop"]
+        if sug.get("target_changed"):
+            kwargs["target"] = sug["new_target"]
         try:
             update_position(portfolio, ticker, **kwargs)
             applied += 1
         except ValueError as exc:
             print(f"[errore] {ticker}: {exc}", file=sys.stderr)
     print(f"\nAggiornate {applied}/{len(suggestions)} posizioni.")
-    print("Nota: le posizioni con TIME-STOP devono essere chiuse manualmente:")
-    print("  propicks-portfolio remove <TICKER>")
-    print("  propicks-journal close <TICKER> --exit-price <X> --exit-date YYYY-MM-DD --reason 'time stop'")
+    has_target_hit = any(s["target_hit_triggered"] for _, _, s, _ in suggestions)
+    has_time_stop = any(s["time_stop_triggered"] for _, _, s, _ in suggestions)
+    if has_target_hit or has_time_stop:
+        print("Nota: le posizioni con TARGET-HIT o TIME-STOP devono essere chiuse manualmente:")
+        print("  propicks-journal close <TICKER> --exit-price <X> --exit-date YYYY-MM-DD --reason '<motivo>'")
     return 0
 
 
 def cmd_trail(args: argparse.Namespace) -> int:
-    """Abilita/disabilita trailing su una posizione specifica."""
+    """Abilita/disabilita trailing su una posizione specifica.
+
+    Guardrail: il trailing è incompatibile con la strategia contrarian
+    (mean reversion → target fisso EMA50, non trailing). Il comando rifiuta
+    di abilitare trailing su posizioni contrarian.
+    """
     portfolio = load_portfolio()
     enabled = args.action == "enable"
+    ticker = args.ticker.upper()
+    pos = portfolio.get("positions", {}).get(ticker)
+    if pos is None:
+        print(f"[errore] posizione {ticker} non trovata.", file=sys.stderr)
+        return 2
+    if enabled and is_contrarian_position(pos):
+        print(
+            f"[errore] {ticker} è una posizione contrarian: trailing non applicabile "
+            "(strategia mean reversion usa target fisso EMA50, non trailing).",
+            file=sys.stderr,
+        )
+        return 2
     try:
-        pos = update_position(portfolio, args.ticker, trailing_enabled=enabled)
+        pos = update_position(portfolio, ticker, trailing_enabled=enabled)
     except ValueError as exc:
         print(f"[errore] {exc}", file=sys.stderr)
         return 2
     state = "abilitato" if enabled else "disabilitato"
-    print(f"Trailing {state} su {args.ticker.upper()} (stop attuale {pos['stop_loss']:.2f}).")
+    print(f"Trailing {state} su {ticker} (stop attuale {pos['stop_loss']:.2f}).")
     return 0
 
 

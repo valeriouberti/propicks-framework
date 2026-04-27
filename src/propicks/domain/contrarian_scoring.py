@@ -60,6 +60,7 @@ from propicks.market.yfinance_client import (
     download_benchmark,
     download_history,
     download_weekly_history,
+    get_next_earnings_date,
 )
 
 
@@ -469,6 +470,22 @@ def analyze_contra_ticker(
         if vix_series is not None and not vix_series.empty:
             vix = float(vix_series.iloc[-1])
 
+    # Earnings calendar: surface upcoming earnings per warning + flag post-flush.
+    # Fail-open su yfinance error (non blocca lo scoring se data source giù).
+    next_earnings_date: str | None = None
+    days_to_earnings: int | None = None
+    try:
+        next_earnings_date = get_next_earnings_date(ticker)
+    except Exception:
+        next_earnings_date = None
+    if next_earnings_date:
+        try:
+            from datetime import date as _date, datetime as _dt
+            ed = _dt.strptime(next_earnings_date, "%Y-%m-%d").date()
+            days_to_earnings = (ed - _date.today()).days
+        except (ValueError, TypeError):
+            days_to_earnings = None
+
     close = hist["Close"]
     high = hist["High"]
     low = hist["Low"]
@@ -570,4 +587,6 @@ def analyze_contra_ticker(
         "perf_1m": pct_change(close, 21),
         "perf_3m": pct_change(close, 63),
         "regime": regime,
+        "next_earnings_date": next_earnings_date,
+        "days_to_earnings": days_to_earnings,
     }

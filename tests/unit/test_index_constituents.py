@@ -23,12 +23,24 @@ from propicks.io.db import (
     index_constituents_replace,
 )
 from propicks.market.index_constituents import (
+    FTSEMIB_FALLBACK,
+    INDEX_NAME_FTSEMIB,
     INDEX_NAME_SP500,
+    INDEX_NAME_STOXX600,
     SP500_FALLBACK,
+    STOXX600_FALLBACK,
+    SUPPORTED_INDEXES,
+    _fetch_ftsemib_from_wikipedia,
     _fetch_sp500_from_wikipedia,
+    _fetch_stoxx600_from_wikipedia,
+    _normalize_ftsemib_ticker,
     _normalize_yf_ticker,
+    get_ftsemib_universe,
+    get_index_universe,
     get_sp500_universe,
     get_sp500_universe_detailed,
+    get_stoxx600_universe,
+    index_label,
 )
 
 
@@ -75,7 +87,7 @@ def test_normalize_strips_whitespace():
 # ---------------------------------------------------------------------------
 def test_fetch_wikipedia_parses_and_normalizes():
     df = _make_wiki_df(503)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]):
         rows = _fetch_sp500_from_wikipedia()
 
     assert len(rows) == 503
@@ -92,7 +104,7 @@ def test_fetch_wikipedia_parses_and_normalizes():
 def test_fetch_wikipedia_too_few_constituents_raises():
     """Sanity check: una tabella con < INDEX_MIN_CONSTITUENTS = format change."""
     df = _make_wiki_df(50)  # ben sotto soglia 480
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]):
         with pytest.raises(ValueError, match="only 50 constituents"):
             _fetch_sp500_from_wikipedia()
 
@@ -100,17 +112,18 @@ def test_fetch_wikipedia_too_few_constituents_raises():
 def test_fetch_wikipedia_missing_columns_raises():
     """Schema diverso (rename Wikipedia) → ValueError esplicito."""
     df = pd.DataFrame({"Ticker": ["AAPL"], "Name": ["Apple"]})  # wrong columns
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]):
         with pytest.raises(ValueError, match="missing expected columns"):
             _fetch_sp500_from_wikipedia()
 
 
 def test_fetch_wikipedia_network_error_raises():
+    """L'helper _read_wikipedia_tables converte network errors in ValueError."""
     with patch(
-        "propicks.market.index_constituents.pd.read_html",
-        side_effect=ConnectionError("DNS fail"),
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        side_effect=ValueError("Wikipedia HTTP error 503: Service Unavailable"),
     ):
-        with pytest.raises(ValueError, match="Wikipedia fetch failed"):
+        with pytest.raises(ValueError, match="Wikipedia HTTP error"):
             _fetch_sp500_from_wikipedia()
 
 
@@ -119,7 +132,7 @@ def test_fetch_wikipedia_network_error_raises():
 # ---------------------------------------------------------------------------
 def test_get_universe_first_call_fetches_and_caches():
     df = _make_wiki_df(503)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]):
         tickers = get_sp500_universe()
 
     assert len(tickers) == 503
@@ -133,7 +146,7 @@ def test_get_universe_first_call_fetches_and_caches():
 def test_get_universe_second_call_uses_cache():
     """Dopo il primo fetch, il secondo call NON deve chiamare pd.read_html."""
     df = _make_wiki_df(503)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]) as mock_read:
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]) as mock_read:
         get_sp500_universe()
         first_call_count = mock_read.call_count
         # Secondo call: cache fresh → no network
@@ -143,7 +156,7 @@ def test_get_universe_second_call_uses_cache():
 
 def test_get_universe_force_refresh_bypasses_cache():
     df = _make_wiki_df(503)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]) as mock_read:
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]) as mock_read:
         get_sp500_universe()  # popola cache
         first_count = mock_read.call_count
         get_sp500_universe(force_refresh=True)  # bypassa
@@ -165,8 +178,8 @@ def test_get_universe_wikipedia_fail_falls_back_to_stale_cache():
         return_value=False,
     ):
         with patch(
-            "propicks.market.index_constituents.pd.read_html",
-            side_effect=ConnectionError("DNS fail"),
+            "propicks.market.index_constituents._read_wikipedia_tables",
+            side_effect=ValueError("Wikipedia URL error: DNS fail"),
         ):
             tickers = get_sp500_universe()
 
@@ -179,8 +192,8 @@ def test_get_universe_wikipedia_fail_empty_cache_uses_hardcoded():
     """Wikipedia errore + cache vuota → snapshot hardcoded SP500_FALLBACK."""
     # Cache vuota (test isolation garantisce DB fresco)
     with patch(
-        "propicks.market.index_constituents.pd.read_html",
-        side_effect=ConnectionError("DNS fail"),
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        side_effect=ValueError("Wikipedia URL error: DNS fail"),
     ):
         tickers = get_sp500_universe()
 
@@ -192,7 +205,7 @@ def test_get_universe_wikipedia_fail_empty_cache_uses_hardcoded():
 def test_get_universe_too_few_from_wiki_uses_fallback():
     """Sanity check trigger: Wikipedia ritorna troppi pochi → fallback."""
     short_df = _make_wiki_df(50)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[short_df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[short_df]):
         tickers = get_sp500_universe()
 
     # Cache vuota → snapshot hardcoded
@@ -202,7 +215,7 @@ def test_get_universe_too_few_from_wiki_uses_fallback():
 
 def test_get_universe_detailed_returns_full_metadata():
     df = _make_wiki_df(503)
-    with patch("propicks.market.index_constituents.pd.read_html", return_value=[df]):
+    with patch("propicks.market.index_constituents._read_wikipedia_tables", return_value=[df]):
         rows = get_sp500_universe_detailed()
 
     aapl = next(r for r in rows if r["ticker"] == "AAPL")
@@ -247,3 +260,199 @@ def test_index_constituents_is_fresh_after_replace():
 
 def test_index_constituents_is_fresh_false_when_empty():
     assert index_constituents_is_fresh(INDEX_NAME_SP500, ttl_hours=1.0) is False
+
+
+# ---------------------------------------------------------------------------
+# FTSE MIB tests
+# ---------------------------------------------------------------------------
+def _make_ftsemib_df(n: int = 40) -> pd.DataFrame:
+    """Tabella sintetica FTSE MIB. Schema: Ticker, Company, ICB Sector."""
+    base = [
+        ("ENI", "Eni", "Oil & Gas"),
+        ("ENEL", "Enel", "Utilities"),
+        ("ISP", "Intesa Sanpaolo", "Banks"),
+        ("UCG", "UniCredit", "Banks"),
+        ("STLAM", "Stellantis", "Auto"),
+    ]
+    rows = list(base)
+    for i in range(len(rows), n):
+        rows.append((f"ITN{i:03d}", f"Italian Co. {i}", "Industrials"))
+    return pd.DataFrame(rows, columns=["Ticker", "Company", "ICB Sector"])
+
+
+def test_normalize_ftsemib_adds_mi_suffix():
+    """Ticker senza suffisso → aggiunge .MI per yfinance."""
+    assert _normalize_ftsemib_ticker("ENI") == "ENI.MI"
+    assert _normalize_ftsemib_ticker("UCG") == "UCG.MI"
+
+
+def test_normalize_ftsemib_preserves_existing_suffix():
+    """Ticker già con .MI → preservato."""
+    assert _normalize_ftsemib_ticker("ENI.MI") == "ENI.MI"
+
+
+def test_fetch_ftsemib_parses_components_table():
+    """Wikipedia FTSEMIB ha più tabelle; trovo quella con ≥35 righe e Ticker."""
+    infobox = pd.DataFrame({"Key": ["Index"], "Value": ["FTSE MIB"]})  # decoy
+    components = _make_ftsemib_df(40)
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[infobox, components],
+    ):
+        rows = _fetch_ftsemib_from_wikipedia()
+
+    assert len(rows) == 40
+    tickers = [r["ticker"] for r in rows]
+    assert "ENI.MI" in tickers
+    assert "ENI" not in tickers  # già normalizzato
+    eni = next(r for r in rows if r["ticker"] == "ENI.MI")
+    assert eni["company_name"] == "Eni"
+    assert eni["sector"] == "Oil & Gas"
+
+
+def test_fetch_ftsemib_too_few_constituents_raises():
+    short_df = _make_ftsemib_df(20)  # < 35 soglia
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[short_df],
+    ):
+        with pytest.raises(ValueError, match="no table found"):
+            _fetch_ftsemib_from_wikipedia()
+
+
+def test_get_ftsemib_universe_uses_cache_after_first_fetch():
+    df = _make_ftsemib_df(40)
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[df],
+    ) as mock:
+        get_ftsemib_universe()
+        first = mock.call_count
+        get_ftsemib_universe()  # cache hit
+        assert mock.call_count == first
+
+
+def test_get_ftsemib_universe_fallback_on_wiki_fail():
+    """Wikipedia fail + cache vuota → fallback hardcoded FTSEMIB."""
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        side_effect=ValueError("Wikipedia URL error: fail"),
+    ):
+        tickers = get_ftsemib_universe()
+
+    fallback_tickers = {r["ticker"] for r in FTSEMIB_FALLBACK}
+    assert set(tickers) == fallback_tickers
+
+
+# ---------------------------------------------------------------------------
+# STOXX 600 tests
+# ---------------------------------------------------------------------------
+def _make_stoxx_df(n: int = 600) -> pd.DataFrame:
+    """STOXX 600 components con suffisso exchange già nei ticker."""
+    base = [
+        ("ASML.AS", "ASML Holding", "Technology"),
+        ("SAP.DE", "SAP", "Technology"),
+        ("NESN.SW", "Nestle", "Food"),
+        ("MC.PA", "LVMH", "Luxury"),
+        ("AZN.L", "AstraZeneca", "Healthcare"),
+    ]
+    rows = list(base)
+    for i in range(len(rows), n):
+        suffix = ["L", "DE", "PA", "AS", "MI", "SW"][i % 6]
+        rows.append((f"EUSYN{i:03d}.{suffix}", f"European Co. {i}", "Industrials"))
+    return pd.DataFrame(rows, columns=["Ticker", "Company", "ICB Industry"])
+
+
+def test_fetch_stoxx_parses_largest_table():
+    """STOXX 600 fetcher seleziona la tabella più grande."""
+    infobox = pd.DataFrame({"Key": ["Index"], "Value": ["STOXX 600"]})
+    components = _make_stoxx_df(600)
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[infobox, components],
+    ):
+        rows = _fetch_stoxx600_from_wikipedia()
+
+    assert len(rows) == 600
+    tickers = [r["ticker"] for r in rows]
+    assert "ASML.AS" in tickers
+    assert "MC.PA" in tickers
+
+
+def test_fetch_stoxx_preserves_exchange_suffixes():
+    """STOXX 600 ticker hanno suffissi exchange (.L .DE .PA ...) — NON normalizzati."""
+    components = _make_stoxx_df(600)
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[components],
+    ):
+        rows = _fetch_stoxx600_from_wikipedia()
+
+    # Verifica preservation dei suffix exchange
+    suffixes = {r["ticker"].split(".")[-1] for r in rows if "." in r["ticker"]}
+    assert {"L", "DE", "PA", "AS", "MI", "SW"} <= suffixes
+
+
+def test_fetch_stoxx_too_few_constituents_raises():
+    short_df = _make_stoxx_df(100)  # < 550 soglia
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        return_value=[short_df],
+    ):
+        with pytest.raises(ValueError, match="only 100 rows"):
+            _fetch_stoxx600_from_wikipedia()
+
+
+def test_get_stoxx_universe_fallback_on_wiki_fail():
+    with patch(
+        "propicks.market.index_constituents._read_wikipedia_tables",
+        side_effect=ValueError("Wikipedia URL error: fail"),
+    ):
+        tickers = get_stoxx600_universe()
+
+    fallback_tickers = {r["ticker"] for r in STOXX600_FALLBACK}
+    assert set(tickers) == fallback_tickers
+
+
+# ---------------------------------------------------------------------------
+# Generic dispatcher
+# ---------------------------------------------------------------------------
+def test_supported_indexes_registered():
+    assert INDEX_NAME_SP500 in SUPPORTED_INDEXES
+    assert INDEX_NAME_FTSEMIB in SUPPORTED_INDEXES
+    assert INDEX_NAME_STOXX600 in SUPPORTED_INDEXES
+
+
+def test_get_index_universe_dispatcher_routes_correctly():
+    """Il dispatcher chiama il fetcher giusto in base al name."""
+    sp_df = _make_wiki_df(503)
+    mib_df = _make_ftsemib_df(40)
+
+    # Per SP500 il fetcher legge tables[0]; per FTSEMIB cerca la tabella con
+    # Ticker col. Mocchiamo separatamente per ogni call.
+    with patch("propicks.market.index_constituents._read_wikipedia_tables") as mock:
+        mock.side_effect = [
+            [sp_df],   # primo call: sp500
+            [mib_df],  # secondo call: ftsemib
+        ]
+        sp_tickers = get_index_universe(INDEX_NAME_SP500)
+        mib_tickers = get_index_universe(INDEX_NAME_FTSEMIB)
+
+    assert "AAPL" in sp_tickers
+    assert "ENI.MI" in mib_tickers
+
+
+def test_get_index_universe_unknown_name_raises():
+    with pytest.raises(ValueError, match="non supportato"):
+        get_index_universe("nikkei225")
+
+
+def test_index_label_returns_human_readable():
+    assert index_label(INDEX_NAME_SP500) == "S&P 500"
+    assert index_label(INDEX_NAME_FTSEMIB) == "FTSE MIB"
+    assert index_label(INDEX_NAME_STOXX600) == "STOXX Europe 600"
+
+
+def test_index_label_unknown_returns_name():
+    """Index sconosciuto → ritorna il name stesso (no crash)."""
+    assert index_label("unknown") == "unknown"

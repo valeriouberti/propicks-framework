@@ -54,24 +54,127 @@ def cached_vix() -> float | None:
     return float(vix_series.iloc[-1])
 
 
-with st.form("contra_form", border=True):
-    tickers_raw = st.text_input(
-        "Ticker (separati da spazio o virgola)",
-        placeholder="AAPL MSFT NVDA  (titoli di qualità Pro Picks oversold)",
+# ---------------------------------------------------------------------------
+# Mode selector: Manual (ticker espliciti) vs Discovery (universe-wide scan)
+# ---------------------------------------------------------------------------
+INDEX_OPTIONS = {
+    "S&P 500 (~500 nomi US)": "sp500",
+    "FTSE MIB (40 large-cap IT)": "ftsemib",
+    "STOXX Europe 600 (~600 nomi)": "stoxx600",
+}
+
+tab_manual, tab_discovery = st.tabs(["📝 Manual scan", "🔭 Discovery (universe-wide)"])
+
+# Init shared state
+tickers: list[str] = []
+validate_ai = False
+force_ai = False
+discover_universe: str | None = None
+discover_top_n = 10
+discover_min_score = 0.0
+discover_rsi_max = 35.0
+discover_atr_min = 1.0
+discover_refresh = False
+submitted = False
+
+with tab_manual:
+    with st.form("contra_form_manual", border=True):
+        tickers_raw = st.text_input(
+            "Ticker (separati da spazio o virgola)",
+            placeholder="AAPL MSFT NVDA  (titoli di qualità Pro Picks oversold)",
+        )
+        col1, col2 = st.columns([1, 1])
+        validate_ai_m = col1.checkbox(
+            "Valida con Claude (flush vs break)", value=False, key="m_validate"
+        )
+        force_ai_m = col2.checkbox(
+            "Force (bypassa gate + cache)", value=False, key="m_force"
+        )
+        submit_manual = st.form_submit_button(
+            "Analizza setup contrarian", type="primary", width="stretch"
+        )
+
+    if submit_manual:
+        tickers = [
+            t.strip().upper()
+            for t in tickers_raw.replace(",", " ").split()
+            if t.strip()
+        ]
+        if not tickers:
+            st.warning("Inserisci almeno un ticker.")
+            st.stop()
+        validate_ai = validate_ai_m
+        force_ai = force_ai_m
+        submitted = True
+
+
+with tab_discovery:
+    st.markdown(
+        "**Discovery automatico**: scansiona un intero index, applica un "
+        "prefilter cheap (RSI + distanza ATR) e ritorna i top N candidati "
+        "ranked per composite. Il primo run di un index può richiedere "
+        "5-10 min (cache OHLCV cold)."
     )
-    col1, col2 = st.columns([1, 1])
-    validate_ai = col1.checkbox("Valida con Claude (flush vs break)", value=False)
-    force_ai = col2.checkbox("Force (bypassa gate + cache)", value=False)
-    submitted = st.form_submit_button(
-        "Analizza setup contrarian", type="primary", width="stretch"
-    )
+    with st.form("contra_form_discovery", border=True):
+        col_a, col_b = st.columns([2, 1])
+        universe_label = col_a.selectbox(
+            "Universe", options=list(INDEX_OPTIONS.keys()), index=0
+        )
+        top_n_in = col_b.number_input(
+            "Top N", min_value=1, max_value=50, value=10, step=1
+        )
+        col_c, col_d, col_e = st.columns(3)
+        min_score_in = col_c.number_input(
+            "Min score (filtro post-scoring)",
+            min_value=0.0,
+            max_value=100.0,
+            value=0.0,
+            step=5.0,
+            help="Es. 60 per filtrare solo classe A+B.",
+        )
+        rsi_max_in = col_d.number_input(
+            "Prefilter RSI max",
+            min_value=10.0,
+            max_value=50.0,
+            value=35.0,
+            step=1.0,
+        )
+        atr_min_in = col_e.number_input(
+            "Prefilter distance ATR min",
+            min_value=0.5,
+            max_value=5.0,
+            value=1.0,
+            step=0.5,
+        )
+        col_f, col_g, col_h = st.columns(3)
+        validate_ai_d = col_f.checkbox(
+            "Valida top con Claude", value=False, key="d_validate"
+        )
+        force_ai_d = col_g.checkbox(
+            "Force (bypassa gate)", value=False, key="d_force"
+        )
+        refresh_in = col_h.checkbox(
+            "Refresh universe (bypass cache 7gg)",
+            value=False,
+            help="Forza re-fetch della lista da Wikipedia.",
+        )
+        submit_disc = st.form_submit_button(
+            "Esegui discovery", type="primary", width="stretch"
+        )
+
+    if submit_disc:
+        discover_universe = INDEX_OPTIONS[universe_label]
+        discover_top_n = int(top_n_in)
+        discover_min_score = float(min_score_in)
+        discover_rsi_max = float(rsi_max_in)
+        discover_atr_min = float(atr_min_in)
+        discover_refresh = bool(refresh_in)
+        validate_ai = validate_ai_d
+        force_ai = force_ai_d
+        submitted = True
+
 
 if not submitted:
-    st.stop()
-
-tickers = [t.strip().upper() for t in tickers_raw.replace(",", " ").split() if t.strip()]
-if not tickers:
-    st.warning("Inserisci almeno un ticker.")
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -89,18 +192,82 @@ else:
     st.caption(f"VIX corrente: **{vix:.2f}** — {vix_label}")
 
 # ---------------------------------------------------------------------------
-# Batch scan
+# Batch scan — manual vs discovery branch
 # ---------------------------------------------------------------------------
 results: list[dict] = []
-with st.spinner(f"Scanning {len(tickers)} ticker (contrarian)…"):
-    for t in tickers:
-        r = cached_analyze_contra(t, vix)
-        if r is not None:
-            results.append(r)
 
-if not results:
-    st.error("Nessun ticker analizzabile. Verifica i simboli o la connessione.")
-    st.stop()
+if discover_universe is not None:
+    from propicks.domain.contrarian_discovery import discover_contra_candidates
+    from propicks.market.index_constituents import get_index_universe, index_label
+
+    label = index_label(discover_universe)
+    try:
+        with st.spinner(f"Loading {label} universe…"):
+            universe = get_index_universe(
+                discover_universe, force_refresh=discover_refresh
+            )
+    except Exception as exc:
+        st.error(f"Impossibile caricare l'universo {label}: {exc}")
+        st.stop()
+
+    st.caption(
+        f"Universe **{label}**: {len(universe)} ticker. "
+        f"Stage 1 prefilter (RSI ≤ {discover_rsi_max}, "
+        f"distance ≥ {discover_atr_min}× ATR)…"
+    )
+
+    progress = st.progress(0.0, text="Discovery in corso…")
+
+    def _ui_progress(stage: str, current: int, total: int, ticker: str) -> None:
+        # Stage 1 conta da 0 a total, stage 2 idem. Usiamo stage come prefisso.
+        if total <= 0:
+            return
+        # Stage 1 occupa 0-70%, stage 2 70-100% (full scoring più lento ma fewer ticker)
+        if stage == "prefilter":
+            pct = 0.70 * (current / total)
+        else:
+            pct = 0.70 + 0.30 * (current / total)
+        progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
+
+    with st.spinner(f"Running discovery pipeline su {label}…"):
+        out = discover_contra_candidates(
+            universe,
+            top_n=discover_top_n,
+            rsi_max=discover_rsi_max,
+            atr_distance_min=discover_atr_min,
+            min_score=discover_min_score,
+            vix=vix,
+            progress_callback=_ui_progress,
+        )
+    progress.empty()
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Universe", out["universe_size"])
+    summary_cols[1].metric("Prefilter pass", out["prefilter_pass"])
+    summary_cols[2].metric("Scored", out["scored"])
+    summary_cols[3].metric("Returned (top N)", len(out["candidates"]))
+
+    results = out["candidates"]
+
+    if not results:
+        st.warning(
+            "**Nessun candidato qualificato dopo full scoring.** "
+            "Possibili cause: regime macro contrarian non favorevole "
+            "(STRONG_BULL/STRONG_BEAR azzerano il composite via hard gate), "
+            "oppure soglie prefilter troppo strict per il momento di mercato. "
+            "Prova a rilassare RSI max o distance ATR min."
+        )
+        st.stop()
+else:
+    with st.spinner(f"Scanning {len(tickers)} ticker (contrarian)…"):
+        for t in tickers:
+            r = cached_analyze_contra(t, vix)
+            if r is not None:
+                results.append(r)
+
+    if not results:
+        st.error("Nessun ticker analizzabile. Verifica i simboli o la connessione.")
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # Auto-add classe A+B alla watchlist con source=auto_scan_contra

@@ -1100,8 +1100,10 @@ propicks-contra AAPL --force-validate          # bypassa gate + cache
 propicks-contra AAPL --json                    # output JSON
 propicks-contra AAPL MSFT --brief              # tabella riassuntiva
 propicks-contra AAPL --no-watchlist            # disabilita auto-add classe A+B
-# Discovery automatico su S&P 500 (Wikipedia + cache 7gg, 3-stage pipeline):
-propicks-contra --discover-sp500                       # top 10 default
+# Discovery automatico universe-wide (Wikipedia + cache 7gg, 3-stage pipeline):
+propicks-contra --discover-sp500                       # ~500 nomi US
+propicks-contra --discover-ftsemib                     # 40 large-cap IT
+propicks-contra --discover-stoxx600                    # ~600 nomi multi-paese EU
 propicks-contra --discover-sp500 --top 5 --min-score 60  # solo classe A+B
 propicks-contra --discover-sp500 --validate            # + AI validation top N
 propicks-contra --discover-sp500 --refresh-universe    # forza re-fetch lista
@@ -1190,7 +1192,7 @@ Queste regole sono hardcoded e NON devono essere aggirate:
 - **Max esposizione aggregata contrarian**: **20% del capitale** (bucket cap indipendente)
 - **Max posizioni contrarian simultanee**: **3** (cap interno al bucket)
 - **Min cash reserve**: 20% del capitale
-- **Max loss per trade**: 8% (stock momentum) / 5% (sector ETF) / **12% (contrarian, stop più largo a -3×ATR)**
+- **Max loss per trade**: 8% (stock momentum) / 5% (sector ETF) / **12% (contrarian, stop = recent_low − 1×ATR)**
 - **Max loss settimanale**: 5% del capitale totale → blocco trading
 - **Max loss mensile**: 15% del capitale totale → blocco trading e revisione
 - **No entry se earnings entro 5 giorni** (warning, non blocco — il trader decide)
@@ -1565,7 +1567,7 @@ composite = oversold*40% + quality*25% + market_context*20% + reversion*15%
 | Size max per posizione | 15% | **8%** | Hit rate più basso (setup short-gamma) |
 | Max posizioni simultanee nel bucket | — | **3** | Cap indipendente (share cap globale 10) |
 | Max esposizione aggregata | — | **20%** | Esposizione totale contrarian ≤ 20% capitale |
-| Stop loss | ATR × 2 | `recent_low - 3×ATR` | Wider, ancorato a capitulation low |
+| Stop loss | ATR × 2 | `recent_low - 1×ATR` | Ancorato al low recente, ma buffer contenuto perché il target = EMA50 daily è strutturalmente vicino (R/R sostenibile) |
 | Max loss per trade (soglia warning) | 8% | **12%** | Stop naturalmente più largo |
 | Target | trailing | **EMA50 fisso** | Mean reversion = target fisso, NO trailing |
 | Holding tipico | 2-8 settimane | **5-15 giorni** | Reversion rapida o thesis wrong |
@@ -1594,7 +1596,7 @@ propicks-contra AAPL --no-watchlist         # disabilita auto-add classe A+B
 **Output:** tabella dettagliata con oversold metrics (RSI / ATR distance /
 consecutive down), quality gate (sopra EMA200w? distanza 52w high),
 market context (VIX + regime), reversion R/R, parametri di trade proposti
-(entry / stop a -3×ATR dal recent_low / target EMA50).
+(entry / stop = recent_low − 1×ATR / target EMA50 dinamico).
 
 **Auto-watchlist**: classe A (≥75) e B (60-74) sono aggiunte con
 `source="auto_scan_contra"` per tracciare separatamente le idee generate

@@ -483,12 +483,19 @@ CONTRA_VIX_TICKER: str = "^VIX"
 CONTRA_VIX_SPIKE: float = 25.0  # sopra = paura/capitulazione, ottimo contesto
 CONTRA_VIX_COMPLACENT: float = 14.0  # sotto = euforia, edge contrarian collassa
 
-# Stop e target specifici: più larghi del momentum (il "noise" è la normalità
-# su oversold), target = reversion a EMA50 (non trailing — è mean reversion).
-CONTRA_STOP_ATR_MULT: float = 3.0  # stop = low_recent - 3×ATR (wider di momentum 2×)
+# Stop e target specifici: stop ancorato al recent_low + buffer ATR contenuto
+# perché il target = reversion a EMA50 daily è strutturalmente vicino (2-3 ATR
+# sopra il prezzo per setup oversold tipici). Un buffer più largo (es. 3×ATR)
+# rendeva R/R sistematicamente < 1, contraddicendo l'AI sanity layer e
+# generando reject automatici. Il "12% max loss per trade" resta come safety net.
+CONTRA_STOP_ATR_MULT: float = 1.0  # stop = recent_low - 1×ATR (era 3×ATR — troppo largo)
 CONTRA_MAX_LOSS_PER_TRADE_PCT: float = 0.12  # 12% max (vs 8% momentum)
 CONTRA_TIME_STOP_DAYS: int = 15  # esito atteso in 5-15 giorni, taglia a 15gg
 CONTRA_TARGET_EMA_PERIOD: int = 50  # target = reversion a EMA50 daily
+
+# AI sanity floor R/R per CONFIRM: contrarian ha hit rate atteso 55-60%, quindi
+# R/R 1.5 (non 2.0 come momentum) è già edge-positive. Floor REJECT resta a 1.0.
+CONTRA_RR_CONFIRM_FLOOR: float = 1.5
 
 # Pesi del composite contrarian (somma = 1.0).
 #   oversold: quanto è tirato l'elastico (40%)
@@ -669,11 +676,27 @@ MARKET_MIN_DAILY_BARS: int = EMA_SLOW * 3 + 5  # = 155
 # Sanity check: una fetch valida deve ritornare almeno ``INDEX_MIN_CONSTITUENTS``
 # nomi, altrimenti la pagina è probabilmente cambiata e attiviamo il fallback.
 INDEX_CONSTITUENTS_CACHE_TTL_HOURS: float = 24.0 * 7
+
+# Soglia minima per considerare valido un fetch — diversa per ogni index
+# (S&P 500 = 500, FTSE MIB = 40, STOXX 600 = 600). Se ritorniamo meno di
+# questo, attiviamo il fallback.
 INDEX_MIN_CONSTITUENTS: int = 480  # S&P 500 è 500 ± qualche split-letter
+FTSEMIB_MIN_CONSTITUENTS: int = 35  # FTSE MIB ha esattamente 40 nomi
+STOXX600_MIN_CONSTITUENTS: int = 500  # STOXX 600 può variare 595-605, Wikipedia talvolta espone tabelle parziali
 
 # Fonte Wikipedia per S&P 500. Tabella ID 0, colonna "Symbol". I ticker con
 # dot ("BRK.B") vanno normalizzati a dash ("BRK-B") per yfinance.
 SP500_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+# FTSE MIB (Italia): 40 large-cap su Borsa Italiana. Wikipedia tabella
+# "Components" con colonna "Ticker" — yfinance richiede suffisso ".MI".
+FTSEMIB_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/FTSE_MIB"
+
+# STOXX Europe 600: ~600 large/mid/small cap di 17 paesi europei. Wikipedia
+# colonna "Ticker" già con il suffisso esistente (ENI.MI, BAYN.DE, ASML.AS...).
+# Universo eterogeneo: alcuni ticker hanno bassa liquidità o storia daily
+# corta — il prefilter contrarian li scarterà al EMA50 warmup.
+STOXX600_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/STOXX_Europe_600"
 
 
 # ---------------------------------------------------------------------------

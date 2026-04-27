@@ -384,17 +384,17 @@ def test_oversold_no_double_counting():
 # Claude verdict sanity enforcement (fix #6, #7)
 # ---------------------------------------------------------------------------
 def test_enforce_contrarian_sanity_rr_downgrade_confirm():
-    """CONFIRM con R/R < 2 (matematico) → CAUTION."""
+    """CONFIRM con R/R < CONTRA_RR_CONFIRM_FLOOR (1.5) → CAUTION."""
     from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
     analysis = {"ticker": "TST", "price": 100.0}
     payload = {
         "verdict": "CONFIRM",
-        "reversion_target": 105.0,  # reward 5
-        "invalidation_price": 97.0,  # risk 3 → R/R 1.67
+        "reversion_target": 103.0,  # reward 3
+        "invalidation_price": 97.5,  # risk 2.5 → R/R 1.20
     }
     _enforce_contrarian_sanity(analysis, payload)
     assert payload["verdict"] == "CAUTION"
-    assert payload["_rr_computed"] == 1.67
+    assert payload["_rr_computed"] == 1.20
 
 
 def test_enforce_contrarian_sanity_rr_below_1_rejected():
@@ -439,7 +439,7 @@ def test_enforce_contrarian_sanity_invalidation_above_price():
 
 
 def test_enforce_contrarian_sanity_valid_confirm_unchanged():
-    """CONFIRM valido (R/R 2.0) resta CONFIRM."""
+    """CONFIRM valido (R/R >= CONTRA_RR_CONFIRM_FLOOR=1.5) resta CONFIRM."""
     from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
     analysis = {"ticker": "TST", "price": 100.0}
     payload = {
@@ -450,6 +450,23 @@ def test_enforce_contrarian_sanity_valid_confirm_unchanged():
     _enforce_contrarian_sanity(analysis, payload)
     assert payload["verdict"] == "CONFIRM"
     assert payload["_rr_computed"] == 2.0
+
+
+def test_enforce_contrarian_sanity_horizon_clamped():
+    """time_horizon_days oltre CONTRA_TIME_STOP_DAYS viene clampato (no reject)."""
+    from propicks.ai.contrarian_validator import _enforce_contrarian_sanity
+    from propicks.config import CONTRA_TIME_STOP_DAYS
+    analysis = {"ticker": "TST", "price": 100.0}
+    payload = {
+        "verdict": "CONFIRM",
+        "reversion_target": 106.0,  # R/R 2.0 → no rr override
+        "invalidation_price": 97.0,
+        "time_horizon_days": 25,  # > 15
+    }
+    _enforce_contrarian_sanity(analysis, payload)
+    assert payload["time_horizon_days"] == CONTRA_TIME_STOP_DAYS
+    assert payload["_horizon_clamped"] == 25
+    assert payload["verdict"] == "CONFIRM"  # nessun downgrade
 
 
 def test_contrarian_scoring_weights_sum_to_one():

@@ -28,16 +28,19 @@ from propicks.ai.contrarian_prompts import render_contrarian_user_prompt
 from propicks.config import (
     CONTRA_AI_CACHE_TTL_HOURS,
     CONTRA_AI_MIN_SCORE_FOR_VALIDATION,
+    CONTRA_RR_CONFIRM_FLOOR,
+    CONTRA_TIME_STOP_DAYS,
 )
 from propicks.io.db import ai_verdict_cache_get, ai_verdict_cache_put
 
 _CACHE_VERSION = "contra_v1"
 _STRATEGY_TAG = "contrarian"
 
-# Stessa filosofia di thesis_validator._RR_CONFIRM_FLOOR: un CONFIRM deve
-# avere R/R matematicamente >= 2.0. Sotto → downgrade automatico.
-_RR_CONFIRM_FLOOR = 2.0
-_RR_REJECT_FLOOR = 1.0  # R/R < 1 significa "stop più distante del target" → setup rotto
+# Floor R/R per contrarian: differenziato dal momentum (2.0) perché la mean
+# reversion ha hit rate atteso più alto (55-60%) → 1.5 è già edge-positive.
+# Sotto 1.0 il setup è strutturalmente rotto (stop più distante del target).
+_RR_CONFIRM_FLOOR = CONTRA_RR_CONFIRM_FLOOR
+_RR_REJECT_FLOOR = 1.0
 _RR_TOLERANCE = 0.05
 
 
@@ -119,6 +122,19 @@ def _enforce_contrarian_sanity(analysis: dict, payload: dict) -> None:
         )
         payload["verdict"] = "CAUTION"
         payload["_sanity_override"] = "rr_below_confirm_floor"
+
+    # 3. Time horizon coherence: il time stop contrarian è 15gg. Se Claude
+    # ritorna un horizon più lungo, lo clampiamo (non rejectiamo) e flagghiamo
+    # — il trade viene chiuso comunque a 15gg, e il trader vede il mismatch.
+    horizon = payload.get("time_horizon_days")
+    if isinstance(horizon, int) and horizon > CONTRA_TIME_STOP_DAYS:
+        print(
+            f"[contrarian-ai] {ticker}: time_horizon_days {horizon} > "
+            f"CONTRA_TIME_STOP_DAYS {CONTRA_TIME_STOP_DAYS} — clamped (time stop chiuderà prima)",
+            file=sys.stderr,
+        )
+        payload["time_horizon_days"] = CONTRA_TIME_STOP_DAYS
+        payload["_horizon_clamped"] = horizon
 
 
 def _load_cached(ticker: str, day: str) -> dict | None:
