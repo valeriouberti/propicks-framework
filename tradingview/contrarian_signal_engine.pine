@@ -1,0 +1,346 @@
+// ============================================================================
+// AI TRADING SYSTEM — Contrarian Signal Engine v1.0
+// ============================================================================
+// Timeframe: DAILY
+// Scopo: Scoring quality-filtered mean reversion (long-only)
+//
+// Questo indicatore replica src/propicks/domain/contrarian_scoring.py.
+// Cerca entry long asimmetrici su titoli temporaneamente venduti con
+// trend strutturale intatto. NON è uno short engine.
+//
+//   composite = oversold*40% + quality*25% + market_context*20% + reversion*15%
+//
+// Filosofia diversa dal momentum daily:
+// - Vuole RSI basso (idealmente <30), non RSI 50-65
+// - Vuole price stretched SOTTO EMA50 (≥2 ATR), non sopra
+// - Vuole regime NEUTRAL/BEAR (sweet spot), non STRONG_BULL
+// - Quality gate: price > EMA200 weekly o tutto a 0 (falling knife filter)
+//
+// COME USARLO:
+// 1. Apri il chart sul timeframe DAILY del titolo da valutare
+// 2. Configura il VIX Symbol (default ^VIX) — pilota il market_context
+// 3. Quality gate hardcoded: se EMA200w manca o price sotto EMA200w,
+//    composite=0 indipendentemente dal resto. Mean reversion su trend
+//    rotto = falling knife.
+// 4. Stop = recent_low (5 bars) − 1×ATR. Target = EMA50 daily. R/R
+//    floor pratico 1.5 (vs 2.0 momentum) perché hit rate atteso 55-60%.
+// 5. Time stop 15 giorni: se entro 15gg il setup non risolve, esce.
+//
+// ─── CONTRATTO CON IL MOTORE PYTHON ─────────────────────────────────────────
+// Default allineati a src/propicks/config.py:
+//   EMA_SLOW=50 (target reversion), REGIME_WEEKLY_EMA_200D=40 (quality gate),
+//   RSI_PERIOD=14, ATR_PERIOD=14,
+//   CONTRA_RSI_OVERSOLD=30, CONTRA_RSI_WARM=35,
+//   CONTRA_ATR_DISTANCE_MIN=2.0, CONTRA_CONSECUTIVE_DOWN_DAYS=3,
+//   CONTRA_VIX_SPIKE=25, CONTRA_VIX_COMPLACENT=14,
+//   CONTRA_STOP_ATR_MULT=1.0, CONTRA_TIME_STOP_DAYS=15,
+//   CONTRA_WEIGHT_OVERSOLD=0.40, CONTRA_WEIGHT_QUALITY=0.25,
+//   CONTRA_WEIGHT_MARKET_CONTEXT=0.20, CONTRA_WEIGHT_REVERSION=0.15,
+//   CONTRA_SCORE_A=75, CONTRA_SCORE_B=60, CONTRA_SCORE_C=45,
+//   CONTRA_REGIME_FIT={5:25, 4:70, 3:100, 2:85, 1:0},
+//   CONTRA_MAX_LOSS_PER_TRADE_PCT=0.12.
+// Hard gates: quality=0 azzera composite; regime STRONG_BULL/STRONG_BEAR
+// azzera composite (apply_regime_cap contrarian).
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — Contrarian", overlay=true, max_labels_count=50, max_lines_count=20)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+
+// Quality gate
+ema200dLen   = input.int(200, "EMA 200 (daily, quality)", minval=100, maxval=300, group="Quality",
+     tooltip="Mirror weekly EMA40 (≈ daily EMA200). Sotto questo = falling knife.")
+
+// Oversold
+rsiLen       = input.int(14, "RSI Period", minval=5, maxval=30, group="Oversold")
+rsiOversold  = input.float(30.0, "RSI Oversold strict", minval=15, maxval=40, group="Oversold")
+rsiWarm      = input.float(35.0, "RSI Warm threshold", minval=25, maxval=45, group="Oversold")
+
+emaSlowLen   = input.int(50, "EMA Slow (target reversion)", minval=20, maxval=100, group="Oversold")
+atrLen       = input.int(14, "ATR Period", minval=5, maxval=30, group="Oversold")
+atrDistMin   = input.float(2.0, "Min ATR distance from EMA50", minval=1.0, maxval=4.0, step=0.5, group="Oversold",
+     tooltip="Quanto deve essere stretched price sotto EMA50, in multipli di ATR")
+consDownMin  = input.int(3, "Min consecutive down days", minval=2, maxval=10, group="Oversold")
+
+// Market context
+vixSymbol    = input.symbol("CBOE:VIX", "VIX Symbol", group="Market Context")
+vixSpike     = input.float(25.0, "VIX Spike (paura → edge)", group="Market Context")
+vixComplacent= input.float(14.0, "VIX Complacent (euforia → edge collassa)", group="Market Context")
+
+// Regime classifier (per market_context)
+useWeeklyReg = input.bool(true, "Classifica regime su weekly", group="Market Context",
+     tooltip="Se off, regime fit cap a NEUTRAL=100 (no penalty estremi)")
+
+// Stop & target
+stopAtrMult  = input.float(1.0, "Stop ATR multiplier (× recent_low)", minval=0.5, maxval=3.0, step=0.5, group="Risk",
+     tooltip="stop = min(low, 5 bars) − N × ATR. 1.0 = default (vs 3.0 vecchio, troppo largo)")
+maxLossPct   = input.float(12.0, "Max loss per trade %", minval=5.0, maxval=20.0, group="Risk")
+timeStopDays = input.int(15, "Time stop (days)", minval=5, maxval=30, group="Risk")
+
+// Weights
+wOversold    = input.float(0.40, "Weight Oversold", minval=0, maxval=1, step=0.05, group="Weights")
+wQuality     = input.float(0.25, "Weight Quality", minval=0, maxval=1, step=0.05, group="Weights")
+wMarketCtx   = input.float(0.20, "Weight Market Context", minval=0, maxval=1, step=0.05, group="Weights")
+wReversion   = input.float(0.15, "Weight Reversion", minval=0, maxval=1, step=0.05, group="Weights")
+
+// Display
+showLevels   = input.bool(true, "Show Stop/Target/EMA200", group="Display")
+showSignals  = input.bool(true, "Show Setup Markers", group="Display")
+showPanel    = input.bool(true, "Show Score Panel", group="Display")
+showBG       = input.bool(true, "Show Background", group="Display")
+
+
+// ─── CALCOLI BASE ───────────────────────────────────────────────────────────
+
+ema200d  = ta.ema(close, ema200dLen)
+emaSlow  = ta.ema(close, emaSlowLen)  // target reversion (mirror CONTRA_TARGET_EMA_PERIOD=50)
+rsi      = ta.rsi(close, rsiLen)
+atr      = ta.atr(atrLen)
+atrPct   = atr / close * 100
+
+// 52w high (per quality depth)
+high52w        = ta.highest(high, 252)
+distFromHighPct = high52w > 0 ? (high52w - close) / high52w : 0.0  // decimal, non %
+
+// Distance from EMA50 in ATR (positive = price sotto EMA50, oversold direction)
+atrDistance = atr > 0 ? (emaSlow - close) / atr : 0.0
+
+// Consecutive down days (count)
+var int consecDown = 0
+consecDown := close < close[1] ? consecDown + 1 : 0
+
+// Drawdown 5d in ATR (peak - current) / atr
+peak5d        = ta.highest(high, 5)
+drawdown5dAtr = atr > 0 ? (peak5d - close) / atr : 0.0
+
+// Recent low 5 bars (per stop anchor)
+recentLow = ta.lowest(low, 5)
+stopLevel = recentLow - atr * stopAtrMult
+
+// Hard cap stop al -maxLossPct% per safety net
+maxLossLevel = close * (1.0 - maxLossPct / 100.0)
+stopFinal    = math.max(stopLevel, maxLossLevel)
+
+
+// ─── SCORE 1/4 — OVERSOLD (peso 40%) ────────────────────────────────────────
+// Tre componenti combinate (mirror score_oversold):
+//   RSI 0-40 pts (≤30→40, ≤35→25, ≤40→10, else 0)
+//   ATR distance 0-40 pts (≥3→40, ≥2→30, ≥1→15, ≥0→5, <0→0)
+//   Capitulation 0-20 pts: max(drawdown_5d_atr, consecutive_down)
+
+rsiPts = rsi <= rsiOversold ? 40.0 : rsi <= rsiWarm ? 25.0 : rsi <= 40.0 ? 10.0 : 0.0
+
+atrDistPts = atrDistance >= 3.0 ? 40.0 : atrDistance >= atrDistMin ? 30.0 : atrDistance >= 1.0 ? 15.0 : atrDistance >= 0.0 ? 5.0 : 0.0
+
+ddPts = drawdown5dAtr >= 2.5 ? 20.0 : drawdown5dAtr >= 1.5 ? 15.0 : drawdown5dAtr >= 0.7 ? 8.0 : drawdown5dAtr >= 0.3 ? 3.0 : 0.0
+
+consecPts = consecDown >= 5 ? 20.0 : consecDown >= consDownMin ? 15.0 : consecDown >= 2 ? 8.0 : 0.0
+
+capitulationPts = math.max(ddPts, consecPts)
+
+scoreOversold = math.min(100.0, rsiPts + atrDistPts + capitulationPts)
+
+
+// ─── SCORE 2/4 — QUALITY GATE (peso 25%, hard gate) ────────────────────────
+// Hard gate: price > EMA200d (proxy weekly EMA40). Se sotto → quality=0 e
+// composite forzato a 0 (falling knife filter).
+// Sopra EMA200d: punteggio basato sulla profondità della correzione dal 52w high.
+
+aboveEma200 = close >= ema200d
+
+// Quality "depth" score (0-100) — solo se sopra EMA200
+distAbs = math.abs(distFromHighPct)
+depthPts = distAbs >= 0.10 and distAbs <= 0.25 ? 100.0 : distAbs >= 0.05 and distAbs < 0.10 ? 70.0 : distAbs > 0.25 and distAbs <= 0.40 ? 60.0 : distAbs < 0.05 ? 30.0 : 20.0
+
+scoreQuality = aboveEma200 ? depthPts : 0.0
+
+
+// ─── SCORE 3/4 — MARKET CONTEXT (peso 20%) ─────────────────────────────────
+// Regime fit INVERSO (CONTRA_REGIME_FIT) + VIX adjustment.
+
+// Regime classifier sul weekly del benchmark — qui semplificato sul ticker stesso
+// (per coerenza piena col Python serve ^GSPC weekly, ma il Pine
+// distrubuisce request.security; usiamo il ticker corrente per snellire).
+// L'utente può applicare il weekly_regime_engine.pine separatamente per
+// avere il regime macro reale.
+
+bClose = request.security(syminfo.tickerid, "W", close, lookahead=barmerge.lookahead_off)
+bEmaF  = ta.ema(bClose, 10)
+bEmaS  = ta.ema(bClose, 30)
+bEma2  = ta.ema(bClose, 40)
+bRsiW  = ta.rsi(bClose, 14)
+[bMacd, bSig, _] = ta.macd(bClose, 12, 26, 9)
+
+bTrendBull   = bEmaF > bEmaS and bClose > bEma2
+bTrendBear   = bEmaF < bEmaS and bClose < bEma2
+bMomBull     = bRsiW > 50 and bMacd > bSig
+bMomBear     = bRsiW < 50 and bMacd < bSig
+bAboveAll    = bClose > bEmaF and bClose > bEmaS and bClose > bEma2
+bBelowAll    = bClose < bEmaF and bClose < bEmaS and bClose < bEma2
+
+// Approssimazione: senza ADX-strong distinguiamo solo bull/bear → trattiamo
+// "above_all + trend_bull + mom_bull" = 5, "below_all + trend_bear + mom_bear" = 1.
+regimeCode = useWeeklyReg ? (bAboveAll and bTrendBull and bMomBull ? 5 : bTrendBull and bMomBull ? 4 : bBelowAll and bTrendBear and bMomBear ? 1 : bTrendBear and bMomBear ? 2 : 3) : 3
+
+// CONTRA_REGIME_FIT lookup (config.py): {5:25, 4:70, 3:100, 2:85, 1:0}
+regimeFit = regimeCode == 5 ? 25.0 : regimeCode == 4 ? 70.0 : regimeCode == 3 ? 100.0 : regimeCode == 2 ? 85.0 : 0.0
+
+// VIX (richiede securities)
+vix = request.security(vixSymbol, timeframe.period, close, lookahead=barmerge.lookahead_off)
+
+vixAdj = na(vix) ? 0.0 : vix >= vixSpike ? 20.0 : vix <= vixComplacent ? -30.0 : 0.0
+
+scoreMarketCtx = math.max(0.0, math.min(100.0, regimeFit + vixAdj))
+
+
+// ─── SCORE 4/4 — REVERSION POTENTIAL (peso 15%) ────────────────────────────
+// R/R teorico = (target − price) / (price − stop). Target = EMA50 daily.
+
+reward    = emaSlow - close
+risk      = close - stopFinal
+rrRatio   = risk > 0 and reward > 0 ? reward / risk : na
+
+scoreReversion = na(rrRatio) ? 10.0 : rrRatio >= 3.0 ? 100.0 : rrRatio >= 2.0 ? 80.0 : rrRatio >= 1.5 ? 55.0 : rrRatio >= 1.0 ? 30.0 : 10.0
+
+
+// ─── COMPOSITE + HARD GATES ─────────────────────────────────────────────────
+
+compositeRaw = math.max(0.0, math.min(100.0, scoreOversold * wOversold + scoreQuality * wQuality + scoreMarketCtx * wMarketCtx + scoreReversion * wReversion))
+
+// Hard gate #1: quality = 0 → composite = 0 (falling knife)
+afterQuality = scoreQuality == 0.0 ? 0.0 : compositeRaw
+
+// Hard gate #2: regime cap STRONG_BULL/STRONG_BEAR → composite = 0
+// (mirror contrarian_scoring.apply_regime_cap)
+composite = (regimeCode == 1 or regimeCode == 5) ? 0.0 : afterQuality
+
+capTriggered = composite < compositeRaw
+
+// Classification CONTRA: A ≥75, B ≥60, C ≥45, D <45
+classText  = composite >= 75.0 ? "A — OVERSOLD READY" : composite >= 60.0 ? "B — INCUBATING" : composite >= 45.0 ? "C — MARGINAL" : "D — SKIP"
+classColor = composite >= 75.0 ? color.new(#4CAF50, 0) : composite >= 60.0 ? color.new(#8BC34A, 0) : composite >= 45.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+
+// ─── SETUP CONDITIONS (per markers) ────────────────────────────────────────
+
+// Setup oversold "ready": tutti gli ingredienti core attivi
+setupReady = composite >= 75.0 and aboveEma200 and rsi <= rsiWarm and atrDistance >= atrDistMin
+setupIncubating = composite >= 60.0 and composite < 75.0 and aboveEma200
+
+// Reversion confirmed: dopo un setup, il prezzo riattraversa EMA50 dal basso
+reversionTrigger = ta.crossover(close, emaSlow) and rsi[1] < 50
+
+// Time stop hit: barre dall'ultimo setup ready
+var int barsSinceSetup = 0
+if setupReady
+    barsSinceSetup := 0
+else
+    barsSinceSetup := barsSinceSetup + 1
+
+timeStopHit = barsSinceSetup == timeStopDays
+
+
+// ─── VISUALIZZAZIONE ────────────────────────────────────────────────────────
+
+// EMA200d (quality reference) + EMA50 (target)
+plot(showLevels ? ema200d : na, "EMA 200d (quality gate)", color=color.new(#F44336, 30), linewidth=2)
+plot(showLevels ? emaSlow : na, "EMA 50 (target reversion)", color=color.new(#FF9800, 0), linewidth=2)
+
+// Stop e target sul setup ready
+plot(showLevels and setupReady ? stopFinal : na, "Stop", color=color.new(#F44336, 0), linewidth=2, style=plot.style_linebr)
+plot(showLevels and setupReady ? emaSlow : na, "Target", color=color.new(#4CAF50, 0), linewidth=2, style=plot.style_linebr)
+
+// Background per quality gate
+qualityBgColor = not aboveEma200 ? color.new(#F44336, 92) : composite >= 75.0 ? color.new(#4CAF50, 92) : composite >= 60.0 ? color.new(#FFC107, 95) : color.new(#1E1E1E, 100)
+bgcolor(showBG ? qualityBgColor : na)
+
+// Markers
+if showSignals
+    if setupReady
+        label.new(bar_index, low, "SETUP", style=label.style_triangleup, color=color.new(#4CAF50, 0), textcolor=color.white, size=size.normal)
+    if setupIncubating and not setupReady
+        label.new(bar_index, low, "incub", style=label.style_circle, color=color.new(#FFC107, 30), textcolor=color.black, size=size.tiny)
+    if reversionTrigger and aboveEma200
+        label.new(bar_index, high, "REV", style=label.style_triangledown, color=color.new(#2196F3, 0), textcolor=color.white, size=size.small)
+    if not aboveEma200
+        // Falling knife marker (sporadico — solo al cross)
+        if ta.crossunder(close, ema200d)
+            label.new(bar_index, high, "BROKEN", style=label.style_xcross, color=color.new(#F44336, 0), textcolor=color.white, size=size.small)
+
+
+// ─── PANNELLO SCORE ─────────────────────────────────────────────────────────
+
+scoreColor(val) =>
+    val >= 75.0 ? color.new(#4CAF50, 0) : val >= 50.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+regimeText  = regimeCode == 5 ? "STRONG BULL (skip)" : regimeCode == 4 ? "BULL (ok)" : regimeCode == 3 ? "NEUTRAL (sweet)" : regimeCode == 2 ? "BEAR (ok)" : "STRONG BEAR (skip)"
+regimeColor = regimeCode == 3 ? color.new(#4CAF50, 0) : regimeCode == 1 or regimeCode == 5 ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+
+if showPanel
+    var table panel = table.new(position.top_right, 2, 16, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
+
+    table.cell(panel, 0, 0, "CONTRARIAN", text_color=color.gray, text_size=size.small)
+    table.cell(panel, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small)
+
+    capStr = capTriggered ? " *" : ""
+    table.cell(panel, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 1, str.tostring(composite, "#.0") + "/100" + capStr, text_color=classColor, text_size=size.normal)
+
+    table.cell(panel, 0, 2, "Class", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 2, classText, text_color=classColor, text_size=size.small)
+
+    qualText = aboveEma200 ? "INTACT ✓" : "BROKEN ✗"
+    qualColor = aboveEma200 ? color.new(#4CAF50, 0) : color.new(#F44336, 0)
+    table.cell(panel, 0, 3, "Quality gate", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 3, qualText, text_color=qualColor, text_size=size.small)
+
+    table.cell(panel, 0, 4, "Regime", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 4, regimeText, text_color=regimeColor, text_size=size.tiny)
+
+    table.cell(panel, 0, 5, "─── SUB ───", text_color=color.new(#555555, 0), text_size=size.tiny)
+    table.cell(panel, 1, 5, "", text_size=size.tiny)
+
+    table.cell(panel, 0, 6, "Oversold (40%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 6, str.tostring(scoreOversold, "#.0"), text_color=scoreColor(scoreOversold), text_size=size.tiny)
+
+    table.cell(panel, 0, 7, "Quality (25%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 7, str.tostring(scoreQuality, "#.0"), text_color=scoreColor(scoreQuality), text_size=size.tiny)
+
+    table.cell(panel, 0, 8, "Mkt context (20%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 8, str.tostring(scoreMarketCtx, "#.0"), text_color=scoreColor(scoreMarketCtx), text_size=size.tiny)
+
+    table.cell(panel, 0, 9, "Reversion (15%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 9, str.tostring(scoreReversion, "#.0"), text_color=scoreColor(scoreReversion), text_size=size.tiny)
+
+    table.cell(panel, 0, 10, "─── DETAIL ───", text_color=color.new(#555555, 0), text_size=size.tiny)
+    table.cell(panel, 1, 10, "", text_size=size.tiny)
+
+    rsiCol = rsi <= rsiOversold ? color.new(#4CAF50, 0) : rsi <= rsiWarm ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+    table.cell(panel, 0, 11, "RSI(14)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 11, str.tostring(rsi, "#.0"), text_color=rsiCol, text_size=size.tiny)
+
+    distCol = atrDistance >= atrDistMin ? color.new(#4CAF50, 0) : atrDistance >= 1.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+    table.cell(panel, 0, 12, "ATR dist EMA50", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 12, str.tostring(atrDistance, "#.##") + "x", text_color=distCol, text_size=size.tiny)
+
+    vixCol = na(vix) ? color.gray : vix >= vixSpike ? color.new(#4CAF50, 0) : vix <= vixComplacent ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+    table.cell(panel, 0, 13, "VIX", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 13, na(vix) ? "n/a" : str.tostring(vix, "#.#"), text_color=vixCol, text_size=size.tiny)
+
+    rrCol = na(rrRatio) ? color.gray : rrRatio >= 1.5 ? color.new(#4CAF50, 0) : rrRatio >= 1.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+    table.cell(panel, 0, 14, "R/R (target/stop)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 14, na(rrRatio) ? "n/a" : str.tostring(rrRatio, "#.##") + ":1", text_color=rrCol, text_size=size.tiny)
+
+    table.cell(panel, 0, 15, "Stop/Target", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 15, str.tostring(stopFinal, "#.##") + " / " + str.tostring(emaSlow, "#.##"), text_color=color.gray, text_size=size.tiny)
+
+
+// ─── ALERT ──────────────────────────────────────────────────────────────────
+
+alertcondition(setupReady and not setupReady[1], "CONTRA SETUP READY", "CONTRA: {{ticker}} setup oversold ready (score ≥75 + quality intact). Stop {{plot_0}}, target EMA50.")
+alertcondition(setupIncubating and not (setupReady or setupIncubating)[1], "CONTRA INCUBATING", "CONTRA: {{ticker}} setup oversold in incubazione (score 60-74)")
+alertcondition(reversionTrigger and aboveEma200, "CONTRA REVERSION", "CONTRA: {{ticker}} cross sopra EMA50 con RSI<50 — possibile inizio reversion")
+alertcondition(ta.crossunder(close, ema200d), "CONTRA QUALITY BROKEN", "CONTRA: {{ticker}} ha rotto EMA200d — falling knife, niente entry contrarian")
+alertcondition(timeStopHit, "CONTRA TIME STOP", "CONTRA: {{ticker}} time stop {{plot_0}} giorni dal setup — chiudi se in posizione")
+alertcondition(close < stopFinal, "CONTRA STOP HIT", "CONTRA STOP: {{ticker}} chiuso sotto stop hard")

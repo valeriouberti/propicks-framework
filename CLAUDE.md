@@ -330,7 +330,18 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
   string omogenea (PyArrow fail su double misti).
 - **`tradingview/`** NON è Python — sono Pine script che replicano visualmente
   il motore. Il Pine è il layer real-time (timing + alert) che yfinance (EOD)
-  non copre. Default Pine devono matchare `config.py` byte per byte.
+  non copre. Default Pine devono matchare `config.py` byte per byte. Quattro
+  script:
+  - `weekly_regime_engine.pine` — regime macro (universale, applicalo a SPX
+    per leggere il regime che il motore Python usa).
+  - `daily_signal_engine.pine` — momentum stock (replica `domain/scoring.py`
+    con score asimmetrico volume up/down e smoothing distance_from_high).
+  - `etf_rotation_engine.pine` — rotation settoriale (replica
+    `domain/etf_scoring.py`: 4 sub-score RS/regime_fit/abs_mom/trend, cap
+    regime su NEUTRAL/BEAR/STRONG_BEAR, stop -5% hard).
+  - `contrarian_signal_engine.pine` — quality-filtered mean reversion
+    (replica `domain/contrarian_scoring.py`: oversold/quality/context/
+    reversion, quality gate hard su EMA200d, regime cap STRONG_BULL/BEAR).
 
 ---
 
