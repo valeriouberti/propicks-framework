@@ -1569,9 +1569,12 @@ composite = oversold*40% + quality*25% + market_context*20% + reversion*15%
 | Max esposizione aggregata | — | **20%** | Esposizione totale contrarian ≤ 20% capitale |
 | Stop loss | ATR × 2 | `recent_low - 1×ATR` | Ancorato al low recente, ma buffer contenuto perché il target = EMA50 daily è strutturalmente vicino (R/R sostenibile) |
 | Max loss per trade (soglia warning) | 8% | **12%** | Stop naturalmente più largo |
-| Target | trailing | **EMA50 fisso** | Mean reversion = target fisso, NO trailing |
+| Target | trailing | **EMA50 dinamico** | Mean reversion: il target segue EMA50 daily (drift > 0.5% triggera update via `propicks-portfolio manage`) |
+| Trailing stop | abilitabile | **bloccato** | Guardrail: `propicks-portfolio trail enable` rifiuta posizioni contrarian |
+| Take profit | trailing-managed | **target hit** | `manage` flagga `TARGET-HIT` quando current_price ≥ target → chiudi manualmente via `journal close` |
 | Holding tipico | 2-8 settimane | **5-15 giorni** | Reversion rapida o thesis wrong |
-| Time stop | 30 gg flat | **15 gg** | Finestra di reversion corta |
+| Time stop | 30 gg flat | **15 gg** | Bucket-aware in `suggest_stop_update`: contrarian usa `CONTRA_TIME_STOP_DAYS` di default |
+| AI sanity R/R floor (CONFIRM) | 2.0 | **1.5** (`CONTRA_RR_CONFIRM_FLOOR`) | Hit rate atteso più alto, soglia edge-positive più bassa |
 
 **Cap globale `MAX_POSITIONS=10` condiviso**: momentum + contrarian insieme
 non possono superare 10 posizioni aperte. Il bucket contrarian ha un cap
