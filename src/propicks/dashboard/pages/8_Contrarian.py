@@ -29,9 +29,9 @@ st.info(
     "• Size max: **8%** per posizione (vs 15% momentum)  \n"
     "• Bucket cap aggregato: **20%** del capitale  \n"
     "• Max posizioni contrarian simultanee: **3** (condivide cap globale 10 con momentum)  \n"
-    "• Stop ATR-based più largo (3×ATR vs 2×), max loss 12% per trade  \n"
+    "• Stop = `recent_low − 1×ATR`, max loss 12% per trade  \n"
     "• Time stop: 15 giorni (vs 30gg momentum)  \n"
-    "• Target: reversion a EMA50 daily (fisso, NON trailing)  \n"
+    "• Target: reversion a EMA50 daily (dinamico, drift-tracked, NON trailing)  \n"
     "• Regime gate INVERSO: skip STRONG_BULL/STRONG_BEAR, sweet spot NEUTRAL",
     icon="ℹ️",
 )
@@ -499,6 +499,59 @@ for r in results:
             )
             verb = "Aggiunto" if is_new else "Aggiornato"
             wl_col2.success(f"{verb} {r['ticker']} in watchlist (tag contra).")
+
+        # -----------------------------------------------------------------
+        # Prompt esterni (Perplexity contrarian) — cross-check indipendente.
+        # Mirror del system prompt di contrarian_validator: discrimina FLUSH
+        # vs BREAK cercando la causa del selloff.
+        # -----------------------------------------------------------------
+        with st.expander("Prompt Perplexity contrarian (copia-incolla)", expanded=False):
+            from propicks.ai.user_prompts import perplexity_contrarian, perplexity_2c
+
+            st.caption(
+                "Cross-check indipendente a `--validate` Claude. Focus sulla "
+                "**causa del selloff** (FLUSH tradable vs BREAK fondamentale). "
+                "Perplexity è più affidabile sui catalyst recenti rispetto al "
+                "web search di Claude — usalo come secondo paio di occhi su "
+                "earnings miss, guidance cut, analyst revisions, peer action."
+            )
+            st.markdown("**Contrarian — analisi causa selloff** (FLUSH vs BREAK)")
+            st.code(
+                perplexity_contrarian(r["ticker"], r.get("name") or ""),
+                language=None,
+            )
+
+            st.markdown("**2C — Check pre-entry** (red flag ultime 24h)")
+            st.code(perplexity_2c(r["ticker"]), language=None)
+
+        # -----------------------------------------------------------------
+        # Fallback Claude --validate completo per LLM alternativi quando
+        # l'API Anthropic è down o la chiave è esaurita.
+        # -----------------------------------------------------------------
+        with st.expander(
+            "Prompt Claude --validate contrarian completo (fallback LLM alternativo)",
+            expanded=False,
+        ):
+            from datetime import date as _date
+
+            from propicks.ai.user_prompts import claude_contrarian_validate_fallback
+
+            st.caption(
+                "Ricostruisce byte-per-byte il payload (system + user + schema) "
+                "che `propicks-contra --validate` manda ad Anthropic. Persona del "
+                "system prompt: senior event-driven / mean-reversion PM. Incollalo "
+                "in ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
+                "Lo schema JSON è inline a fondo prompt — il modello risponderà in "
+                "formato strutturato parsabile."
+            )
+            _fallback = claude_contrarian_validate_fallback(
+                r, _date.today().isoformat()
+            )
+            st.caption(
+                f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+                "Verifica la context window del modello target prima di incollare."
+            )
+            st.code(_fallback, language="markdown")
 
         # AI validation on-demand
         if validate_ai:

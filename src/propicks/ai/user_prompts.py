@@ -93,6 +93,63 @@ Solo fatti, risposte brevi. Se non c'è nulla di rilevante, dimmi
 "Nessun red flag nelle ultime 24h"."""
 
 
+def perplexity_contrarian(ticker: str, company_name: str = "") -> str:
+    """Prompt contrarian — discriminante FLUSH vs BREAK sulla causa del selloff.
+
+    Mirror del system prompt di ``contrarian_validator``: l'engine ha già
+    confermato l'oversold tecnico (RSI < 30, stretch ATR sotto EMA50, sopra
+    EMA200 weekly). Quello che il trader deve verificare a mano è la **causa
+    del selloff**: è un flush macro/tecnico (tradable) o una frattura
+    fondamentale (non tradable)?
+    """
+    name = company_name or ticker
+    return f"""Sto valutando un setup CONTRARIAN su {ticker} ({name}).
+
+Il titolo è oversold (RSI < 30, stretched multi-ATR sotto EMA50) ma il trend
+strutturale di lungo periodo (sopra EMA200 weekly) è ancora intatto. La mia
+domanda è una sola: **il selloff recente è un FLUSH tradable o un BREAK
+fondamentale che sconsiglia l'entry?**
+
+Cerca specificamente la CAUSA del selloff degli ultimi 5-15 giorni:
+
+1. CATALYST DEL SELLOFF (la domanda principale):
+   - Cosa ha causato il calo? Earnings miss, guidance cut, news macro,
+     rotazione settoriale, o nessun catalyst evidente (technical_only)?
+   - Se earnings: beat/miss vs consensus, guidance change, management commentary
+     su drivers transitori (weather, FX, channel disruption) vs strutturali.
+
+2. DISCRIMINANTE FLUSH vs BREAK:
+   - **FLUSH (tradable)**: macro_flush risk-off, sector_rotation, technical_only
+     senza news materiali, earnings beat ma sell-the-news.
+   - **BREAK (NON tradable)**: earnings_miss_fundamental con deterioramento real,
+     guidance_cut con stime in revisione al ribasso, fraud/SEC inquiry/restatement.
+   - **MIXED**: flush con weakening fondamentale marginale.
+
+3. ANALYST REACTION (cruciale per BREAK detection):
+   - Le stime di consensus sono state TAGLIATE sharply nelle ultime 2 settimane?
+     (bad sign — multiple needs to re-rate down, mean reversion non basta).
+   - O reggono / sono state alzate? (supportive per FLUSH).
+   - Target price medio: rivisto al ribasso o stabile?
+
+4. PEER ACTION:
+   - I peer del settore sono giù dello stesso ammontare? → sector_rotation/macro_flush
+   - {ticker} è giù molto più dei peer? → name-specific (più rischio break)
+
+5. RED FLAGS HARD-REJECT:
+   - Indagini SEC, restatement, dimissioni auditor o CFO?
+   - Whistleblower, allegations di accounting?
+   - Se SÌ a uno qualsiasi → REJECT con prejudice, mai mean-revertare frode.
+
+6. EARNINGS CALENDAR:
+   - Quando sono le PROSSIME earnings? (data esatta)
+   - Se < 2 settimane: il setup è ad alto rischio gap. Specifica la data.
+
+Rispondi con dati precisi, date, citazioni di analyst notes se disponibili.
+**Se la causa del selloff non è chiara dopo la ricerca, dillo esplicitamente:
+"causa unknown"** invece di assumere flush. Assenza di evidenza di break NON
+è evidenza di assenza."""
+
+
 def claude_3d_post_trade(trade: dict) -> str:
     """Prompt Claude 3D — analisi post-trade per learning.
 
@@ -192,6 +249,30 @@ def claude_stock_validate_fallback(analysis: dict, as_of_date: str) -> str:
     )
     return (
         "# SYSTEM\n\n" + SYSTEM_PROMPT.rstrip() + "\n\n"
+        "# USER\n\n" + user.rstrip() + schema_block
+    )
+
+
+def claude_contrarian_validate_fallback(analysis: dict, as_of_date: str) -> str:
+    """Prompt completo contrarian ``--validate`` — fallback per LLM alternativi.
+
+    Concatena ``CONTRA_SYSTEM_PROMPT`` (event-driven / mean-reversion PM
+    persona) + user prompt parametrizzato + schema JSON ``_CONTRA_JSON_SCHEMA``.
+    Output pronto per ``st.code()`` o clipboard. Stesso pattern di
+    ``claude_stock_validate_fallback`` ma con prompt e schema contrarian.
+    """
+    from propicks.ai.claude_client import _CONTRA_JSON_SCHEMA
+    from propicks.ai.contrarian_prompts import (
+        CONTRA_SYSTEM_PROMPT,
+        render_contrarian_user_prompt,
+    )
+
+    user = render_contrarian_user_prompt(analysis, as_of_date=as_of_date)
+    schema_block = _SCHEMA_INSTRUCTION_STOCK.format(
+        schema=_format_schema_block(_CONTRA_JSON_SCHEMA)
+    )
+    return (
+        "# SYSTEM\n\n" + CONTRA_SYSTEM_PROMPT.rstrip() + "\n\n"
         "# USER\n\n" + user.rstrip() + schema_block
     )
 
