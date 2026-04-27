@@ -588,6 +588,83 @@ def market_earnings_upsert(
         )
 
 
+def index_constituents_is_fresh(
+    index_name: str,
+    ttl_hours: float,
+    *,
+    path: str | None = None,
+) -> bool:
+    """True se la cache ha ALMENO UNA riga non stale per ``index_name``."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            """SELECT COUNT(*) AS n FROM index_constituents
+               WHERE index_name = ?
+                 AND fetched_at >= datetime('now', ?)""",
+            (index_name, f"-{ttl_hours} hours"),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["n"] > 0
+
+
+def index_constituents_read(
+    index_name: str,
+    *,
+    path: str | None = None,
+) -> list[dict]:
+    """Ritorna list di dict {ticker, company_name, sector, added_date, fetched_at}."""
+    conn = connect(path)
+    try:
+        rows = conn.execute(
+            """SELECT ticker, company_name, sector, added_date, fetched_at
+               FROM index_constituents
+               WHERE index_name = ?
+               ORDER BY ticker ASC""",
+            (index_name,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def index_constituents_replace(
+    index_name: str,
+    rows: list[dict],
+    *,
+    path: str | None = None,
+) -> int:
+    """Replace atomico della lista membri per un index.
+
+    Pattern: DELETE + INSERT in una sola transazione. Evita lo stato
+    intermedio "metà vecchi + metà nuovi" se la fetch ritorna una lista
+    parziale. Se ``rows`` è vuoto, no-op (preserva il dato esistente —
+    comportamento safe per snapshot fallback).
+    """
+    if not rows:
+        return 0
+    n = 0
+    with transaction(path) as conn:
+        conn.execute(
+            "DELETE FROM index_constituents WHERE index_name = ?", (index_name,)
+        )
+        for r in rows:
+            conn.execute(
+                """INSERT INTO index_constituents (
+                    index_name, ticker, company_name, sector, added_date, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                (
+                    index_name,
+                    r["ticker"].upper(),
+                    r.get("company_name"),
+                    r.get("sector"),
+                    r.get("added_date"),
+                ),
+            )
+            n += 1
+    return n
+
+
 def market_earnings_all_from_cache(*, path: str | None = None) -> dict[str, str | None]:
     """Ritorna mappa {ticker: next_earnings_date} di TUTTE le righe in cache
     (anche stale). Usato per report / bulk check.

@@ -227,6 +227,22 @@ CREATE TABLE IF NOT EXISTS market_ticker_meta (
 -- la colonna ``next_earnings_date`` esiste anche sui DB esistenti pre-Phase 8.
 
 
+-- Index constituents cache — lista di ticker membri di un index (es. ^GSPC).
+-- Sorgente Wikipedia (parsata via pandas.read_html). TTL 7gg perché l'index
+-- cambia raramente (~5-10 nomi/anno per S&P 500).
+-- PRIMARY KEY (index_name, ticker) per supportare più indici nello stesso DB.
+CREATE TABLE IF NOT EXISTS index_constituents (
+  index_name TEXT NOT NULL,           -- 'sp500' | 'nasdaq100' | 'ftsemib' | ...
+  ticker TEXT NOT NULL,               -- ticker normalizzato per yfinance
+  company_name TEXT,
+  sector TEXT,                        -- GICS Yahoo-style se disponibile
+  added_date DATE,                    -- quando entrato nell'index (se noto)
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (index_name, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_constituents_index ON index_constituents(index_name);
+
+
 -- Daily AI budget counter — 1 riga per giorno.
 -- Popolato da ``ai/budget.py`` ad ogni chiamata all'API; TTL implicito del
 -- bucket giornaliero è la data key stessa (domani = nuova riga, reset a 0).

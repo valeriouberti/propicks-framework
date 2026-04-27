@@ -9,6 +9,8 @@ Esempi:
     propicks-contra AAPL --validate
     propicks-contra AAPL --json
     propicks-contra AAPL MSFT --brief
+    propicks-contra --discover-sp500 --top 10
+    propicks-contra --discover-sp500 --top 5 --validate --min-score 60
 """
 
 from __future__ import annotations
@@ -19,8 +21,15 @@ import sys
 
 from tabulate import tabulate
 
+from propicks.domain.contrarian_discovery import (
+    DISCOVERY_DEFAULT_TOP_N,
+    DISCOVERY_PREFILTER_ATR_DISTANCE_MIN,
+    DISCOVERY_PREFILTER_RSI_MAX,
+    discover_contra_candidates,
+)
 from propicks.domain.contrarian_scoring import analyze_contra_ticker
 from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
+from propicks.market.index_constituents import get_sp500_universe
 from propicks.market.yfinance_client import download_benchmark
 
 
@@ -302,6 +311,15 @@ def _auto_watchlist_actionable(results: list[dict]) -> None:
     )
 
 
+def _discovery_progress(stage: str, current: int, total: int, ticker: str) -> None:
+    """Progress callback per il discovery: stampa solo ogni 25 ticker per non spammare."""
+    if current == total or current % 25 == 0:
+        print(
+            f"[discovery/{stage}] {current}/{total} ({ticker})",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -310,7 +328,12 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "tickers", nargs="+", help="Uno o più ticker (es. AAPL MSFT ENI.MI)"
+        "tickers",
+        nargs="*",
+        help=(
+            "Uno o più ticker (es. AAPL MSFT ENI.MI). "
+            "Omettere se si usa --discover-sp500."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Output in formato JSON")
     parser.add_argument("--brief", action="store_true", help="Solo tabella riassuntiva")
@@ -329,7 +352,64 @@ def main() -> int:
         action="store_true",
         help="Non aggiungere i ticker classe A/B alla watchlist",
     )
+    parser.add_argument(
+        "--discover-sp500",
+        action="store_true",
+        help=(
+            "Discovery automatico su tutto S&P 500 (constituents da Wikipedia, "
+            "cache 7gg). Pipeline 3-stage: prefilter cheap → full scoring → top N."
+        ),
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=DISCOVERY_DEFAULT_TOP_N,
+        help=f"Numero massimo di candidati da ritornare (default {DISCOVERY_DEFAULT_TOP_N}).",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=0.0,
+        help="Score composito minimo per inclusione (es. 60 per classe A+B).",
+    )
+    parser.add_argument(
+        "--prefilter-rsi-max",
+        type=float,
+        default=DISCOVERY_PREFILTER_RSI_MAX,
+        help=f"Soglia RSI prefilter (default {DISCOVERY_PREFILTER_RSI_MAX}).",
+    )
+    parser.add_argument(
+        "--prefilter-atr-min",
+        type=float,
+        default=DISCOVERY_PREFILTER_ATR_DISTANCE_MIN,
+        help=(
+            f"Soglia distanza ATR prefilter (default {DISCOVERY_PREFILTER_ATR_DISTANCE_MIN})."
+        ),
+    )
+    parser.add_argument(
+        "--prefilter-cap",
+        type=int,
+        default=None,
+        help=(
+            "Cap opzionale sul n. ticker che passano allo stage 2 "
+            "(utile per limitare costo full scoring)."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-universe",
+        action="store_true",
+        help="Forza re-fetch della lista S&P 500 da Wikipedia (bypass cache 7gg).",
+    )
     args = parser.parse_args()
+
+    # Validation: o ticker espliciti o discovery, ma non entrambi vuoti
+    if not args.tickers and not args.discover_sp500:
+        parser.error("Specifica almeno un ticker oppure usa --discover-sp500.")
+    if args.tickers and args.discover_sp500:
+        parser.error(
+            "--discover-sp500 e ticker espliciti sono mutually exclusive: "
+            "scegli uno dei due flussi."
+        )
 
     # Scarica VIX una volta sola per batch (contesto di mercato condiviso)
     vix: float | None = None
@@ -338,12 +418,49 @@ def main() -> int:
         vix = float(vix_series.iloc[-1])
 
     results: list[dict] = []
-    for t in args.tickers:
-        r = analyze_contra_ticker(t, strategy="Contrarian", vix=vix)
-        if r is not None:
-            results.append(r)
+    if args.discover_sp500:
+        try:
+            universe = get_sp500_universe(force_refresh=args.refresh_universe)
+        except Exception as exc:
+            print(f"[errore] impossibile ottenere universo S&P 500: {exc}", file=sys.stderr)
+            return 1
+
+        print(
+            f"[discovery] universo S&P 500: {len(universe)} ticker. "
+            f"Stage 1 (prefilter RSI<={args.prefilter_rsi_max}, "
+            f"distance>={args.prefilter_atr_min}×ATR)...",
+            file=sys.stderr,
+        )
+        out = discover_contra_candidates(
+            universe,
+            top_n=args.top,
+            rsi_max=args.prefilter_rsi_max,
+            atr_distance_min=args.prefilter_atr_min,
+            min_score=args.min_score,
+            vix=vix,
+            prefilter_cap=args.prefilter_cap,
+            progress_callback=_discovery_progress,
+        )
+        print(
+            f"[discovery] universe={out['universe_size']} "
+            f"prefilter_pass={out['prefilter_pass']} "
+            f"scored={out['scored']} "
+            f"returned={len(out['candidates'])}",
+            file=sys.stderr,
+        )
+        results = out["candidates"]
+    else:
+        for t in args.tickers:
+            r = analyze_contra_ticker(t, strategy="Contrarian", vix=vix)
+            if r is not None:
+                results.append(r)
 
     if not results:
+        if args.discover_sp500:
+            print(
+                "[discovery] nessun candidato qualificato dopo full scoring.",
+                file=sys.stderr,
+            )
         return 1
 
     if args.validate or args.force_validate:
@@ -365,7 +482,10 @@ def main() -> int:
         print(json.dumps(results, indent=2, default=str))
         return 0
 
-    if args.brief:
+    # In discovery mode default a summary table (n risultati ≥ 5 tipicamente):
+    # l'analysis dettagliata × 10 è troppo rumorosa. Brief flag esplicito
+    # forza summary anche su single-ticker.
+    if args.brief or args.discover_sp500:
         print_summary_table(results)
         return 0
 

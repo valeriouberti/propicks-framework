@@ -661,6 +661,22 @@ MARKET_MIN_DAILY_BARS: int = EMA_SLOW * 3 + 5  # = 155
 
 
 # ---------------------------------------------------------------------------
+# INDEX CONSTITUENTS (S&P 500, NASDAQ-100, ...)
+# ---------------------------------------------------------------------------
+# TTL della lista membri di un index. 7gg perché l'S&P 500 cambia ~5-10 nomi/anno
+# (rebalance trimestrale del committee). Sourcing primario: Wikipedia (parsato
+# via pandas.read_html) — è la fonte de facto per retail-quant da ~10 anni.
+# Sanity check: una fetch valida deve ritornare almeno ``INDEX_MIN_CONSTITUENTS``
+# nomi, altrimenti la pagina è probabilmente cambiata e attiviamo il fallback.
+INDEX_CONSTITUENTS_CACHE_TTL_HOURS: float = 24.0 * 7
+INDEX_MIN_CONSTITUENTS: int = 480  # S&P 500 è 500 ± qualche split-letter
+
+# Fonte Wikipedia per S&P 500. Tabella ID 0, colonna "Symbol". I ticker con
+# dot ("BRK.B") vanno normalizzati a dash ("BRK-B") per yfinance.
+SP500_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+
+# ---------------------------------------------------------------------------
 # MACRO CALENDAR 2026 (Phase 8)
 # ---------------------------------------------------------------------------
 # Date hardcoded per 2026 — da aggiornare annualmente. Source:

@@ -1100,6 +1100,11 @@ propicks-contra AAPL --force-validate          # bypassa gate + cache
 propicks-contra AAPL --json                    # output JSON
 propicks-contra AAPL MSFT --brief              # tabella riassuntiva
 propicks-contra AAPL --no-watchlist            # disabilita auto-add classe A+B
+# Discovery automatico su S&P 500 (Wikipedia + cache 7gg, 3-stage pipeline):
+propicks-contra --discover-sp500                       # top 10 default
+propicks-contra --discover-sp500 --top 5 --min-score 60  # solo classe A+B
+propicks-contra --discover-sp500 --validate            # + AI validation top N
+propicks-contra --discover-sp500 --refresh-universe    # forza re-fetch lista
 # Sizing bucket contrarian (cap 8%, max 3 pos, 20% aggregate):
 propicks-portfolio size AAPL --entry 180 --stop 162 \
   --score-claude 7 --score-tech 65 --contrarian
