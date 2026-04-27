@@ -290,10 +290,11 @@ SECTOR_ETFS_EU: dict[str, dict] = {
 }
 
 
-# WORLD: Xtrackers MSCI World Sector UCITS (serie XDW* / XWTS / XZRE su Xetra).
-# Esposizione ai settori GICS su scala MSCI World (developed markets) — tipicamente
-# ~65-70% US, ~15% Europa, ~6% Giappone, resto sviluppati. Serie Xtrackers (DWS),
-# NON iShares e NON SPDR. Accumulating, domicilio IE, TER 0.25% per tutta la serie.
+# WORLD: Xtrackers MSCI World Sector UCITS (serie XDW* / XWTS su Xetra) per i
+# 10 settori GICS escluso Real Estate. Esposizione ai settori GICS su scala
+# MSCI World (developed markets) — tipicamente ~65-70% US, ~15% Europa, ~6%
+# Giappone, resto sviluppati. Serie Xtrackers (DWS), NON iShares e NON SPDR.
+# Accumulating, domicilio IE, TER 0.25% per tutta la serie.
 #
 # Differenze operative vs Select Sector SPDR:
 # - Composizione: settore world include europee/giapponesi (es. energy con
@@ -302,14 +303,24 @@ SECTOR_ETFS_EU: dict[str, dict] = {
 # - Benchmark: per RS va usato un benchmark WORLD (URTH iShares MSCI World o
 #   equivalente), NON ^GSPC. Mischiare i due confonde outperformance con
 #   differenze di perimetro geografico. Cfr. ``ETF_BENCHMARK_WORLD``.
-# - Real Estate: serie separata (XZRE) lanciata 2021 post-GICS reshuffle,
-#   ISIN diverso dalla serie XDW* core.
 # - Communication Services: ticker XWTS (outlier nella serie). Il fondo
 #   riflette il GICS 2018 reshuffle, include Meta/Alphabet/Netflix in linea
 #   con XLC US.
 #
+# Real Estate WORLD — eccezione di perimetro: NON esiste un Xtrackers MSCI
+# World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS
+# su 11). Il proxy più simile disponibile e liquido su Xetra/yfinance è
+# IQQ6.DE (iShares Developed Markets Property Yield UCITS, ISIN IE00B1FZS350),
+# che NON traccia il settore GICS Real Estate world ma un sottoinsieme:
+# REIT developed markets filtrati per dividend yield ≥2%, esclude REIT senza
+# yield significativo (growth REIT) → biased verso income vs growth real
+# estate. Issuer iShares (BlackRock), non Xtrackers (DWS): correlazione +
+# composizione divergono leggermente dal resto della serie WORLD. Trade-off
+# accettato per chiudere il bucket Real Estate; il sub-score regime_fit per
+# sector_key="real_estate" si applica con questa asimmetria nota.
+#
 # IMPORTANTE: verificare ticker e ISIN sul proprio broker. Alcuni broker
-# retail EU non quotano XWTS o XZRE su Xetra — fallback su listing Milano
+# retail EU non quotano XWTS o IQQ6 su Xetra — fallback su listing Milano
 # (.MI) se disponibile.
 
 SECTOR_ETFS_WORLD: dict[str, dict] = {
@@ -367,6 +378,12 @@ SECTOR_ETFS_WORLD: dict[str, dict] = {
         "name": "iShares Developed Markets Property Yield UCITS",
         "sector_key": "real_estate",
         "isin": "IE00B1FZS350",
+        "perimeter_note": (
+            "Proxy di perimetro per il bucket Real Estate WORLD: nessun "
+            "Xtrackers MSCI World Real Estate UCITS esiste. IQQ6 traccia "
+            "REIT developed con dividend yield ≥2%, NON il GICS Real Estate "
+            "world full. Composizione yield-tilted vs growth real estate."
+        ),
     },
 }
 

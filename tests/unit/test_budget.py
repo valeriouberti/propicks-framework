@@ -69,8 +69,20 @@ def _full_analysis() -> dict:
         "perf_1w": 0.021,
         "perf_1m": 0.058,
         "perf_3m": 0.124,
-        # regime=None = campo assente, gate regime passa silenziosamente
-        "regime": None,
+        "regime": {
+            "regime": "BULL",
+            "regime_code": 4,
+            "entry_allowed": True,
+            "trend": "BULL",
+            "trend_strength": "STRONG",
+            "momentum": "BULL",
+            "adx": 28.0,
+            "rsi": 60.0,
+            "macd_hist": 0.5,
+            "ema_fast": 180.0,
+            "ema_slow": 175.0,
+            "ema_200d": 165.0,
+        },
     }
 
 

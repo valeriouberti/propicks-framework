@@ -12,12 +12,15 @@ Formula composite (pesi in config):
 CLAUDE.md Fase 2): oltre al peso 30% nella formula, il regime applica un
 cap superiore allo score dei settori non favoriti:
 
-    STRONG_BEAR: non-favored → score forzato a 0  (flat o solo difensivi)
-    BEAR:        non-favored → score capped a 50  (no overweight cicliche)
-    NEUTRAL+:    nessun cap  (ranking libero)
+    STRONG_BEAR: non-favored → score forzato a 0   (flat o solo difensivi)
+    BEAR:        non-favored → score capped a 50   (no overweight cicliche)
+    NEUTRAL:     non-favored → score capped a 65   (soft cap: B HOLD ok, no class A)
+    BULL+:       nessun cap                        (ranking libero)
 
-Questo evita che un XLK con momentum forte esca top-ranked in un regime
-di drawdown — coerente con il gate regime già usato in ``validate_thesis``.
+Il soft cap NEUTRAL evita che un settore con RS forte ma "non favorito"
+esca class A (≥70 = OVERWEIGHT) quando il framework regime lo considera
+ugualmente non-favored: in NEUTRAL è ammesso restare in HOLD ma non
+ottenere overweight allocation senza una conferma di regime.
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ import pandas as pd
 
 from propicks.config import (
     ETF_BENCHMARK,
+    ETF_MAX_AGGREGATE_EXPOSURE_PCT,
+    ETF_MAX_POSITION_SIZE_PCT,
     ETF_MOMENTUM_LOOKBACK_DAYS,
     ETF_RS_EMA_WEEKS,
     ETF_RS_LOOKBACK_WEEKS,
@@ -78,8 +83,11 @@ def score_rs(
     - ``rs_ratio_now`` = close(ETF) / close(benchmark), normalizzato dal
       valore ``lookback`` settimane fa → 1.0 = performance uguale, >1.0 =
       outperform, <1.0 = underperform.
-    - ``rs_slope`` = rs_ratio / EMA(rs_ratio, ema_span) − 1 → positivo se
-      la leadership sta accelerando, negativo se rallenta.
+    - ``rs_slope`` = (rs_norm[-1] − rs_norm[-ema_span-1]) / ema_span →
+      vera slope su ``ema_span`` settimane (variazione media settimanale
+      della RS line). Positivo = leadership che accelera, negativo = che
+      rallenta. Più reattivo del precedente "spread vs EMA" sui pattern
+      di stabilizzazione post-correzione.
     - Score = combinazione di level e slope:
         * level >= 1.05 (outperform 5%+) E slope > 0  → 100 (leader in accelerazione)
         * level >= 1.02 E slope > 0                  → 85
@@ -112,12 +120,16 @@ def score_rs(
         join="inner",
     ).dropna()
 
-    if len(joined) < lookback + ema_span:
+    # Warm-up: lookback (per il base index) + 3×ema_span (per stabilizzare lo
+    # smoothing della RS line). Soglia precedente lookback+ema_span ammetteva
+    # signal su RS rumorosa per i primi ~6-12 mesi di vita di un ETF.
+    min_bars = lookback + 3 * ema_span
+    if len(joined) < min_bars:
         return {
             "score": 50.0,
             "rs_ratio": None,
             "rs_slope": None,
-            "note": f"storia insufficiente: {len(joined)} barre",
+            "note": f"storia insufficiente per RS stabile: {len(joined)} barre (richieste {min_bars})",
         }
 
     rs = joined["etf"] / joined["bench"]
@@ -128,9 +140,12 @@ def score_rs(
     rs_norm = rs / base
     rs_ratio = float(rs_norm.iloc[-1])
 
-    rs_ema = compute_ema(rs_norm, ema_span)
-    ema_now = float(rs_ema.iloc[-1])
-    rs_slope = (rs_ratio / ema_now - 1.0) if ema_now > 0 else 0.0
+    # Vera slope: variazione media settimanale della RS line negli ultimi
+    # ``ema_span`` periodi. Un EMA-spread veniva nominato "slope" ma in zone
+    # di stabilizzazione post-correzione l'EMA in ritardo dava negativo
+    # nonostante la RS si fosse appiattita: misclassificazione del segnale.
+    rs_past = float(rs_norm.iloc[-ema_span - 1])
+    rs_slope = (rs_ratio - rs_past) / ema_span
 
     if rs_ratio >= 1.05 and rs_slope > 0:
         score = 100.0
@@ -255,21 +270,24 @@ def score_etf_trend(close_weekly: pd.Series, ema_span: int = REGIME_WEEKLY_EMA_S
 def apply_regime_cap(composite: float, sector_key: str, regime_code: int | None) -> float:
     """Applica il cap superiore da regime hard-gate.
 
-    Non-favored in STRONG_BEAR → 0  (no long ciclicali in crisi)
-    Non-favored in BEAR        → min(composite, 50)  (no overweight)
-    Altrimenti                 → composite invariato
+    Non-favored in STRONG_BEAR (1) → 0              (no long ciclicali in crisi)
+    Non-favored in BEAR (2)        → min(composite, 50)   (no overweight)
+    Non-favored in NEUTRAL (3)     → min(composite, 65)   (soft cap: HOLD ok, no class A)
+    BULL+ (4-5)                    → composite invariato  (ranking libero)
 
     Se il regime non è disponibile, lascia lo score invariato — non si può
     penalizzare in cieco.
     """
     if regime_code is None:
         return composite
-    if regime_code in (1, 2):  # BEAR / STRONG_BEAR
+    if regime_code in (1, 2, 3):
         favored = sector_key in favored_sectors_for_regime(regime_code)
         if not favored:
             if regime_code == 1:
                 return 0.0
-            return min(composite, 50.0)
+            if regime_code == 2:
+                return min(composite, 50.0)
+            return min(composite, 65.0)
     return composite
 
 
@@ -442,8 +460,8 @@ def rank_universe(
 def suggest_allocation(
     ranked: list[dict],
     top_n: int = 3,
-    max_per_etf_pct: float = 0.15,
-    max_aggregate_pct: float = 0.60,
+    max_per_etf_pct: float = ETF_MAX_POSITION_SIZE_PCT,
+    max_aggregate_pct: float = ETF_MAX_AGGREGATE_EXPOSURE_PCT,
 ) -> dict:
     """Propone l'allocazione dai top-N ranked ETF.
 

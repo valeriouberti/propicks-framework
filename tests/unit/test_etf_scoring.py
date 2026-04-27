@@ -248,9 +248,10 @@ def test_allocation_neutral_picks_top_n():
     out = suggest_allocation(ranked, top_n=3)
     tickers = [p["ticker"] for p in out["positions"]]
     assert tickers == ["XLK", "XLF", "XLI"]
-    # Equal weight, 3 posizioni, cap aggregato 60% → 20% ciascuno ma cap per ETF 15% lo blocca
-    assert all(p["allocation_pct"] == 0.15 for p in out["positions"])
-    assert out["aggregate_pct"] == 0.45
+    # Default cap per-ETF 20% e aggregato 60% (allineati con ETF_MAX_POSITION_SIZE_PCT
+    # e ETF_MAX_AGGREGATE_EXPOSURE_PCT). 3 posizioni × 20% = 60% pieno.
+    assert all(p["allocation_pct"] == 0.20 for p in out["positions"])
+    assert out["aggregate_pct"] == 0.60
 
 
 def test_allocation_excludes_avoid_and_neutral_classes():

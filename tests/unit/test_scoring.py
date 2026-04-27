@@ -42,8 +42,18 @@ def test_score_volume_neutral_when_no_data():
 
 
 def test_score_distance_sweet_spot():
-    # ~8% dal massimo → 100
-    assert score_distance_from_high(close=92, high_52w=100) == 100.0
+    # Peak a 7.5% dal massimo → 100 (piecewise linear smoothing)
+    assert score_distance_from_high(close=92.5, high_52w=100) == 100.0
+
+
+def test_score_distance_smooth_no_boundary_jump():
+    """I vecchi tier discreti facevano salti 100→80 al boundary 10%.
+    La nuova interpolazione produce variazioni continue (nessun jump > 5pt
+    su delta dist di 0.5pp).
+    """
+    s_just_under = score_distance_from_high(close=90.05, high_52w=100)  # dist 0.0995
+    s_just_over = score_distance_from_high(close=89.95, high_52w=100)   # dist 0.1005
+    assert abs(s_just_under - s_just_over) < 1.0
 
 
 def test_score_volatility_optimal():

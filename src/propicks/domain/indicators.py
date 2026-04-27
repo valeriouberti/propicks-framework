@@ -76,10 +76,15 @@ def compute_adx(
     """
     up_move = high.diff()
     down_move = -low.diff()
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    plus_dm_s = pd.Series(plus_dm, index=high.index)
-    minus_dm_s = pd.Series(minus_dm, index=high.index)
+    # `np.where` con NaN propaga False sulle comparazioni → la prima barra
+    # (high.diff() = NaN) collassa silenziosamente a 0.0, biasando lo
+    # smoothing iniziale verso il basso. Manteniamo NaN finché c'è NaN
+    # nelle componenti, allineato col comportamento di compute_atr.
+    nan_mask = up_move.isna() | down_move.isna()
+    plus_raw = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_raw = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    plus_dm_s = pd.Series(plus_raw, index=high.index).where(~nan_mask)
+    minus_dm_s = pd.Series(minus_raw, index=high.index).where(~nan_mask)
 
     prev_close = close.shift(1)
     tr = pd.concat(

@@ -38,7 +38,14 @@ def _enforce_reward_risk(analysis: dict, payload: dict) -> None:
     The model occasionally reports a reward_risk_ratio inconsistent with its
     own suggested stop/target. We overwrite with the arithmetic truth and,
     if the true R/R is below the 2.0 floor, downgrade CONFIRM → CAUTION.
+
+    Quando il modello non fornisce un target esplicito in
+    ``suggested_adjustments``, il sanity layer non può ricalcolare R/R
+    aritmeticamente — ma deve comunque applicare il floor sul valore
+    *reportato* da Claude (parità di trattamento con contrarian, dove
+    reversion_target è required nello schema).
     """
+    ticker = analysis.get("ticker", "?")
     price = analysis.get("price")
     adj = payload.get("suggested_adjustments") or {}
 
@@ -48,29 +55,41 @@ def _enforce_reward_risk(analysis: dict, payload: dict) -> None:
     raw_target = adj.get("target")
     target = raw_target if isinstance(raw_target, (int, float)) else None
 
-    if price is None or stop is None or target is None:
-        return
-    risk = price - stop
-    if risk <= 0:
-        return
-    reward = target - price
-    computed = round(reward / risk, 2) if reward > 0 else 0.0
-
     reported = payload.get("reward_risk_ratio")
-    if not isinstance(reported, (int, float)) or abs(computed - reported) > _RR_TOLERANCE:
-        print(
-            f"[ai] R/R corrected for {analysis.get('ticker', '?')}: "
-            f"reported={reported}, computed={computed:.2f} "
-            f"(entry={price:.2f}, stop={stop:.2f}, target={target:.2f})",
-            file=sys.stderr,
-        )
-        payload["reward_risk_ratio"] = computed
+    can_compute = (
+        isinstance(price, (int, float))
+        and isinstance(stop, (int, float))
+        and isinstance(target, (int, float))
+        and price > stop
+        and target > price
+    )
 
-    if computed < _RR_CONFIRM_FLOOR and payload.get("verdict") == "CONFIRM":
+    if can_compute:
+        risk = price - stop
+        reward = target - price
+        computed = round(reward / risk, 2)
+        if not isinstance(reported, (int, float)) or abs(computed - reported) > _RR_TOLERANCE:
+            print(
+                f"[ai] R/R corrected for {ticker}: "
+                f"reported={reported}, computed={computed:.2f} "
+                f"(entry={price:.2f}, stop={stop:.2f}, target={target:.2f})",
+                file=sys.stderr,
+            )
+            payload["reward_risk_ratio"] = computed
+        effective_rr: float | None = computed
+    else:
+        # Fallback: usa il R/R reportato da Claude per applicare comunque il floor.
+        # Senza questo, una CONFIRM senza target esplicito sfuggirebbe al gate.
+        effective_rr = reported if isinstance(reported, (int, float)) else None
+
+    if (
+        effective_rr is not None
+        and effective_rr < _RR_CONFIRM_FLOOR
+        and payload.get("verdict") == "CONFIRM"
+    ):
         print(
-            f"[ai] Verdict downgraded CONFIRM→CAUTION for "
-            f"{analysis.get('ticker', '?')}: computed R/R {computed:.2f} "
-            f"< floor {_RR_CONFIRM_FLOOR}",
+            f"[ai] Verdict downgraded CONFIRM→CAUTION for {ticker}: "
+            f"R/R {effective_rr:.2f} < floor {_RR_CONFIRM_FLOOR}",
             file=sys.stderr,
         )
         payload["verdict"] = "CAUTION"
@@ -116,7 +135,19 @@ def validate_thesis(
 
     if gate:
         regime = analysis.get("regime")
-        if regime is not None and not regime.get("entry_allowed", True):
+        if regime is None:
+            # Fail-closed: senza classificazione di regime (storia weekly
+            # insufficiente, IPO recenti, ticker thin) non possiamo applicare
+            # il floor macro → meglio skip che spendere AI su setup che il
+            # framework non può inquadrare. Coerente col quality gate
+            # contrarian (fail-closed se EMA200w manca). Override con force=True.
+            print(
+                f"[ai] {analysis.get('ticker', '?')} skipped: weekly regime "
+                f"non disponibile (storia insufficiente) — fail-closed",
+                file=sys.stderr,
+            )
+            return None
+        if not regime.get("entry_allowed", True):
             print(
                 f"[ai] {analysis.get('ticker', '?')} skipped: weekly regime "
                 f"{regime.get('regime', '?')} — no long entries allowed",

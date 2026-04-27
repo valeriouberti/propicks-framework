@@ -7,18 +7,21 @@ Parallelo a ``thesis_validator`` ma con assunzioni diverse:
 - **Gate opzionale su regime**: in STRONG_BEAR la rotazione proposta è
   "flat": chiamare Claude è solo per confermare la decisione di non allocare.
   Utile ma spendere va deciso — default skip, override con ``force=True``.
-- **Cache più lunga (48h)**: la view macro si muove più lenta di una tesi
-  single-name. 48h bilancia freschezza e costo — dopo 48h il regime o la
-  leadership settoriale possono essere cambiati abbastanza da valere un
-  re-check.
+- **Cache breve (8h)**: la view macro si muove più lenta di una tesi
+  single-name, ma il top sector può flippare intraday su catalyst (Fed
+  leak, CPI surprise, geo-shock). Una TTL 48h serviva verdict stale fino a
+  2 giorni dopo il flip; 8h copre la sessione corrente senza arrivare al
+  giorno successivo.
 
-Chiave cache: (region, regime_code, YYYY-MM-DD) — la stessa region nello
-stesso regime nello stesso giorno ha la stessa view macro, non serve
-richiamare.
+Chiave cache: (region, regime_code, hash dei top-3 ranked, YYYY-MM-DD).
+L'hash dei top-3 invalida il cache appena la leadership cambia anche
+all'interno della stessa giornata: stesso regime ma top diverso = view
+macro potenzialmente diversa, va richiamata.
 """
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from datetime import date
 
@@ -32,30 +35,73 @@ from propicks.ai.etf_prompts import render_etf_user_prompt
 from propicks.config import get_etf_benchmark
 from propicks.io.db import ai_verdict_cache_get, ai_verdict_cache_put
 
-_CACHE_VERSION = "etf-v1"
-_CACHE_TTL_HOURS = 48
+_CACHE_VERSION = "etf-v2"
+_CACHE_TTL_HOURS = 8
 _STRATEGY_TAG = "etf_rotation"
+_RANKED_HASH_TOP_N = 3
 
 
-def _cache_key(region: str, regime_code: int | None, day: str) -> str:
-    """Chiave stabile identica al naming legacy: ``rotation_US_3_etf-v1_2026-04-24``."""
+def _ranked_hash(ranked: list[dict] | None, top_n: int = _RANKED_HASH_TOP_N) -> str:
+    """Hash stabile dei top-N ticker per invalidare la cache su flip ranking.
+
+    Usa solo il ticker (non lo score) per evitare cache miss su micro-drift
+    di score che lasciano l'ordinamento invariato. SHA1 troncato a 8 char è
+    largo abbastanza da evitare collisioni nel piccolo universo settoriale
+    (~11 ticker per region).
+    """
+    if not ranked:
+        return "empty"
+    top = [r.get("ticker", "?") for r in ranked[:top_n]]
+    digest = hashlib.sha1("|".join(top).encode("utf-8")).hexdigest()[:8]
+    return digest
+
+
+def _cache_key(
+    region: str, regime_code: int | None, day: str, ranked_hash: str
+) -> str:
+    """Chiave: ``rotation_<REGION>_<REGIME>_<HASH>_<VERSION>_<DAY>``.
+
+    L'hash dei top-3 ranked è incluso per invalidare il cache appena la
+    leadership cambia: stesso regime ma top diverso = view macro
+    potenzialmente diversa, va richiamata.
+    """
     rc = regime_code if regime_code is not None else "NA"
-    return f"rotation_{region}_{rc}_{_CACHE_VERSION}_{day}"
+    return f"rotation_{region}_{rc}_{ranked_hash}_{_CACHE_VERSION}_{day}"
 
 
-def _load_cached(region: str, regime_code: int | None, day: str) -> dict | None:
+def _load_cached(
+    region: str, regime_code: int | None, day: str, ranked_hash: str
+) -> dict | None:
     return ai_verdict_cache_get(
-        _cache_key(region, regime_code, day), ttl_hours=_CACHE_TTL_HOURS
+        _cache_key(region, regime_code, day, ranked_hash),
+        ttl_hours=_CACHE_TTL_HOURS,
     )
 
 
-def _save_cache(region: str, regime_code: int | None, day: str, payload: dict) -> None:
+def _ticker_handle(payload: dict, region: str) -> str:
+    """Handle stabile per audit trail nella tabella ai_verdicts.
+
+    Quando ``top_sector_verdict`` è "FLAT" (forced in STRONG_BEAR) o assente,
+    usiamo "rotation:<REGION>" così che query analitiche non mescolino
+    record di region diverse sotto lo stesso ticker fittizio.
+    """
+    raw = payload.get("top_sector_verdict")
+    if isinstance(raw, str) and raw and raw.upper() != "FLAT":
+        return raw
+    return f"rotation:{region.upper()}"
+
+
+def _save_cache(
+    region: str,
+    regime_code: int | None,
+    day: str,
+    ranked_hash: str,
+    payload: dict,
+) -> None:
     ai_verdict_cache_put(
-        _cache_key(region, regime_code, day),
+        _cache_key(region, regime_code, day, ranked_hash),
         strategy=_STRATEGY_TAG,
-        # La rotation non ha un ticker singolo → usa il top sector verdict
-        # come handle, con fallback a region
-        ticker=payload.get("top_sector_verdict") or region.upper(),
+        ticker=_ticker_handle(payload, region),
         payload=payload,
     )
 
@@ -96,9 +142,10 @@ def validate_rotation(
         return None
 
     day = date.today().isoformat()
+    ranked_hash = _ranked_hash(ranked)
 
     if not force:
-        cached = _load_cached(region, regime_code, day)
+        cached = _load_cached(region, regime_code, day, ranked_hash)
         if cached is not None:
             cached["_cache_hit"] = True
             return cached
@@ -125,6 +172,6 @@ def validate_rotation(
 
     record_call()
     payload = verdict.model_dump()
-    _save_cache(region, regime_code, day, payload)
+    _save_cache(region, regime_code, day, ranked_hash, payload)
     payload["_cache_hit"] = False
     return payload

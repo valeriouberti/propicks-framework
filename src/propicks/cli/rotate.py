@@ -4,7 +4,7 @@ Esempi:
     propicks-rotate                        # US universe (SPDR Select Sector), top 3
     propicks-rotate --top 5                # US, top 5
     propicks-rotate --region EU            # SPDR UCITS su Xetra (ZPD*.DE)
-    propicks-rotate --region WORLD         # Xtrackers MSCI World sector (XDW*/XWTS/XZRE)
+    propicks-rotate --region WORLD         # Xtrackers MSCI World sector (XDW*/XWTS) + IQQ6 RE proxy
     propicks-rotate --allocate             # include proposta allocazione
     propicks-rotate --validate             # validazione macro via Claude
     propicks-rotate --json                 # output JSON
@@ -80,7 +80,7 @@ def print_rotation_table(ranked: list[dict]) -> None:
     print(tabulate(rows, headers=headers, tablefmt="github"))
     has_cap = any(r.get("regime_cap_applied") for r in ranked)
     if has_cap:
-        print("\n  * = score capped dal regime (non-favored in BEAR/STRONG_BEAR)")
+        print("\n  * = score capped dal regime (non-favored in NEUTRAL/BEAR/STRONG_BEAR)")
 
 
 def print_top_detail(r: dict) -> None:
@@ -201,7 +201,8 @@ def main() -> int:
         default="US",
         help=(
             "Universo: SPDR US (XL*), SPDR UCITS (ZPD*.DE), "
-            "Xtrackers MSCI World (XDW*/XWTS/XZRE), o ALL."
+            "Xtrackers MSCI World 10 settori (XDW*/XWTS) + IQQ6.DE come "
+            "proxy Real Estate (no Xtrackers RE world esistente), o ALL."
         ),
     )
     parser.add_argument(

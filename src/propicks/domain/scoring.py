@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 
+import numpy as np
 import pandas as pd
 
 from propicks.config import (
@@ -84,42 +85,74 @@ def score_momentum(rsi: float) -> float:
     return 15.0
 
 
-def score_volume(current_volume: float, avg_volume: float) -> float:
+def score_volume(
+    current_volume: float,
+    avg_volume: float,
+    direction: float | None = None,
+) -> float:
+    """Score volume relativo, asimmetrico per direzione del prezzo.
+
+    ``direction`` è il segno del movimento giornaliero (close - prev_close,
+    o equivalente). Quando passato, volume alto su up-day = conviction, su
+    down-day = distribuzione/panic e viene penalizzato. Senza direction
+    (default) il comportamento è simmetrico (back-compat).
+
+    Calibrazione intuitiva: ratio 5× su breakout green-day = high conviction
+    breakout (score 100), su capitulation red-day = panic selling (score 15).
+    Lo scoring vecchio trattava entrambi a 60 — segnale ambiguo.
+    """
     if pd.isna(current_volume) or pd.isna(avg_volume) or avg_volume <= 0:
         return 50.0
     ratio = current_volume / avg_volume
+
     if 1.2 <= ratio < 2.0:
-        return 100.0
-    if 2.0 <= ratio < 3.0:
-        return 80.0
-    if 1.0 <= ratio < 1.2:
-        return 70.0
-    if ratio >= 3.0:
-        return 60.0
-    if 0.7 <= ratio < 1.0:
-        return 50.0
-    if 0.5 <= ratio < 0.7:
-        return 30.0
-    return 15.0
+        base = 100.0
+    elif 2.0 <= ratio < 3.0:
+        base = 80.0
+    elif 1.0 <= ratio < 1.2:
+        base = 70.0
+    elif ratio >= 3.0:
+        base = 60.0
+    elif 0.7 <= ratio < 1.0:
+        base = 50.0
+    elif 0.5 <= ratio < 0.7:
+        base = 30.0
+    else:
+        base = 15.0
+
+    if direction is None or ratio < 1.2:
+        return base
+
+    if direction > 0:
+        if ratio >= 3.0:
+            return 100.0
+        return base
+    if direction < 0:
+        if 1.2 <= ratio < 2.0:
+            return 35.0
+        if 2.0 <= ratio < 3.0:
+            return 25.0
+        return 15.0
+    return base
+
+
+_DIST_FROM_HIGH_X = (0.00, 0.03, 0.05, 0.075, 0.10, 0.125, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50)
+_DIST_FROM_HIGH_Y = (75.0, 75.0, 85.0, 100.0, 95.0, 90.0, 80.0, 65.0, 50.0, 40.0, 30.0, 10.0)
 
 
 def score_distance_from_high(close: float, high_52w: float) -> float:
+    """Score sweet-spot 5-10% sotto l'ATH (peak a ~7.5% dal massimo).
+
+    Interpolazione lineare a tratti tra i control point (vedi
+    ``_DIST_FROM_HIGH_X``/``_DIST_FROM_HIGH_Y``). Smussa i jump dei vecchi
+    tier discreti che facevano oscillare la classificazione A/B su titoli
+    che attraversavano i boundary giornalmente (es. dist 0.099 vs 0.101 →
+    100 vs 80, swing di 3 pt sul composite).
+    """
     if pd.isna(close) or pd.isna(high_52w) or high_52w <= 0:
         return 0.0
     dist = (high_52w - close) / high_52w
-    if dist < 0.03:
-        return 75.0
-    if dist < 0.05:
-        return 85.0
-    if dist < 0.10:
-        return 100.0
-    if dist < 0.15:
-        return 80.0
-    if dist < 0.25:
-        return 50.0
-    if dist < 0.35:
-        return 30.0
-    return 10.0
+    return float(np.interp(dist, _DIST_FROM_HIGH_X, _DIST_FROM_HIGH_Y))
 
 
 def score_volatility(atr: float, close: float) -> float:
@@ -237,13 +270,21 @@ def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
     avg_vol = float(prev_window.mean()) if not prev_window.empty else cur_vol
     high_52w = float(high.tail(min(252, len(high))).max())
 
+    # Direction = segno del close-to-close giornaliero. Serve a discriminare
+    # volume su breakout green-day (conviction) vs panic red-day (distribuzione).
+    if len(close) >= 2:
+        prev_close = float(close.iloc[-2])
+        direction = price - prev_close if prev_close > 0 else None
+    else:
+        direction = None
+
     prev_ema_fast = float(ema_fast_s.iloc[-6]) if len(ema_fast_s) >= 6 else float("nan")
     prev_ema_slow = float(ema_slow_s.iloc[-6]) if len(ema_slow_s) >= 6 else float("nan")
 
     sub = {
         "trend": score_trend(price, ema_fast, ema_slow),
         "momentum": score_momentum(rsi),
-        "volume": score_volume(cur_vol, avg_vol),
+        "volume": score_volume(cur_vol, avg_vol, direction=direction),
         "distance_high": score_distance_from_high(price, high_52w),
         "volatility": score_volatility(atr, price),
         "ma_cross": score_ma_cross(ema_fast, ema_slow, prev_ema_fast, prev_ema_slow),
@@ -272,7 +313,12 @@ def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
         "atr_pct": round(atr / price, 4) if price else None,
         "avg_volume": int(avg_vol),
         "current_volume": int(cur_vol),
+        # Quando avg_vol = 0 il sub-score "volume" è neutralizzato a 50
+        # (vedi score_volume): esponiamo None come sentinel di
+        # "ratio non calcolabile" — il display layer deve mostrare la
+        # neutralizzazione, non un'assenza di segnale.
         "volume_ratio": round(cur_vol / avg_vol, 2) if avg_vol else None,
+        "volume_neutralized": avg_vol == 0,
         "high_52w": round(high_52w, 2),
         "distance_from_high_pct": round((high_52w - price) / high_52w, 4) if high_52w else None,
         "scores": {k: round(v, 1) for k, v in sub.items()},

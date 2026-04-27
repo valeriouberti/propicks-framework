@@ -24,23 +24,33 @@ accumulating. Tesi di rotazione unica con US; il trader sceglie il listing in
 base a fiscalità e liquidità.
 
 ### 1.3 WORLD — `SECTOR_ETFS_WORLD`
-Xtrackers MSCI World sector UCITS (serie `XDW*.DE`, più `XWTS.DE` per
-communications e `XZRE.DE` per real estate). Perimetro MSCI World (developed
+Xtrackers MSCI World sector UCITS — serie `XDW*.DE` per i nove settori GICS
+"core" più `XWTS.DE` per communications. Perimetro MSCI World (developed
 markets, ~65-70% US + ~15% Europa + ~6% Giappone), **non è un mirror dei SPDR**
 — settori world includono nomi europei/giapponesi con dinamica diversa
 (es. energy con Shell/TotalEnergies vs Chevron/Exxon puri US).
 
+**Real Estate WORLD — eccezione di perimetro**: NON esiste un Xtrackers MSCI
+World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS su
+11). Il proxy più simile, liquido su Xetra/yfinance, è **`IQQ6.DE`** (iShares
+Developed Markets Property Yield UCITS, ISIN IE00B1FZS350). Questo NON è un
+fund Xtrackers: issuer iShares (BlackRock) e perimetro REIT developed
+**filtrati per dividend yield ≥ 2%**. Esclude REIT senza yield significativo
+(growth/non-yield REIT) → composizione income-tilted vs full GICS Real Estate
+world. Asimmetria nota e accettata per chiudere il bucket; il sub-score
+`regime_fit` per `sector_key="real_estate"` si applica con questo trade-off.
+
 ### 1.4 Eccezioni e gotchas
 
 - `XLRE` non ha SPDR US Real Estate Select Sector UCITS equivalente
-  (`eu_equivalent=None`). La serie WORLD copre real_estate via `XZRE.DE`
-  (lanciato 2021 post-GICS reshuffle, ISIN separato dalla serie XDW* core).
+  (`eu_equivalent=None`). Per la WORLD, vedi nota su `IQQ6.DE` qui sopra:
+  proxy iShares Property Yield, non un Xtrackers GICS Real Estate.
 - `XWTS.DE` è l'outlier naming della serie WORLD (communications); riflette il
   GICS 2018 reshuffle, include Meta/Alphabet/Netflix come XLC US.
-- Listing Xetra `ZPD*` e `XDW*` sono accumulating (IE-domiciled). Alcuni broker
-  retail EU non quotano `XWTS` o `XZRE` su Xetra — fallback su listing Milano
-  (`.MI`) se disponibile. Varianti distributing su LSE hanno ticker diversi e
-  non sono registrate qui.
+- Listing Xetra `ZPD*`, `XDW*` e `IQQ6` sono accumulating (IE-domiciled).
+  Alcuni broker retail EU non quotano `XWTS` o `IQQ6` su Xetra — fallback su
+  listing Milano (`.MI`) se disponibile. Varianti distributing su LSE hanno
+  ticker diversi e non sono registrate qui.
 
 ### 1.5 Benchmark RS per region
 
@@ -127,7 +137,7 @@ workflow diverso dal setup single-stock e merita un comando suo.
 propicks-rotate                        # US (SPDR Select Sector), top 3
 propicks-rotate --top 5                # US, top 5
 propicks-rotate --region EU            # SPDR UCITS (ZPD*.DE)
-propicks-rotate --region WORLD         # Xtrackers MSCI World (XDW*/XWTS/XZRE)
+propicks-rotate --region WORLD         # Xtrackers MSCI World 10 settori (XDW*/XWTS) + IQQ6.DE proxy RE
 propicks-rotate --allocate             # include proposta allocazione
 propicks-rotate --validate             # validazione macro via Claude
 propicks-rotate --json                 # output JSON

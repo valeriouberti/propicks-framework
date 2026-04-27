@@ -59,7 +59,12 @@ def print_analysis(r: dict) -> None:
         ["ATR(14)", f"{r['atr']:.2f}  ({(r['atr_pct'] or 0) * 100:.2f}% del prezzo)"],
         [
             "Volume corrente / medio",
-            f"{r['current_volume']:,} / {r['avg_volume']:,}  ({r['volume_ratio']}x)",
+            f"{r['current_volume']:,} / {r['avg_volume']:,}  "
+            + (
+                "(ratio n/a — sub-score neutralizzato a 50)"
+                if r.get("volume_neutralized")
+                else f"({r['volume_ratio']}x)"
+            ),
         ],
         [
             "Massimo 52w",
@@ -220,31 +225,6 @@ def print_tradingview_block(r: dict) -> None:
     print()
 
 
-def print_copy_paste(results: list[dict]) -> None:
-    """Blocco pronto da incollare nel prompt Claude 3A."""
-    print()
-    print("=" * 70)
-    print("COPIA/INCOLLA per prompt Claude 3A")
-    print("=" * 70)
-    for r in results:
-        s = r["scores"]
-        strategy = r["strategy"] or "N/A"
-        print(
-            f"TICKER: {r['ticker']}  |  STRATEGIA: {strategy}\n"
-            f"PREZZO: {r['price']:.2f}  |  STOP SUGG: {r['stop_suggested']:.2f} "
-            f"({(r['stop_pct'] or 0) * 100:+.2f}%)\n"
-            f"SCORE TECNICO: {r['score_composite']:.1f}/100 ({r['classification']})\n"
-            f"  Trend {s['trend']:.0f} | Mom {s['momentum']:.0f} | "
-            f"Vol {s['volume']:.0f} | DistH {s['distance_high']:.0f} | "
-            f"Volat {s['volatility']:.0f} | MA× {s['ma_cross']:.0f}\n"
-            f"RSI {r['rsi']:.1f} | ATR {(r['atr_pct'] or 0) * 100:.2f}% | "
-            f"Vol×{r['volume_ratio']} | DistHigh {(r['distance_from_high_pct'] or 0) * 100:.2f}%\n"
-            f"Perf: 1w {_fmt_pct(r['perf_1w'])}  1m {_fmt_pct(r['perf_1m'])}  "
-            f"3m {_fmt_pct(r['perf_3m'])}"
-        )
-        print("-" * 70)
-
-
 def _auto_watchlist_actionable(results: list[dict]) -> None:
     """Aggiunge i ticker classe A e B alla watchlist e stampa le modifiche su stderr.
 
@@ -365,7 +345,6 @@ def main() -> int:
         for r in results:
             print_ai_verdict(r)
             print_tradingview_block(r)
-    # print_copy_paste(results)
     return 0
 
 

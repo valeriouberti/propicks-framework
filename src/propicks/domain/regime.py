@@ -6,11 +6,15 @@ domanda — *"il contesto macro supporta long su questo titolo?"*.
 
 Bucket ritornati (mirror esatto del Pine, linee 108-112):
 
-    5 = STRONG_BULL   close sopra tutte le EMA, trend forte, momentum bull
+    5 = STRONG_BULL   close sopra tutte le EMA, trend_bull, ADX strong, momentum bull
     4 = BULL          EMA fast > slow e close > EMA 200d, momentum bull
     3 = NEUTRAL       tutto il resto
     2 = BEAR          EMA fast < slow e close < EMA 200d, momentum bear
-    1 = STRONG_BEAR   close sotto tutte le EMA, trend forte, momentum bear
+    1 = STRONG_BEAR   close sotto tutte le EMA, trend_bear, ADX strong, momentum bear
+
+STRONG_BULL/STRONG_BEAR richiedono esplicitamente ``trend_bull``/``trend_bear``:
+``above_all`` da solo include configurazioni di pullback (price sopra EMA200
+ma EMA fast in catch-up sotto EMA slow) che non meritano l'etichetta più alta.
 
 ``entry_allowed = regime >= 3`` è lo stesso filtro del Pine.
 """
@@ -97,11 +101,11 @@ def classify_regime(weekly: pd.DataFrame) -> dict | None:
     above_all = price > ema_fast and price > ema_slow and price > ema_200d
     below_all = price < ema_fast and price < ema_slow and price < ema_200d
 
-    if above_all and trend_strong and momentum_bull:
+    if above_all and trend_bull and trend_strong and momentum_bull:
         code = 5
     elif trend_bull and momentum_bull:
         code = 4
-    elif below_all and trend_strong and momentum_bear:
+    elif below_all and trend_bear and trend_strong and momentum_bear:
         code = 1
     elif trend_bear and momentum_bear:
         code = 2
