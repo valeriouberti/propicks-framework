@@ -217,25 +217,26 @@ for r in results:
             st.code(perplexity_2c(r["ticker"]), language=None)
 
         # -----------------------------------------------------------------
-        # Fallback Claude --validate — prompt completo per LLM alternativi
-        # quando l'API Anthropic è down o la chiave è esaurita.
+        # Fallback validate completo — prompt multi-modello (Perplexity primary,
+        # compat con Claude SDK/web app e altri LLM) quando l'API Anthropic è
+        # down, la chiave è esaurita o il budget AI è saturo.
         # -----------------------------------------------------------------
         with st.expander(
-            "Prompt Claude --validate completo (fallback LLM alternativo)",
+            "Prompt --validate completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
             expanded=False,
         ):
             from datetime import date as _date
 
-            from propicks.ai.user_prompts import claude_stock_validate_fallback
+            from propicks.ai.user_prompts import perplexity_stock_validate_full
 
             st.caption(
-                "Ricostruisce byte-per-byte il payload (system + user + schema) "
-                "che `propicks-scan --validate` manda ad Anthropic. Incollalo "
-                "in ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
-                "Lo schema JSON è inline a fondo prompt — il modello risponderà "
-                "in formato strutturato parsabile."
+                "Ricostruisce il payload (model guidance + system + user + schema) "
+                "di `propicks-scan --validate`. Il system prompt Anthropic è intatto "
+                "byte-per-byte → compatibile con SDK Claude / claude.ai senza modifiche. "
+                "Header iniziale guida i modelli Perplexity (Sonar / Sonar Pro / Reasoning) "
+                "e altri LLM. Schema JSON tollerante con fallback `---JSON---` separator."
             )
-            _fallback = claude_stock_validate_fallback(r, _date.today().isoformat())
+            _fallback = perplexity_stock_validate_full(r, _date.today().isoformat())
             st.caption(
                 f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
                 "Verifica la context window del modello target prima di incollare."

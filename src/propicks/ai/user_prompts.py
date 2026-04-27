@@ -206,21 +206,67 @@ def is_italian_ticker(ticker: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Claude --validate fallback: prompt completo da incollare in un altro LLM
+# Validate fallback: prompt completi per LLM alternativi (Perplexity primary)
 # ---------------------------------------------------------------------------
-# Ricostruisce byte-per-byte il payload che ``thesis_validator.validate_thesis``
-# (stock) o ``etf_validator.validate_rotation`` (ETF) manda all'API Anthropic.
-# Serve come piano B quando l'API Anthropic è down, la chiave è esaurita o
-# vuoi un secondo parere da un LLM alternativo (ChatGPT, Gemini, ecc).
+# Ricostruisce il payload che ``thesis_validator.validate_thesis`` (stock),
+# ``contrarian_validator.validate_contrarian_thesis`` (contrarian) o
+# ``etf_validator.validate_rotation`` (ETF) manda all'API Anthropic. Serve
+# come piano B quando l'API Anthropic è down, la chiave è esaurita, il budget
+# giornaliero è saturo, o vuoi un secondo parere da un LLM alternativo.
 #
-# NB: lo schema JSON è incluso come istruzione finale perché Claude SDK lo
-# enforce-a server-side; con un LLM generico bisogna chiederglielo in prompt.
+# **Target principale: Perplexity multi-modello** (Sonar / Sonar Pro / Sonar
+# Reasoning / Claude Opus via Pro / GPT-5 via Pro / Gemini via Pro). Perplexity
+# ha web search built-in sempre attiva → la sezione "Web search usage" del
+# system prompt va contestualizzata, non rimossa (i SYSTEM_PROMPT in
+# ``ai/*_prompts.py`` sono frozen per cache Anthropic — qualsiasi byte cambiato
+# invalida il prompt cache lato SDK).
+#
+# Pattern: model-guidance header + system prompt INTATTO + user prompt
+# parametrizzato + schema JSON come istruzione finale tollerante.
+#
+# **Compatibilità API Claude/Anthropic**: il payload ricostruito è
+# byte-equivalente a quello inviato dall'SDK (``claude_client.py``). Funziona
+# pari pari incollato in Claude web app, console.anthropic.com, o qualsiasi
+# integrazione che riceve il system+user concatenati. Il model-guidance header
+# è prefisso prosaico, non interferisce con la logica del system prompt.
 
-_SCHEMA_INSTRUCTION_STOCK = """
+_PERPLEXITY_HEADER = """# MODEL GUIDANCE — leggi prima di rispondere
+
+Stai ricevendo questo prompt come fallback dell'integrazione SDK Anthropic.
+Adattati al tuo ambiente:
+
+- **Perplexity Sonar / Sonar Pro / Sonar Reasoning**: la web search è attiva
+  automaticamente. Ignora la sezione "# Web search usage" del system prompt
+  qui sotto — non hai un budget di tool calls da gestire, fai pure tutte le
+  ricerche che servono per produrre dati verificabili. Lo schema JSON finale
+  è enforce-friendly per i Sonar; rispondi SOLO col JSON.
+- **Claude (Opus / Sonnet / Haiku) via Perplexity Pro o claude.ai**: segui
+  il system prompt come è scritto — usa il tool `web_search` se disponibile
+  nel tuo ambiente; se non c'è, scrivi "unknown — search unavailable" nei
+  campi che richiedono dati real-time. Schema JSON enforce-friendly.
+- **GPT-4o / GPT-5 / Gemini via Perplexity Pro o web app diretta**: cerca
+  online quando il system prompt te lo chiede; se la search non è
+  disponibile, sii esplicito sul gap. Alcuni modelli ignorano "rispondi solo
+  con JSON" e prefissano prosa: in quel caso usa il separator alla fine.
+- **Modelli senza JSON mode strict**: se non riesci a produrre JSON valido,
+  rispondi prima in prosa (max 200 parole), poi inserisci il separator
+  `---JSON---` e infine il JSON. Il sistema downstream gestisce entrambi i
+  formati.
 
 ---
 
-Rispondi esclusivamente con un oggetto JSON valido che rispetti QUESTO schema (nessun testo prima o dopo):
+"""
+
+_SCHEMA_INSTRUCTION_PERPLEXITY = """
+
+---
+
+# OUTPUT SCHEMA
+
+Rispondi con un oggetto JSON valido che rispetti questo schema. **Preferito**:
+solo il JSON, nessun testo prima o dopo. **Fallback** (se il tuo modello non
+supporta JSON mode strict): prosa breve di analisi (max 200 parole) +
+separator `---JSON---` + JSON valido sotto.
 
 ```json
 {schema}
@@ -233,33 +279,38 @@ def _format_schema_block(schema: dict) -> str:
     return json.dumps(schema, indent=2, ensure_ascii=False)
 
 
-def claude_stock_validate_fallback(analysis: dict, as_of_date: str) -> str:
-    """Prompt completo stock ``--validate`` — fallback per LLM alternativi.
+def perplexity_stock_validate_full(analysis: dict, as_of_date: str) -> str:
+    """Prompt completo stock ``--validate`` — fallback Perplexity multi-modello.
 
-    Concatena system prompt, user prompt e istruzione di schema JSON. Output
-    pronto per ``st.code()`` o clipboard.
+    Concatena: model-guidance header (Perplexity-specifico) + system prompt
+    Anthropic INTATTO (byte-per-byte come inviato all'SDK) + user prompt
+    parametrizzato + schema JSON tollerante. Compatibile col workflow API
+    Claude (incollabile in claude.ai senza modifiche).
+
+    Output pronto per ``st.code()`` o clipboard.
     """
     # Import lazy per evitare ciclo (claude_client importa pydantic/anthropic).
     from propicks.ai.claude_client import _JSON_SCHEMA
     from propicks.ai.prompts import SYSTEM_PROMPT, render_user_prompt
 
     user = render_user_prompt(analysis, as_of_date=as_of_date)
-    schema_block = _SCHEMA_INSTRUCTION_STOCK.format(
+    schema_block = _SCHEMA_INSTRUCTION_PERPLEXITY.format(
         schema=_format_schema_block(_JSON_SCHEMA)
     )
     return (
-        "# SYSTEM\n\n" + SYSTEM_PROMPT.rstrip() + "\n\n"
-        "# USER\n\n" + user.rstrip() + schema_block
+        _PERPLEXITY_HEADER
+        + "# SYSTEM\n\n" + SYSTEM_PROMPT.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
     )
 
 
-def claude_contrarian_validate_fallback(analysis: dict, as_of_date: str) -> str:
-    """Prompt completo contrarian ``--validate`` — fallback per LLM alternativi.
+def perplexity_contrarian_validate_full(analysis: dict, as_of_date: str) -> str:
+    """Prompt completo contrarian ``--validate`` — fallback Perplexity multi-modello.
 
-    Concatena ``CONTRA_SYSTEM_PROMPT`` (event-driven / mean-reversion PM
-    persona) + user prompt parametrizzato + schema JSON ``_CONTRA_JSON_SCHEMA``.
-    Output pronto per ``st.code()`` o clipboard. Stesso pattern di
-    ``claude_stock_validate_fallback`` ma con prompt e schema contrarian.
+    Stesso pattern di ``perplexity_stock_validate_full`` ma con
+    ``CONTRA_SYSTEM_PROMPT`` (event-driven / mean-reversion PM persona) +
+    schema ``_CONTRA_JSON_SCHEMA``. System prompt Anthropic intatto per
+    compat con SDK Claude.
     """
     from propicks.ai.claude_client import _CONTRA_JSON_SCHEMA
     from propicks.ai.contrarian_prompts import (
@@ -268,16 +319,17 @@ def claude_contrarian_validate_fallback(analysis: dict, as_of_date: str) -> str:
     )
 
     user = render_contrarian_user_prompt(analysis, as_of_date=as_of_date)
-    schema_block = _SCHEMA_INSTRUCTION_STOCK.format(
+    schema_block = _SCHEMA_INSTRUCTION_PERPLEXITY.format(
         schema=_format_schema_block(_CONTRA_JSON_SCHEMA)
     )
     return (
-        "# SYSTEM\n\n" + CONTRA_SYSTEM_PROMPT.rstrip() + "\n\n"
-        "# USER\n\n" + user.rstrip() + schema_block
+        _PERPLEXITY_HEADER
+        + "# SYSTEM\n\n" + CONTRA_SYSTEM_PROMPT.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
     )
 
 
-def claude_etf_validate_fallback(
+def perplexity_etf_validate_full(
     ranked: list[dict],
     allocation: dict | None,
     as_of_date: str,
@@ -285,10 +337,10 @@ def claude_etf_validate_fallback(
     benchmark: str,
     shown: int = 11,
 ) -> str:
-    """Prompt completo ETF rotation ``--validate`` — fallback per LLM alternativi.
+    """Prompt completo ETF rotation ``--validate`` — fallback Perplexity multi-modello.
 
-    Signature coincide con ``render_etf_user_prompt`` per minimizzare drift
-    se quella cambia.
+    Signature coincide con ``render_etf_user_prompt`` per minimizzare drift se
+    quella cambia. System prompt Anthropic intatto per compat con SDK Claude.
     """
     from propicks.ai.claude_client import _ETF_JSON_SCHEMA
     from propicks.ai.etf_prompts import ETF_SYSTEM_PROMPT, render_etf_user_prompt
@@ -301,10 +353,87 @@ def claude_etf_validate_fallback(
         benchmark=benchmark,
         shown=shown,
     )
-    schema_block = _SCHEMA_INSTRUCTION_STOCK.format(
+    schema_block = _SCHEMA_INSTRUCTION_PERPLEXITY.format(
         schema=_format_schema_block(_ETF_JSON_SCHEMA)
     )
     return (
-        "# SYSTEM\n\n" + ETF_SYSTEM_PROMPT.rstrip() + "\n\n"
-        "# USER\n\n" + user.rstrip() + schema_block
+        _PERPLEXITY_HEADER
+        + "# SYSTEM\n\n" + ETF_SYSTEM_PROMPT.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
     )
+
+
+def perplexity_etf_rotation(ranked: list[dict], region: str) -> str:
+    """Prompt sintetico Perplexity per ETF rotation — equivalente di ``perplexity_2a``.
+
+    Cross-check catalyst-focused per la rotation settoriale, prosa free-form
+    senza JSON schema (per quello c'è ``perplexity_etf_validate_full``). Da
+    usare per un secondo paio di occhi sulla view macro: rotation flows,
+    sector breadth, FOMC/CPI imminent, narrative shift.
+
+    Args:
+        ranked: output di ``rank_universe`` (ordinato per score). Usa i top-3
+            ticker e sector_key per personalizzare le domande.
+        region: ``US`` | ``EU`` | ``WORLD`` | ``ALL`` — va in prompt per context.
+    """
+    top = ranked[:3] if ranked else []
+    if not top:
+        top_str = "(nessun candidato top)"
+    else:
+        top_str = ", ".join(
+            f"{r.get('ticker', '?')} ({r.get('sector_key', '?')})" for r in top
+        )
+
+    region_label = {
+        "US": "US (SPDR Select Sector)",
+        "EU": "EU (SPDR UCITS su Xetra)",
+        "WORLD": "WORLD (Xtrackers MSCI World + IQQ6 RE proxy)",
+        "ALL": "mix US+WORLD",
+    }.get(region.upper(), region)
+
+    return f"""Sto valutando una rotazione su ETF settoriali — region {region_label}.
+I top-3 candidati per score (RS vs benchmark + regime fit + abs momentum + trend) sono:
+
+{top_str}
+
+Ho bisogno di un cross-check macro/catalyst sui prossimi 4-12 settimane:
+
+1. ROTATION FLOWS RECENTI (ultimi 30 giorni):
+   - Quali settori stanno attraendo flussi netti (ETF AUM, fund flows da Reuters/Bloomberg)?
+   - C'è un re-rating in corso (multipli che si espandono/comprimono)?
+   - Sector breadth: quanti titoli del settore stanno facendo nuovi 52w high/low?
+
+2. MACRO IMMINENT (prossime 2-4 settimane):
+   - Ci sono FOMC, CPI, NFP, ECB nelle prossime 2-4 settimane? Date esatte.
+   - Possibile sorpresa hawkish/dovish nei dati? Quale settore ne beneficia/soffre?
+   - Yield curve: 10Y-2Y in steepening o flattening? Quale settore è correlato positivamente?
+
+3. SECTOR-SPECIFIC NARRATIVE (per ogni top-3):
+   - C'è una narrativa dominante sul settore (es. AI capex, energy security, healthcare M&A)?
+   - I peer relativi (es. {top[0].get('ticker', '?') if top else '?'} vs altri ETF dello stesso settore) sono allineati o c'è dispersion?
+   - Earnings season imminente: quali heavyweight del settore riportano e quando?
+
+4. RED FLAGS:
+   - C'è un settore favorito dal regime ma penalizzato da catalyst recenti (es. tech in BULL ma con guidance cut sui mega cap)?
+   - Politiche/regolatorie che potrebbero invertire il trend (es. tariffe, antitrust, ESG)?
+   - Concentration risk: il top-pick è dominato da 3-5 nomi che potrebbero zoppicare insieme?
+
+5. ALTERNATIVE SECTOR:
+   - Se non i top-3, quale settore è il "next-in-line" che il framework potrebbe non aver pesato abbastanza? Perché?
+
+Rispondi con dati precisi (date, %, fonti). Se la search non trova evidenza
+chiara su un punto, dillo esplicitamente — meglio un "unknown" che un'opinione
+generica. Niente disclaimer, niente "consultare un consulente": cerco solo
+fatti macro verificabili."""
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compat aliases (deprecati, da rimuovere in prossima major release)
+# ---------------------------------------------------------------------------
+# Mantenuti per non rompere import esterni o altri tool che chiamano i vecchi
+# nomi. I nomi nuovi (``perplexity_*_validate_full``) sono più onesti sul
+# destinatario reale del prompt.
+
+claude_stock_validate_fallback = perplexity_stock_validate_full
+claude_contrarian_validate_fallback = perplexity_contrarian_validate_full
+claude_etf_validate_fallback = perplexity_etf_validate_full

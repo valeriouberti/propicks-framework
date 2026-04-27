@@ -525,26 +525,26 @@ for r in results:
             st.code(perplexity_2c(r["ticker"]), language=None)
 
         # -----------------------------------------------------------------
-        # Fallback Claude --validate completo per LLM alternativi quando
-        # l'API Anthropic è down o la chiave è esaurita.
+        # Fallback validate completo — prompt multi-modello (Perplexity primary,
+        # compat con Claude SDK/web app e altri LLM) per cross-check FLUSH/BREAK.
         # -----------------------------------------------------------------
         with st.expander(
-            "Prompt Claude --validate contrarian completo (fallback LLM alternativo)",
+            "Prompt --validate contrarian completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
             expanded=False,
         ):
             from datetime import date as _date
 
-            from propicks.ai.user_prompts import claude_contrarian_validate_fallback
+            from propicks.ai.user_prompts import perplexity_contrarian_validate_full
 
             st.caption(
-                "Ricostruisce byte-per-byte il payload (system + user + schema) "
-                "che `propicks-contra --validate` manda ad Anthropic. Persona del "
-                "system prompt: senior event-driven / mean-reversion PM. Incollalo "
-                "in ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
-                "Lo schema JSON è inline a fondo prompt — il modello risponderà in "
-                "formato strutturato parsabile."
+                "Ricostruisce il payload (model guidance + system + user + schema) "
+                "di `propicks-contra --validate`. Persona system prompt: senior "
+                "event-driven / mean-reversion PM. Anthropic byte-per-byte intatto "
+                "→ compat SDK Claude / claude.ai senza modifiche. Header iniziale "
+                "guida Perplexity multi-modello. Schema JSON con fallback "
+                "`---JSON---` per modelli senza JSON mode strict."
             )
-            _fallback = claude_contrarian_validate_fallback(
+            _fallback = perplexity_contrarian_validate_full(
                 r, _date.today().isoformat()
             )
             st.caption(

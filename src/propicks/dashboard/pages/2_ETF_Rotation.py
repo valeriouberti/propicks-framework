@@ -193,23 +193,41 @@ if allocate:
         )
 
 # ---------------------------------------------------------------------------
-# Fallback Claude --validate — prompt completo per LLM alternativi
+# Prompt esterni (Perplexity ETF rotation) — cross-check sintetico stile
+# perplexity_2a per stock. Catalyst-focused, prosa free-form, niente JSON.
+# ---------------------------------------------------------------------------
+with st.expander("Prompt Perplexity rotation (copia-incolla)", expanded=False):
+    from propicks.ai.user_prompts import perplexity_etf_rotation
+
+    st.caption(
+        "Cross-check macro/catalyst indipendente a `--validate` Claude. "
+        "Focus su rotation flows, sector breadth, FOMC/CPI imminent, "
+        "narrative shift. Output prosa free-form (per il payload completo "
+        "con schema JSON vedi il fallback più sotto)."
+    )
+    st.markdown("**ETF rotation — analisi macro/catalyst** (top-3 personalizzato)")
+    st.code(perplexity_etf_rotation(ranked, region), language=None)
+
+# ---------------------------------------------------------------------------
+# Fallback validate completo — prompt multi-modello (Perplexity primary,
+# compat con Claude SDK/web app e altri LLM) quando l'API Anthropic è giù.
 # ---------------------------------------------------------------------------
 with st.expander(
-    "Prompt Claude --validate completo (fallback LLM alternativo)",
+    "Prompt --validate completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
     expanded=False,
 ):
     from datetime import date as _date
 
-    from propicks.ai.user_prompts import claude_etf_validate_fallback
+    from propicks.ai.user_prompts import perplexity_etf_validate_full
 
     st.caption(
-        "Ricostruisce il payload (system + user + schema) che "
-        "`propicks-rotate --validate` manda ad Anthropic. Incollalo in "
-        "ChatGPT / Gemini / altro LLM quando Claude è indisponibile. "
-        "Schema JSON inline a fondo prompt → risposta strutturata parsabile."
+        "Ricostruisce il payload (model guidance + system + user + schema) "
+        "di `propicks-rotate --validate`. System prompt Anthropic intatto "
+        "byte-per-byte → compat SDK Claude / claude.ai senza modifiche. "
+        "Header iniziale guida Perplexity multi-modello (Sonar/Reasoning/Pro). "
+        "Schema JSON con fallback `---JSON---` per modelli non-strict."
     )
-    _fallback = claude_etf_validate_fallback(
+    _fallback = perplexity_etf_validate_full(
         ranked=ranked,
         allocation=allocation,
         as_of_date=_date.today().isoformat(),
