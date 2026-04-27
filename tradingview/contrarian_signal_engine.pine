@@ -19,9 +19,12 @@
 // COME USARLO:
 // 1. Apri il chart sul timeframe DAILY del titolo da valutare
 // 2. Configura il VIX Symbol (default ^VIX) — pilota il market_context
-// 3. Quality gate hardcoded: se EMA200w manca o price sotto EMA200w,
-//    composite=0 indipendentemente dal resto. Mean reversion su trend
-//    rotto = falling knife.
+// 3. Quality gate hardcoded su EMA40 weekly (≈ EMA200 daily ma calcolata
+//    correttamente sul timeframe weekly via request.security). Sotto questa
+//    EMA → composite forzato a 0. Mean reversion su trend rotto = falling
+//    knife. NB: usare daily EMA200 al posto della weekly EMA40 falsa il
+//    gate durante correzioni recenti — la weekly EMA40 ha alpha più alto
+//    e scende più in fretta, evitando falsi "broken".
 // 4. Stop = recent_low (5 bars) − 1×ATR. Target = EMA50 daily. R/R
 //    floor pratico 1.5 (vs 2.0 momentum) perché hit rate atteso 55-60%.
 // 5. Time stop 15 giorni: se entro 15gg il setup non risolve, esce.
@@ -46,11 +49,24 @@
 //@version=6
 indicator("AI Trading System — Contrarian", overlay=true, max_labels_count=50, max_lines_count=20)
 
+// ─── TIMEFRAME GUARD ────────────────────────────────────────────────────────
+// Il motore Python è hardcoded sul daily. Su un timeframe diverso tutti gli
+// ta.ema(close, 50), ta.rsi(...), ta.atr(...) sono calcolati su barre di
+// granularità diversa → score completamente diverso. Errore esplicito invece
+// di output silenziosamente sbagliato.
+if not timeframe.isdaily
+    runtime.error("Contrarian engine richiede timeframe DAILY (chart corrente: " + timeframe.period + "). Cambia il timeframe del chart a 1D per matchare il motore Python.")
+
 // ─── INPUTS ─────────────────────────────────────────────────────────────────
 
-// Quality gate
-ema200dLen   = input.int(200, "EMA 200 (daily, quality)", minval=100, maxval=300, group="Quality",
-     tooltip="Mirror weekly EMA40 (≈ daily EMA200). Sotto questo = falling knife.")
+// Quality gate — DEVE essere EMA40 sul WEEKLY (mirror diretto di
+// REGIME_WEEKLY_EMA_200D=40 in config.py). NON è equivalente a EMA200 daily:
+// la weekly EMA40 ha alpha ≈ 4.9% sull'ultima close weekly, la daily EMA200
+// alpha ≈ 1% sull'ultima close daily → durante una correzione la weekly EMA40
+// scende più in fretta. Usare EMA200 daily qui falsa il quality gate e
+// classifica come "broken" titoli che Python considera "intact".
+ema200wLen   = input.int(40, "EMA 200d-equiv (weekly, quality)", minval=20, maxval=80, group="Quality",
+     tooltip="40 settimane sul weekly = REGIME_WEEKLY_EMA_200D. Mirror byte-byte di Python.")
 
 // Oversold
 rsiLen       = input.int(14, "RSI Period", minval=5, maxval=30, group="Oversold")
@@ -71,6 +87,8 @@ vixComplacent= input.float(14.0, "VIX Complacent (euforia → edge collassa)", g
 // Regime classifier (per market_context)
 useWeeklyReg = input.bool(true, "Classifica regime su weekly", group="Market Context",
      tooltip="Se off, regime fit cap a NEUTRAL=100 (no penalty estremi)")
+adxStrong    = input.float(25.0, "ADX Strong threshold (regime)", minval=15, maxval=40, group="Market Context",
+     tooltip="REGIME_ADX_STRONG. Necessario per discriminare 5/4 e 1/2 (mirror Python).")
 
 // Stop & target
 stopAtrMult  = input.float(1.0, "Stop ATR multiplier (× recent_low)", minval=0.5, maxval=3.0, step=0.5, group="Risk",
@@ -93,7 +111,11 @@ showBG       = input.bool(true, "Show Background", group="Display")
 
 // ─── CALCOLI BASE ───────────────────────────────────────────────────────────
 
-ema200d  = ta.ema(close, ema200dLen)
+// EMA40 sul WEEKLY del ticker corrente — quality gate hard.
+// request.security su timeframe più alto: la EMA è calcolata sui weekly bars
+// reali e proiettata sul daily chart corrente, mirror byte-byte di Python.
+ema200w  = request.security(syminfo.tickerid, "W", ta.ema(close, ema200wLen),
+     lookahead=barmerge.lookahead_off)
 emaSlow  = ta.ema(close, emaSlowLen)  // target reversion (mirror CONTRA_TARGET_EMA_PERIOD=50)
 rsi      = ta.rsi(close, rsiLen)
 atr      = ta.atr(atrLen)
@@ -114,13 +136,14 @@ consecDown := close < close[1] ? consecDown + 1 : 0
 peak5d        = ta.highest(high, 5)
 drawdown5dAtr = atr > 0 ? (peak5d - close) / atr : 0.0
 
-// Recent low 5 bars (per stop anchor)
-recentLow = ta.lowest(low, 5)
-stopLevel = recentLow - atr * stopAtrMult
-
-// Hard cap stop al -maxLossPct% per safety net
+// Recent low 5 bars (per stop anchor) — mirror Python contrarian:
+// stop_price = recent_low - atr * CONTRA_STOP_ATR_MULT (1.0 default).
+// Il maxLossPct (-12%) è il safety-net per il SIZING in Python, NON viene
+// applicato come cap al R/R. Lo mostriamo solo come reference per il trader.
+recentLow    = ta.lowest(low, 5)
+stopFinal    = recentLow - atr * stopAtrMult
 maxLossLevel = close * (1.0 - maxLossPct / 100.0)
-stopFinal    = math.max(stopLevel, maxLossLevel)
+stopExceedsMaxLoss = stopFinal < maxLossLevel
 
 
 // ─── SCORE 1/4 — OVERSOLD (peso 40%) ────────────────────────────────────────
@@ -143,48 +166,82 @@ scoreOversold = math.min(100.0, rsiPts + atrDistPts + capitulationPts)
 
 
 // ─── SCORE 2/4 — QUALITY GATE (peso 25%, hard gate) ────────────────────────
-// Hard gate: price > EMA200d (proxy weekly EMA40). Se sotto → quality=0 e
-// composite forzato a 0 (falling knife filter).
-// Sopra EMA200d: punteggio basato sulla profondità della correzione dal 52w high.
+// Hard gate: price ≥ EMA40 weekly (≈ EMA200 daily ma calcolata sul weekly,
+// mirror diretto di Python). Se sotto → quality=0 e composite forzato a 0
+// (falling knife filter). Se EMA200w è ancora na (warm-up insufficiente, IPO
+// recente <40 weeks), fail-closed coerente col Python.
+// Sopra EMA200w: punteggio basato sulla profondità della correzione dal 52w high.
 
-aboveEma200 = close >= ema200d
+aboveEma200w = not na(ema200w) and close >= ema200w
 
-// Quality "depth" score (0-100) — solo se sopra EMA200
+// Quality "depth" score (0-100) — solo se sopra EMA200w
 distAbs = math.abs(distFromHighPct)
 depthPts = distAbs >= 0.10 and distAbs <= 0.25 ? 100.0 : distAbs >= 0.05 and distAbs < 0.10 ? 70.0 : distAbs > 0.25 and distAbs <= 0.40 ? 60.0 : distAbs < 0.05 ? 30.0 : 20.0
 
-scoreQuality = aboveEma200 ? depthPts : 0.0
+scoreQuality = aboveEma200w ? depthPts : 0.0
 
 
 // ─── SCORE 3/4 — MARKET CONTEXT (peso 20%) ─────────────────────────────────
 // Regime fit INVERSO (CONTRA_REGIME_FIT) + VIX adjustment.
+//
+// CRITICAL: ogni indicatore deve essere calcolato NEL contesto weekly via
+// request.security, NON applicando ta.ema/ta.rsi/ta.macd a una weekly close
+// proiettata sul daily. La weekly close proiettata è costante Mon-Thu e fa
+// step ogni venerdì → ta.rsi/ta.ema su questa serie tendono a 50 / lag
+// estremo. Questo era il bug che faceva mis-classificare il regime e
+// (in casi sfortunati) attivava il cap STRONG_BULL/BEAR azzerando il
+// composite.
+//
+// Funzione helper che classifica nel weekly context: ritorna regimeCode 1-5
+// matchando byte-byte domain.regime.classify_regime + ADX-strong check.
 
-// Regime classifier sul weekly del benchmark — qui semplificato sul ticker stesso
-// (per coerenza piena col Python serve ^GSPC weekly, ma il Pine
-// distrubuisce request.security; usiamo il ticker corrente per snellire).
-// L'utente può applicare il weekly_regime_engine.pine separatamente per
-// avere il regime macro reale.
+classify_weekly_regime(simple float adx_strong, simple int ema200_len) =>
+    emaF = ta.ema(close, 10)
+    emaS = ta.ema(close, 30)
+    ema2 = ta.ema(close, ema200_len)
+    rsiW = ta.rsi(close, 14)
+    [macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
 
-bClose = request.security(syminfo.tickerid, "W", close, lookahead=barmerge.lookahead_off)
-bEmaF  = ta.ema(bClose, 10)
-bEmaS  = ta.ema(bClose, 30)
-bEma2  = ta.ema(bClose, 40)
-bRsiW  = ta.rsi(bClose, 14)
-[bMacd, bSig, _] = ta.macd(bClose, 12, 26, 9)
+    // ADX (Wilder smoothing su +DM/-DM/TR, mirror compute_adx Python)
+    upM = high - high[1]
+    dnM = low[1] - low
+    plusDM_  = upM > dnM and upM > 0 ? upM : 0.0
+    minusDM_ = dnM > upM and dnM > 0 ? dnM : 0.0
+    prevC = close[1]
+    tr_   = math.max(math.max(high - low, math.abs(high - prevC)), math.abs(low - prevC))
+    smTR_ = ta.rma(tr_, 14)
+    plusDI_  = ta.rma(plusDM_, 14) / smTR_ * 100
+    minusDI_ = ta.rma(minusDM_, 14) / smTR_ * 100
+    dx_      = math.abs(plusDI_ - minusDI_) / (plusDI_ + minusDI_) * 100
+    adx_     = ta.rma(dx_, 14)
 
-bTrendBull   = bEmaF > bEmaS and bClose > bEma2
-bTrendBear   = bEmaF < bEmaS and bClose < bEma2
-bMomBull     = bRsiW > 50 and bMacd > bSig
-bMomBear     = bRsiW < 50 and bMacd < bSig
-bAboveAll    = bClose > bEmaF and bClose > bEmaS and bClose > bEma2
-bBelowAll    = bClose < bEmaF and bClose < bEmaS and bClose < bEma2
+    trendBull   = emaF > emaS and close > ema2
+    trendBear   = emaF < emaS and close < ema2
+    trendStrong = adx_ > adx_strong
+    momBull     = rsiW > 50 and macdLine > signalLine
+    momBear     = rsiW < 50 and macdLine < signalLine
+    aboveAll    = close > emaF and close > emaS and close > ema2
+    belowAll    = close < emaF and close < emaS and close < ema2
 
-// Approssimazione: senza ADX-strong distinguiamo solo bull/bear → trattiamo
-// "above_all + trend_bull + mom_bull" = 5, "below_all + trend_bear + mom_bear" = 1.
-regimeCode = useWeeklyReg ? (bAboveAll and bTrendBull and bMomBull ? 5 : bTrendBull and bMomBull ? 4 : bBelowAll and bTrendBear and bMomBear ? 1 : bTrendBear and bMomBear ? 2 : 3) : 3
+    aboveAll and trendBull and trendStrong and momBull ? 5 : trendBull and momBull ? 4 : belowAll and trendBear and trendStrong and momBear ? 1 : trendBear and momBear ? 2 : 3
 
-// CONTRA_REGIME_FIT lookup (config.py): {5:25, 4:70, 3:100, 2:85, 1:0}
-regimeFit = regimeCode == 5 ? 25.0 : regimeCode == 4 ? 70.0 : regimeCode == 3 ? 100.0 : regimeCode == 2 ? 85.0 : 0.0
+// Esegui la classificazione nel timeframe weekly (mirror byte-byte di Python
+// che usa download_weekly_history(ticker) + classify_regime).
+regimeCodeW = request.security(syminfo.tickerid, "W",
+     classify_weekly_regime(adxStrong, ema200wLen),
+     lookahead=barmerge.lookahead_off)
+
+// Bar count weekly per fail-closed warmup (mirror REGIME_MIN_WEEKLY_BARS=60)
+weeklyBarIdx = request.security(syminfo.tickerid, "W", bar_index, lookahead=barmerge.lookahead_off)
+regimeWarmOk = not na(weeklyBarIdx) and weeklyBarIdx >= 60
+
+regimeCode = useWeeklyReg and regimeWarmOk and not na(regimeCodeW) ? regimeCodeW : 3
+regimeAvailable = useWeeklyReg and regimeWarmOk and not na(regimeCodeW)
+
+// CONTRA_REGIME_FIT lookup (config.py): {5:25, 4:70, 3:100, 2:85, 1:0}.
+// Quando il regime non è disponibile (warmup weekly < 60 barre, IPO recente),
+// Python usa regime_fit = 50 (CONTRA_REGIME_FIT.get(None, 50)). Mirror.
+regimeFit = not regimeAvailable ? 50.0 : regimeCode == 5 ? 25.0 : regimeCode == 4 ? 70.0 : regimeCode == 3 ? 100.0 : regimeCode == 2 ? 85.0 : 0.0
 
 // VIX (richiede securities)
 vix = request.security(vixSymbol, timeframe.period, close, lookahead=barmerge.lookahead_off)
@@ -212,8 +269,10 @@ compositeRaw = math.max(0.0, math.min(100.0, scoreOversold * wOversold + scoreQu
 afterQuality = scoreQuality == 0.0 ? 0.0 : compositeRaw
 
 // Hard gate #2: regime cap STRONG_BULL/STRONG_BEAR → composite = 0
-// (mirror contrarian_scoring.apply_regime_cap)
-composite = (regimeCode == 1 or regimeCode == 5) ? 0.0 : afterQuality
+// (mirror contrarian_scoring.apply_regime_cap). Si applica SOLO quando il
+// regime è realmente disponibile (regimeAvailable = bar count weekly ≥ 60),
+// coerente col Python che ritorna composite invariato se regime_code è None.
+composite = regimeAvailable and (regimeCode == 1 or regimeCode == 5) ? 0.0 : afterQuality
 
 capTriggered = composite < compositeRaw
 
@@ -225,8 +284,8 @@ classColor = composite >= 75.0 ? color.new(#4CAF50, 0) : composite >= 60.0 ? col
 // ─── SETUP CONDITIONS (per markers) ────────────────────────────────────────
 
 // Setup oversold "ready": tutti gli ingredienti core attivi
-setupReady = composite >= 75.0 and aboveEma200 and rsi <= rsiWarm and atrDistance >= atrDistMin
-setupIncubating = composite >= 60.0 and composite < 75.0 and aboveEma200
+setupReady = composite >= 75.0 and aboveEma200w and rsi <= rsiWarm and atrDistance >= atrDistMin
+setupIncubating = composite >= 60.0 and composite < 75.0 and aboveEma200w
 
 // Reversion confirmed: dopo un setup, il prezzo riattraversa EMA50 dal basso
 reversionTrigger = ta.crossover(close, emaSlow) and rsi[1] < 50
@@ -243,8 +302,8 @@ timeStopHit = barsSinceSetup == timeStopDays
 
 // ─── VISUALIZZAZIONE ────────────────────────────────────────────────────────
 
-// EMA200d (quality reference) + EMA50 (target)
-plot(showLevels ? ema200d : na, "EMA 200d (quality gate)", color=color.new(#F44336, 30), linewidth=2)
+// EMA200w-equiv (quality reference, weekly EMA40 plottata sul daily) + EMA50 (target)
+plot(showLevels ? ema200w : na, "EMA 200d-equiv (weekly, quality gate)", color=color.new(#F44336, 30), linewidth=2)
 plot(showLevels ? emaSlow : na, "EMA 50 (target reversion)", color=color.new(#FF9800, 0), linewidth=2)
 
 // Stop e target sul setup ready
@@ -252,7 +311,7 @@ plot(showLevels and setupReady ? stopFinal : na, "Stop", color=color.new(#F44336
 plot(showLevels and setupReady ? emaSlow : na, "Target", color=color.new(#4CAF50, 0), linewidth=2, style=plot.style_linebr)
 
 // Background per quality gate
-qualityBgColor = not aboveEma200 ? color.new(#F44336, 92) : composite >= 75.0 ? color.new(#4CAF50, 92) : composite >= 60.0 ? color.new(#FFC107, 95) : color.new(#1E1E1E, 100)
+qualityBgColor = not aboveEma200w ? color.new(#F44336, 92) : composite >= 75.0 ? color.new(#4CAF50, 92) : composite >= 60.0 ? color.new(#FFC107, 95) : color.new(#1E1E1E, 100)
 bgcolor(showBG ? qualityBgColor : na)
 
 // Markers
@@ -261,11 +320,11 @@ if showSignals
         label.new(bar_index, low, "SETUP", style=label.style_triangleup, color=color.new(#4CAF50, 0), textcolor=color.white, size=size.normal)
     if setupIncubating and not setupReady
         label.new(bar_index, low, "incub", style=label.style_circle, color=color.new(#FFC107, 30), textcolor=color.black, size=size.tiny)
-    if reversionTrigger and aboveEma200
+    if reversionTrigger and aboveEma200w
         label.new(bar_index, high, "REV", style=label.style_triangledown, color=color.new(#2196F3, 0), textcolor=color.white, size=size.small)
-    if not aboveEma200
-        // Falling knife marker (sporadico — solo al cross)
-        if ta.crossunder(close, ema200d)
+    if not aboveEma200w
+        // Falling knife marker (sporadico — solo al cross sotto la weekly EMA40)
+        if ta.crossunder(close, ema200w)
             label.new(bar_index, high, "BROKEN", style=label.style_xcross, color=color.new(#F44336, 0), textcolor=color.white, size=size.small)
 
 
@@ -274,8 +333,8 @@ if showSignals
 scoreColor(val) =>
     val >= 75.0 ? color.new(#4CAF50, 0) : val >= 50.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
 
-regimeText  = regimeCode == 5 ? "STRONG BULL (skip)" : regimeCode == 4 ? "BULL (ok)" : regimeCode == 3 ? "NEUTRAL (sweet)" : regimeCode == 2 ? "BEAR (ok)" : "STRONG BEAR (skip)"
-regimeColor = regimeCode == 3 ? color.new(#4CAF50, 0) : regimeCode == 1 or regimeCode == 5 ? color.new(#F44336, 0) : color.new(#FFC107, 0)
+regimeText  = not regimeAvailable ? "n/a (weekly warmup)" : regimeCode == 5 ? "STRONG BULL (skip)" : regimeCode == 4 ? "BULL (ok)" : regimeCode == 3 ? "NEUTRAL (sweet)" : regimeCode == 2 ? "BEAR (ok)" : "STRONG BEAR (skip)"
+regimeColor = not regimeAvailable ? color.gray : regimeCode == 3 ? color.new(#4CAF50, 0) : regimeCode == 1 or regimeCode == 5 ? color.new(#F44336, 0) : color.new(#FFC107, 0)
 
 if showPanel
     var table panel = table.new(position.top_right, 2, 16, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
@@ -290,8 +349,8 @@ if showPanel
     table.cell(panel, 0, 2, "Class", text_color=color.gray, text_size=size.tiny)
     table.cell(panel, 1, 2, classText, text_color=classColor, text_size=size.small)
 
-    qualText = aboveEma200 ? "INTACT ✓" : "BROKEN ✗"
-    qualColor = aboveEma200 ? color.new(#4CAF50, 0) : color.new(#F44336, 0)
+    qualText = aboveEma200w ? "INTACT ✓" : "BROKEN ✗"
+    qualColor = aboveEma200w ? color.new(#4CAF50, 0) : color.new(#F44336, 0)
     table.cell(panel, 0, 3, "Quality gate", text_color=color.gray, text_size=size.tiny)
     table.cell(panel, 1, 3, qualText, text_color=qualColor, text_size=size.small)
 
@@ -340,7 +399,7 @@ if showPanel
 
 alertcondition(setupReady and not setupReady[1], "CONTRA SETUP READY", "CONTRA: {{ticker}} setup oversold ready (score ≥75 + quality intact). Stop {{plot_0}}, target EMA50.")
 alertcondition(setupIncubating and not (setupReady or setupIncubating)[1], "CONTRA INCUBATING", "CONTRA: {{ticker}} setup oversold in incubazione (score 60-74)")
-alertcondition(reversionTrigger and aboveEma200, "CONTRA REVERSION", "CONTRA: {{ticker}} cross sopra EMA50 con RSI<50 — possibile inizio reversion")
-alertcondition(ta.crossunder(close, ema200d), "CONTRA QUALITY BROKEN", "CONTRA: {{ticker}} ha rotto EMA200d — falling knife, niente entry contrarian")
+alertcondition(reversionTrigger and aboveEma200w, "CONTRA REVERSION", "CONTRA: {{ticker}} cross sopra EMA50 con RSI<50 — possibile inizio reversion")
+alertcondition(ta.crossunder(close, ema200w), "CONTRA QUALITY BROKEN", "CONTRA: {{ticker}} ha rotto EMA200w-equiv — falling knife, niente entry contrarian")
 alertcondition(timeStopHit, "CONTRA TIME STOP", "CONTRA: {{ticker}} time stop {{plot_0}} giorni dal setup — chiudi se in posizione")
 alertcondition(close < stopFinal, "CONTRA STOP HIT", "CONTRA STOP: {{ticker}} chiuso sotto stop hard")
