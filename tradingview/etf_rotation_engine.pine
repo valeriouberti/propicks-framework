@@ -1,0 +1,279 @@
+// ============================================================================
+// AI TRADING SYSTEM — ETF Rotation Engine v1.0
+// ============================================================================
+// Timeframe: WEEKLY (preferred) o DAILY
+// Scopo: Scoring rotazione settoriale ETF, parallelo a momentum stock
+//
+// Questo indicatore replica src/propicks/domain/etf_scoring.py.
+// Va piazzato su un ETF settoriale (es. XLK, XLF, ZPDT.DE, XDWT.DE)
+// e mostra il composite RS-driven con gate regime hard:
+//
+//   composite = RS*40% + regime_fit*30% + abs_momentum*20% + trend*10%
+//
+// La logica è diversa dal daily_signal_engine.pine: i settori non si scelgono
+// con sweet spot da ATH e ATR stop. Si scelgono per leadership relativa vs
+// benchmark, fit col regime macro, e abs momentum 3M.
+//
+// COME USARLO:
+// 1. Apri il chart dell'ETF (es. XLK, ZPDT.DE) sul timeframe WEEKLY
+// 2. Configura il Benchmark Symbol corretto:
+//    - US/EU ETF (XL*, ZPD*.DE)  → SPX
+//    - WORLD ETF (XDW*, IQQ6.DE) → URTH
+// 3. Configura il Sector Key corretto (technology, financials, ...) per
+//    il regime_fit lookup. Lo score regime_fit si applica solo se è
+//    impostato uno dei sector_key noti — altrimenti vale 50 (neutro).
+// 4. Il composite ti dice se è OVERWEIGHT/HOLD/NEUTRAL/AVOID. Lo stop
+//    è -5% hard (non ATR — gli ETF hanno bassa vol e ATR salta sul rumore).
+//
+// ─── CONTRATTO CON IL MOTORE PYTHON ─────────────────────────────────────────
+// Default allineati a src/propicks/config.py:
+//   ETF_RS_LOOKBACK_WEEKS=26, ETF_RS_EMA_WEEKS=10,
+//   ETF_MOMENTUM_LOOKBACK_DAYS=63, REGIME_WEEKLY_EMA_SLOW=30,
+//   ETF_WEIGHT_RS=0.40, ETF_WEIGHT_REGIME_FIT=0.30,
+//   ETF_WEIGHT_ABS_MOMENTUM=0.20, ETF_WEIGHT_TREND=0.10,
+//   ETF_SCORE_OVERWEIGHT=70, ETF_SCORE_HOLD=55, ETF_SCORE_NEUTRAL=40,
+//   ETF_STOP_LOSS_PCT=0.05, REGIME_FAVORED_SECTORS, CONTRA_REGIME_FIT.
+// Cap regime: STRONG_BEAR non-favored→0, BEAR non-favored→50,
+// NEUTRAL non-favored→65 (soft cap, vedi apply_regime_cap).
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — ETF Rotation", overlay=true, max_labels_count=30, max_lines_count=20)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+
+// Benchmark per RS — DEVE essere coerente col perimetro dell'ETF
+benchmark   = input.symbol("SPX", "Benchmark Symbol", group="RS",
+     tooltip="US/EU ETF → SPX. WORLD ETF (XDW*, IQQ6.DE) → URTH")
+
+// Sector classification — necessario per il regime_fit lookup
+sectorKey   = input.string("technology", "Sector Key", options=[
+     "technology", "financials", "energy", "healthcare", "industrials",
+     "consumer_discretionary", "consumer_staples", "utilities",
+     "real_estate", "materials", "communications", "unknown"
+     ], group="Sector",
+     tooltip="Sector GICS dell'ETF — pilota la tabella REGIME_FAVORED_SECTORS")
+
+// RS parameters
+rsLookback  = input.int(26, "RS Lookback (weeks)", minval=8, maxval=52, group="RS")
+rsEmaSpan   = input.int(10, "RS Slope window (weeks)", minval=4, maxval=26, group="RS",
+     tooltip="Vera slope: variazione media settimanale della RS line")
+
+// Abs momentum
+momLookback = input.int(63, "Momentum lookback (days)", minval=20, maxval=126, group="Momentum",
+     tooltip="63 = ~3 mesi trading")
+
+// Trend (EMA weekly)
+emaSlowLen  = input.int(30, "EMA Slow (weekly equiv)", minval=10, maxval=52, group="Trend",
+     tooltip="30 settimane ≈ 150d. Coerente con REGIME_WEEKLY_EMA_SLOW")
+
+// Regime classifier (su benchmark)
+emaFastLenW = input.int(10, "Regime EMA Fast (weeks)", group="Regime")
+ema200dLenW = input.int(40, "Regime EMA 200d-equiv (weeks)", group="Regime")
+adxStrong   = input.float(25.0, "ADX Strong threshold", group="Regime")
+
+// Stop & weights
+stopPct     = input.float(5.0, "ETF Stop Loss %", minval=2.0, maxval=10.0, step=0.5, group="Risk")
+
+wRS         = input.float(0.40, "Weight RS", minval=0, maxval=1, step=0.05, group="Weights")
+wRegimeFit  = input.float(0.30, "Weight Regime Fit", minval=0, maxval=1, step=0.05, group="Weights")
+wAbsMom     = input.float(0.20, "Weight Abs Momentum", minval=0, maxval=1, step=0.05, group="Weights")
+wTrend      = input.float(0.10, "Weight Trend", minval=0, maxval=1, step=0.05, group="Weights")
+
+// Display
+showEMA     = input.bool(true, "Show EMA Slow", group="Display")
+showStop    = input.bool(true, "Show Stop Level", group="Display")
+showPanel   = input.bool(true, "Show Score Panel", group="Display")
+showBG      = input.bool(true, "Show Background", group="Display")
+
+
+// ─── BENCHMARK SERIES (per RS + regime) ─────────────────────────────────────
+
+// Daily benchmark (per abs_momentum)
+benchClose  = request.security(benchmark, timeframe.period, close, lookahead=barmerge.lookahead_off)
+
+// Weekly benchmark (per regime classification — coerente con regime.py)
+weeklyTF    = "W"
+benchWClose = request.security(benchmark, weeklyTF, close, lookahead=barmerge.lookahead_off)
+benchWHigh  = request.security(benchmark, weeklyTF, high, lookahead=barmerge.lookahead_off)
+benchWLow   = request.security(benchmark, weeklyTF, low,  lookahead=barmerge.lookahead_off)
+
+// ETF weekly close (per RS slope)
+etfWClose   = request.security(syminfo.tickerid, weeklyTF, close, lookahead=barmerge.lookahead_off)
+
+
+// ─── SCORE 1/4 — RS vs benchmark (peso 40%) ─────────────────────────────────
+// rs_norm = (etf/bench) / (etf_lookback / bench_lookback)
+// rs_slope = (rs_norm - rs_norm[ema_span]) / ema_span (vera slope, non spread)
+// Score level × slope (mirror di etf_scoring.score_rs):
+
+rsRatioRaw = etfWClose / benchWClose
+rsBase     = rsRatioRaw[rsLookback]
+rsNorm     = rsBase > 0 ? rsRatioRaw / rsBase : 1.0
+rsRatio    = rsNorm
+rsPast     = rsNorm[rsEmaSpan]
+rsSlope    = (rsRatio - rsPast) / rsEmaSpan
+
+// Warm-up: lookback + 3*ema_span (stesso threshold di Python post-SERIO-4)
+rsBars     = rsLookback + 3 * rsEmaSpan
+rsWarmOk   = bar_index >= rsBars
+
+scoreRS = not rsWarmOk ? 50.0 : rsRatio >= 1.05 and rsSlope > 0 ? 100.0 : rsRatio >= 1.02 and rsSlope > 0 ? 85.0 : rsRatio >= 1.0 and rsSlope > 0 ? 70.0 : rsRatio >= 1.0 ? 55.0 : rsRatio >= 0.95 and rsSlope > 0 ? 45.0 : rsRatio >= 0.95 ? 25.0 : rsSlope > 0 ? 20.0 : 10.0
+
+
+// ─── SCORE 2/4 — Regime Fit (peso 30%) ──────────────────────────────────────
+// Classifica regime sul benchmark weekly (mirror di domain.regime.classify_regime),
+// poi look up sector_key in REGIME_FAVORED_SECTORS.
+
+bEmaFast  = ta.ema(benchWClose, emaFastLenW)
+bEmaSlow  = ta.ema(benchWClose, emaSlowLen)
+bEma200d  = ta.ema(benchWClose, ema200dLenW)
+bRsi      = ta.rsi(benchWClose, 14)
+[bMacd, bSignal, _] = ta.macd(benchWClose, 12, 26, 9)
+
+// ADX su benchmark weekly
+btr   = ta.tr(true)
+bUpM  = benchWHigh - benchWHigh[1]
+bDnM  = benchWLow[1] - benchWLow
+bPlusDM  = bUpM > bDnM and bUpM > 0 ? bUpM : 0
+bMinusDM = bDnM > bUpM and bDnM > 0 ? bDnM : 0
+bSmTR    = ta.rma(btr, 14)
+bPlusDI  = ta.rma(bPlusDM, 14) / bSmTR * 100
+bMinusDI = ta.rma(bMinusDM, 14) / bSmTR * 100
+bDX      = math.abs(bPlusDI - bMinusDI) / (bPlusDI + bMinusDI) * 100
+bADX     = ta.rma(bDX, 14)
+
+bTrendBull   = bEmaFast > bEmaSlow and benchWClose > bEma200d
+bTrendBear   = bEmaFast < bEmaSlow and benchWClose < bEma200d
+bTrendStrong = bADX > adxStrong
+bMomBull     = bRsi > 50 and bMacd > bSignal
+bMomBear     = bRsi < 50 and bMacd < bSignal
+bAboveAll    = benchWClose > bEmaFast and benchWClose > bEmaSlow and benchWClose > bEma200d
+bBelowAll    = benchWClose < bEmaFast and benchWClose < bEmaSlow and benchWClose < bEma200d
+
+regimeCode = bAboveAll and bTrendBull and bTrendStrong and bMomBull ? 5 : bTrendBull and bMomBull ? 4 : bBelowAll and bTrendBear and bTrendStrong and bMomBear ? 1 : bTrendBear and bMomBear ? 2 : 3
+
+// REGIME_FAVORED_SECTORS lookup (config.py)
+isFavored(int rc, string sk) =>
+    rc == 5 ? (sk == "technology" or sk == "consumer_discretionary" or sk == "communications" or sk == "financials" or sk == "industrials") :
+    rc == 4 ? (sk == "technology" or sk == "consumer_discretionary" or sk == "industrials" or sk == "materials" or sk == "financials") :
+    rc == 3 ? (sk == "healthcare" or sk == "industrials" or sk == "financials" or sk == "technology") :
+    rc == 2 ? (sk == "consumer_staples" or sk == "utilities" or sk == "healthcare") :
+    rc == 1 ? (sk == "consumer_staples" or sk == "utilities") : false
+
+favoredNow = sectorKey == "unknown" ? false : isFavored(regimeCode, sectorKey)
+favoredAdj = sectorKey == "unknown" ? false : (regimeCode > 1 and isFavored(regimeCode - 1, sectorKey)) or (regimeCode < 5 and isFavored(regimeCode + 1, sectorKey))
+
+scoreRegimeFit = sectorKey == "unknown" ? 50.0 : favoredNow ? 100.0 : favoredAdj ? 60.0 : 20.0
+
+
+// ─── SCORE 3/4 — Abs Momentum 3M (peso 20%) ─────────────────────────────────
+// Performance daily 63 bars → bucket discreti (mirror di score_abs_momentum)
+
+perfMom = (close - close[momLookback]) / close[momLookback]
+scoreAbsMom = na(perfMom) ? 40.0 : perfMom >= 0.15 ? 100.0 : perfMom >= 0.08 ? 80.0 : perfMom >= 0.03 ? 60.0 : perfMom >= 0.0 ? 40.0 : perfMom >= -0.05 ? 25.0 : 10.0
+
+
+// ─── SCORE 4/4 — Trend (peso 10%) ──────────────────────────────────────────
+// price vs EMA slow (weekly) + slope EMA su 4 weeks (mirror di score_etf_trend)
+
+emaSlowW    = ta.ema(etfWClose, emaSlowLen)
+emaSlowPrev = emaSlowW[4]
+trendSlope  = emaSlowPrev > 0 ? (emaSlowW - emaSlowPrev) / emaSlowPrev : 0.0
+priceAbove  = etfWClose > emaSlowW
+trendRising = trendSlope > 0.005
+trendFlat   = trendSlope >= -0.005 and trendSlope <= 0.005
+
+scoreTrend = priceAbove and trendRising ? 100.0 : priceAbove and trendFlat ? 75.0 : priceAbove ? 55.0 : trendRising ? 35.0 : 10.0
+
+
+// ─── COMPOSITE + REGIME CAP ────────────────────────────────────────────────
+
+compositeRaw = math.max(0.0, math.min(100.0, scoreRS * wRS + scoreRegimeFit * wRegimeFit + scoreAbsMom * wAbsMom + scoreTrend * wTrend))
+
+// apply_regime_cap (mirror di etf_scoring.apply_regime_cap):
+//   STRONG_BEAR non-favored → 0
+//   BEAR non-favored        → cap 50
+//   NEUTRAL non-favored     → cap 65 (soft cap CRIT-1)
+//   BULL/STRONG_BULL        → no cap
+composite = sectorKey == "unknown" ? compositeRaw : not favoredNow and regimeCode == 1 ? 0.0 : not favoredNow and regimeCode == 2 ? math.min(compositeRaw, 50.0) : not favoredNow and regimeCode == 3 ? math.min(compositeRaw, 65.0) : compositeRaw
+
+capTriggered = composite < compositeRaw
+
+// Classification
+classText  = composite >= 70.0 ? "A — OVERWEIGHT" : composite >= 55.0 ? "B — HOLD" : composite >= 40.0 ? "C — NEUTRAL" : "D — AVOID"
+classColor = composite >= 70.0 ? color.new(#4CAF50, 0) : composite >= 55.0 ? color.new(#8BC34A, 0) : composite >= 40.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+// Stop -5% (non ATR — coerente con ETF_STOP_LOSS_PCT)
+stopLevel = close * (1.0 - stopPct / 100.0)
+
+regimeText  = regimeCode == 5 ? "STRONG BULL" : regimeCode == 4 ? "BULLISH" : regimeCode == 3 ? "NEUTRAL" : regimeCode == 2 ? "BEARISH" : "STRONG BEAR"
+regimeColor = regimeCode == 5 ? color.new(#4CAF50, 0) : regimeCode == 4 ? color.new(#8BC34A, 0) : regimeCode == 3 ? color.new(#FFC107, 0) : regimeCode == 2 ? color.new(#FF9800, 0) : color.new(#F44336, 0)
+
+
+// ─── VISUALIZZAZIONE ────────────────────────────────────────────────────────
+
+plot(showEMA ? emaSlowW : na, "EMA Slow (W)", color=color.new(#FF9800, 0), linewidth=2)
+plot(showStop ? stopLevel : na, "Stop -5%", color=color.new(#F44336, 30), linewidth=2, style=plot.style_stepline)
+
+bgCol = composite >= 70.0 ? color.new(#4CAF50, 92) : composite >= 55.0 ? color.new(#8BC34A, 94) : composite >= 40.0 ? color.new(#FFC107, 95) : color.new(#F44336, 95)
+bgcolor(showBG ? bgCol : na)
+
+
+// ─── PANNELLO SCORE ─────────────────────────────────────────────────────────
+
+scoreColor(val) =>
+    val >= 70.0 ? color.new(#4CAF50, 0) : val >= 50.0 ? color.new(#FFC107, 0) : color.new(#F44336, 0)
+
+if showPanel
+    var table panel = table.new(position.top_right, 2, 13, bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(#333333, 0))
+
+    table.cell(panel, 0, 0, "ETF ROTATION", text_color=color.gray, text_size=size.small)
+    table.cell(panel, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small)
+
+    capStr = capTriggered ? " *" : ""
+    table.cell(panel, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 1, str.tostring(composite, "#.0") + "/100" + capStr, text_color=classColor, text_size=size.normal)
+
+    table.cell(panel, 0, 2, "Class", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 2, classText, text_color=classColor, text_size=size.small)
+
+    table.cell(panel, 0, 3, "Sector", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 3, sectorKey + (favoredNow ? " ★" : ""), text_color=favoredNow ? color.new(#4CAF50, 0) : color.gray, text_size=size.tiny)
+
+    table.cell(panel, 0, 4, "Regime", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 4, regimeText, text_color=regimeColor, text_size=size.tiny)
+
+    table.cell(panel, 0, 5, "─── SUB ───", text_color=color.new(#555555, 0), text_size=size.tiny)
+    table.cell(panel, 1, 5, "", text_size=size.tiny)
+
+    table.cell(panel, 0, 6, "RS (40%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 6, str.tostring(scoreRS, "#.0"), text_color=scoreColor(scoreRS), text_size=size.tiny)
+
+    table.cell(panel, 0, 7, "Regime fit (30%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 7, str.tostring(scoreRegimeFit, "#.0"), text_color=scoreColor(scoreRegimeFit), text_size=size.tiny)
+
+    table.cell(panel, 0, 8, "Abs mom (20%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 8, str.tostring(scoreAbsMom, "#.0"), text_color=scoreColor(scoreAbsMom), text_size=size.tiny)
+
+    table.cell(panel, 0, 9, "Trend (10%)", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 9, str.tostring(scoreTrend, "#.0"), text_color=scoreColor(scoreTrend), text_size=size.tiny)
+
+    table.cell(panel, 0, 10, "─── RS ───", text_color=color.new(#555555, 0), text_size=size.tiny)
+    table.cell(panel, 1, 10, "", text_size=size.tiny)
+
+    table.cell(panel, 0, 11, "RS ratio", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 11, str.tostring(rsRatio, "#.###"), text_color=rsRatio >= 1.0 ? color.new(#4CAF50, 0) : color.new(#F44336, 0), text_size=size.tiny)
+
+    table.cell(panel, 0, 12, "RS slope/wk", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 12, str.tostring(rsSlope, "+#.####;-#.####"), text_color=rsSlope > 0 ? color.new(#4CAF50, 0) : color.new(#F44336, 0), text_size=size.tiny)
+
+
+// ─── ALERT ──────────────────────────────────────────────────────────────────
+
+alertcondition(composite >= 70.0 and composite[1] < 70.0, "ETF UPGRADE A", "ETF ROTATION: {{ticker}} promosso a OVERWEIGHT (score ≥70)")
+alertcondition(composite < 40.0 and composite[1] >= 40.0, "ETF DOWNGRADE D", "ETF ROTATION: {{ticker}} declassato ad AVOID (score <40)")
+alertcondition(close < stopLevel, "ETF STOP -5%", "ETF STOP: {{ticker}} chiuso sotto -5% (hard stop ETF)")
+alertcondition(rsRatio >= 1.0 and rsRatio[1] < 1.0, "ETF RS CROSS UP", "ETF RS: {{ticker}} è ora outperformer vs benchmark (RS ratio ≥ 1.0)")
+alertcondition(rsRatio < 1.0 and rsRatio[1] >= 1.0, "ETF RS CROSS DOWN", "ETF RS: {{ticker}} è ora underperformer vs benchmark (RS ratio < 1.0)")
+alertcondition(regimeCode != regimeCode[1], "ETF REGIME CHANGE", "ETF REGIME: cambio macro su benchmark — rivaluta rotation")
