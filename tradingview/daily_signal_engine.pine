@@ -22,6 +22,13 @@
 // I bucket degli score e le soglie A/B/C/D (75/60/45) riflettono
 // src/propicks/domain/scoring.py. Non modificare un solo lato:
 // se tocchi i parametri qui, aggiorna anche config.py (e viceversa).
+//
+// ─── ASIMMETRIE DAL MOTORE PYTHON (allineate al contratto) ──────────────────
+// - score_volume è asimmetrico per direzione: vol alto su up-day = conviction
+//   (score base/100), su down-day = distribuzione (35/25/15).
+// - score_distance_from_high è interpolato linearmente tra control points
+//   (peak 100 a -7.5% dall'ATH) per evitare jump discreti che facevano
+//   oscillare la classification A/B su titoli che attraversavano i boundary.
 // ============================================================================
 
 //@version=6
@@ -102,11 +109,20 @@ scoreTrend = close > emaFast and close > emaSlow and emaFast > emaSlow ? 100.0 :
 // Score Momentum RSI (0-100)
 scoreMomentum = rsi >= 50 and rsi <= 65 ? 100.0 : rsi > 65 and rsi <= 70 ? 75.0 : rsi >= 40 and rsi < 50 ? 60.0 : rsi > 70 and rsi <= 80 ? 40.0 : rsi >= 30 and rsi < 40 ? 45.0 : rsi > 80 ? 15.0 : rsi < 30 ? 20.0 : 50.0
 
-// Score Volume (0-100)
-scoreVolume = volRatio >= 1.2 and volRatio <= 2.0 ? 100.0 : volRatio >= 1.0 and volRatio < 1.2 ? 70.0 : volRatio > 2.0 and volRatio <= 3.0 ? 80.0 : volRatio > 3.0 ? 60.0 : volRatio >= 0.7 and volRatio < 1.0 ? 50.0 : volRatio >= 0.5 and volRatio < 0.7 ? 30.0 : 15.0
+// Score Volume (0-100) — asimmetrico per direzione del movimento.
+// Vol alto su green-day = breakout conviction; su red-day = panic distribuzione.
+// Mirror di domain.scoring.score_volume(direction=close-prevClose).
+upDay   = close > close[1]
+downDay = close < close[1]
 
-// Score Distance from 52w High (0-100)
-scoreDistHigh = distFromHigh < 3 ? 75.0 : distFromHigh >= 3 and distFromHigh < 5 ? 85.0 : distFromHigh >= 5 and distFromHigh < 10 ? 100.0 : distFromHigh >= 10 and distFromHigh < 15 ? 80.0 : distFromHigh >= 15 and distFromHigh < 25 ? 50.0 : distFromHigh >= 25 and distFromHigh < 35 ? 30.0 : 10.0
+scoreVolBase = volRatio >= 1.2 and volRatio < 2.0 ? 100.0 : volRatio >= 2.0 and volRatio < 3.0 ? 80.0 : volRatio >= 1.0 and volRatio < 1.2 ? 70.0 : volRatio >= 3.0 ? 60.0 : volRatio >= 0.7 and volRatio < 1.0 ? 50.0 : volRatio >= 0.5 and volRatio < 0.7 ? 30.0 : 15.0
+
+scoreVolume = volRatio < 1.2 ? scoreVolBase : upDay and volRatio >= 3.0 ? 100.0 : upDay ? scoreVolBase : downDay and volRatio >= 1.2 and volRatio < 2.0 ? 35.0 : downDay and volRatio >= 2.0 and volRatio < 3.0 ? 25.0 : downDay ? 15.0 : scoreVolBase
+
+// Score Distance from 52w High (0-100) — interpolazione lineare a tratti
+// Mirror di domain.scoring._DIST_FROM_HIGH_X/_Y, peak a 7.5% dall'ATH.
+// Smussa i jump dei vecchi tier discreti (100→80 sul boundary 10%).
+scoreDistHigh = distFromHigh <= 0.0 ? 75.0 : distFromHigh < 3.0 ? 75.0 : distFromHigh < 5.0 ? 75.0 + (distFromHigh - 3.0) * (85.0 - 75.0) / (5.0 - 3.0) : distFromHigh < 7.5 ? 85.0 + (distFromHigh - 5.0) * (100.0 - 85.0) / (7.5 - 5.0) : distFromHigh < 10.0 ? 100.0 + (distFromHigh - 7.5) * (95.0 - 100.0) / (10.0 - 7.5) : distFromHigh < 12.5 ? 95.0 + (distFromHigh - 10.0) * (90.0 - 95.0) / (12.5 - 10.0) : distFromHigh < 15.0 ? 90.0 + (distFromHigh - 12.5) * (80.0 - 90.0) / (15.0 - 12.5) : distFromHigh < 20.0 ? 80.0 + (distFromHigh - 15.0) * (65.0 - 80.0) / (20.0 - 15.0) : distFromHigh < 25.0 ? 65.0 + (distFromHigh - 20.0) * (50.0 - 65.0) / (25.0 - 20.0) : distFromHigh < 30.0 ? 50.0 + (distFromHigh - 25.0) * (40.0 - 50.0) / (30.0 - 25.0) : distFromHigh < 35.0 ? 40.0 + (distFromHigh - 30.0) * (30.0 - 40.0) / (35.0 - 30.0) : distFromHigh < 50.0 ? 30.0 + (distFromHigh - 35.0) * (10.0 - 30.0) / (50.0 - 35.0) : 10.0
 
 // Score Volatility ATR% (0-100)
 scoreVol = atrPct >= 1.0 and atrPct <= 3.0 ? 100.0 : atrPct > 0.5 and atrPct < 1.0 ? 60.0 : atrPct > 3.0 and atrPct <= 5.0 ? 70.0 : atrPct > 5.0 ? 30.0 : atrPct < 0.5 ? 40.0 : 50.0
