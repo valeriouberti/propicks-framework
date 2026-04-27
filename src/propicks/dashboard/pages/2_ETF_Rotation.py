@@ -209,11 +209,11 @@ with st.expander("Prompt Perplexity rotation (copia-incolla)", expanded=False):
     st.code(perplexity_etf_rotation(ranked, region), language=None)
 
 # ---------------------------------------------------------------------------
-# Fallback validate completo — prompt multi-modello (Perplexity primary,
-# compat con Claude SDK/web app e altri LLM) quando l'API Anthropic è giù.
+# Fallback validate completo — due varianti distinte. System prompt
+# Anthropic byte-equivalent in entrambi → compat piena con SDK / claude.ai.
 # ---------------------------------------------------------------------------
 with st.expander(
-    "Prompt --validate completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
+    "Prompt --validate completo per Perplexity (Sonar / Reasoning / Pro)",
     expanded=False,
 ):
     from datetime import date as _date
@@ -221,13 +221,12 @@ with st.expander(
     from propicks.ai.user_prompts import perplexity_etf_validate_full
 
     st.caption(
-        "Ricostruisce il payload (model guidance + system + user + schema) "
-        "di `propicks-rotate --validate`. System prompt Anthropic intatto "
-        "byte-per-byte → compat SDK Claude / claude.ai senza modifiche. "
-        "Header iniziale guida Perplexity multi-modello (Sonar/Reasoning/Pro). "
-        "Schema JSON con fallback `---JSON---` per modelli non-strict."
+        "Ottimizzato per Perplexity multi-modello (web search built-in). "
+        "Header dedicato Sonar / Sonar Pro / Reasoning + Claude/GPT/Gemini via "
+        "Perplexity Pro. Schema JSON con fallback `---JSON---` separator per "
+        "modelli senza JSON mode strict."
     )
-    _fallback = perplexity_etf_validate_full(
+    _perp = perplexity_etf_validate_full(
         ranked=ranked,
         allocation=allocation,
         as_of_date=_date.today().isoformat(),
@@ -235,10 +234,36 @@ with st.expander(
         benchmark=bench,
     )
     st.caption(
-        f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+        f"~{len(_perp):,} caratteri · ~{len(_perp) // 4:,} token stimati."
+    )
+    st.code(_perp, language="markdown")
+
+with st.expander(
+    "Prompt --validate completo per LLM generico (Claude.ai / ChatGPT / Gemini)",
+    expanded=False,
+):
+    from datetime import date as _date
+
+    from propicks.ai.user_prompts import llm_generic_etf_validate_full
+
+    st.caption(
+        "Ottimizzato per Claude.ai / console Anthropic / ChatGPT / Gemini "
+        "direct. System prompt Anthropic byte-per-byte → compat piena con "
+        "SDK Claude e claude.ai senza modifiche. Schema JSON strict. Usa "
+        "questo per un secondo parere SDK-grade sulla rotation macro view."
+    )
+    _llm = llm_generic_etf_validate_full(
+        ranked=ranked,
+        allocation=allocation,
+        as_of_date=_date.today().isoformat(),
+        region=region,
+        benchmark=bench,
+    )
+    st.caption(
+        f"~{len(_llm):,} caratteri · ~{len(_llm) // 4:,} token stimati. "
         "Verifica la context window del modello target prima di incollare."
     )
-    st.code(_fallback, language="markdown")
+    st.code(_llm, language="markdown")
 
 # ---------------------------------------------------------------------------
 # AI validation (macro view)

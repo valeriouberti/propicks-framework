@@ -217,12 +217,13 @@ for r in results:
             st.code(perplexity_2c(r["ticker"]), language=None)
 
         # -----------------------------------------------------------------
-        # Fallback validate completo — prompt multi-modello (Perplexity primary,
-        # compat con Claude SDK/web app e altri LLM) quando l'API Anthropic è
-        # down, la chiave è esaurita o il budget AI è saturo.
+        # Fallback validate completo — due varianti distinte, da scegliere
+        # in base al destinatario (Perplexity multi-modello vs LLM generico
+        # tipo Claude.ai / ChatGPT / Gemini direct). System prompt Anthropic
+        # byte-equivalent in entrambi → compat piena con SDK / claude.ai.
         # -----------------------------------------------------------------
         with st.expander(
-            "Prompt --validate completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
+            "Prompt --validate completo per Perplexity (Sonar / Reasoning / Pro)",
             expanded=False,
         ):
             from datetime import date as _date
@@ -230,18 +231,38 @@ for r in results:
             from propicks.ai.user_prompts import perplexity_stock_validate_full
 
             st.caption(
-                "Ricostruisce il payload (model guidance + system + user + schema) "
-                "di `propicks-scan --validate`. Il system prompt Anthropic è intatto "
-                "byte-per-byte → compatibile con SDK Claude / claude.ai senza modifiche. "
-                "Header iniziale guida i modelli Perplexity (Sonar / Sonar Pro / Reasoning) "
-                "e altri LLM. Schema JSON tollerante con fallback `---JSON---` separator."
+                "Ottimizzato per Perplexity multi-modello (web search built-in). "
+                "Header dedicato Sonar / Sonar Pro / Sonar Reasoning + Claude/GPT/Gemini "
+                "via Perplexity Pro. Schema JSON con fallback `---JSON---` separator "
+                "per modelli senza JSON mode strict."
             )
-            _fallback = perplexity_stock_validate_full(r, _date.today().isoformat())
+            _perp = perplexity_stock_validate_full(r, _date.today().isoformat())
             st.caption(
-                f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+                f"~{len(_perp):,} caratteri · ~{len(_perp) // 4:,} token stimati."
+            )
+            st.code(_perp, language="markdown")
+
+        with st.expander(
+            "Prompt --validate completo per LLM generico (Claude.ai / ChatGPT / Gemini)",
+            expanded=False,
+        ):
+            from datetime import date as _date
+
+            from propicks.ai.user_prompts import llm_generic_stock_validate_full
+
+            st.caption(
+                "Ottimizzato per Claude.ai / console Anthropic / ChatGPT / Gemini "
+                "direct. System prompt Anthropic byte-per-byte → compat piena con "
+                "SDK Claude e claude.ai senza modifiche. Schema JSON strict (no "
+                "fallback prosa). Usa questo quando vuoi un secondo parere su un "
+                "modello SDK-grade invece che su Perplexity."
+            )
+            _llm = llm_generic_stock_validate_full(r, _date.today().isoformat())
+            st.caption(
+                f"~{len(_llm):,} caratteri · ~{len(_llm) // 4:,} token stimati. "
                 "Verifica la context window del modello target prima di incollare."
             )
-            st.code(_fallback, language="markdown")
+            st.code(_llm, language="markdown")
 
         # -----------------------------------------------------------------
         # Manual "→ Watchlist" — funziona per qualunque classe (anche C/D)

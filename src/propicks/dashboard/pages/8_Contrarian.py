@@ -525,11 +525,11 @@ for r in results:
             st.code(perplexity_2c(r["ticker"]), language=None)
 
         # -----------------------------------------------------------------
-        # Fallback validate completo — prompt multi-modello (Perplexity primary,
-        # compat con Claude SDK/web app e altri LLM) per cross-check FLUSH/BREAK.
+        # Fallback validate completo — due varianti distinte (Perplexity vs
+        # LLM generico). System prompt Anthropic byte-equivalent in entrambi.
         # -----------------------------------------------------------------
         with st.expander(
-            "Prompt --validate contrarian completo (fallback multi-modello: Perplexity / Claude / GPT / Gemini)",
+            "Prompt --validate contrarian per Perplexity (Sonar / Reasoning / Pro)",
             expanded=False,
         ):
             from datetime import date as _date
@@ -537,21 +537,41 @@ for r in results:
             from propicks.ai.user_prompts import perplexity_contrarian_validate_full
 
             st.caption(
-                "Ricostruisce il payload (model guidance + system + user + schema) "
-                "di `propicks-contra --validate`. Persona system prompt: senior "
-                "event-driven / mean-reversion PM. Anthropic byte-per-byte intatto "
-                "→ compat SDK Claude / claude.ai senza modifiche. Header iniziale "
-                "guida Perplexity multi-modello. Schema JSON con fallback "
-                "`---JSON---` per modelli senza JSON mode strict."
+                "Ottimizzato per Perplexity multi-modello (web search built-in). "
+                "Persona system prompt: senior event-driven / mean-reversion PM. "
+                "Header dedicato Sonar / Reasoning / Claude/GPT/Gemini via Pro. "
+                "Schema JSON con fallback `---JSON---` per modelli senza JSON strict."
             )
-            _fallback = perplexity_contrarian_validate_full(
+            _perp = perplexity_contrarian_validate_full(
                 r, _date.today().isoformat()
             )
             st.caption(
-                f"~{len(_fallback):,} caratteri · ~{len(_fallback) // 4:,} token stimati. "
+                f"~{len(_perp):,} caratteri · ~{len(_perp) // 4:,} token stimati."
+            )
+            st.code(_perp, language="markdown")
+
+        with st.expander(
+            "Prompt --validate contrarian per LLM generico (Claude.ai / ChatGPT / Gemini)",
+            expanded=False,
+        ):
+            from datetime import date as _date
+
+            from propicks.ai.user_prompts import llm_generic_contrarian_validate_full
+
+            st.caption(
+                "Ottimizzato per Claude.ai / console Anthropic / ChatGPT / Gemini "
+                "direct. System prompt Anthropic byte-per-byte → compat piena con "
+                "SDK Claude e claude.ai senza modifiche. Schema JSON strict. Usa "
+                "questo per un secondo parere SDK-grade su FLUSH vs BREAK."
+            )
+            _llm = llm_generic_contrarian_validate_full(
+                r, _date.today().isoformat()
+            )
+            st.caption(
+                f"~{len(_llm):,} caratteri · ~{len(_llm) // 4:,} token stimati. "
                 "Verifica la context window del modello target prima di incollare."
             )
-            st.code(_fallback, language="markdown")
+            st.code(_llm, language="markdown")
 
         # AI validation on-demand
         if validate_ai:
