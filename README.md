@@ -2,10 +2,14 @@
 
 Motore Python per un trading system AI-driven che combina segnali da Investing Pro Picks AI con analisi qualitativa (Claude/Perplexity) e tecnica (yfinance/TradingView). Gestisce il ciclo completo: **screening → scoring → sizing → execution → journaling → review**.
 
-Due strategie parallele condividono regime classifier, sizing e journal:
+> 📖 **Manuale completo**: parti da **[WIKI.md](WIKI.md)** per il manuale operativo (CLI, dashboard, Pine, setup, security, FAQ).
+> Per l'architettura interna e gli invarianti vedi [CLAUDE.md](CLAUDE.md).
 
-- **Single-stock** (Pro Picks AI mensile + scoring tecnico + thesis validator Claude)
-- **Sector rotation** (SPDR Select Sector / UCITS ZPD*.DE, scoring RS + regime + momentum + trend + rotation validator Claude)
+Tre strategie parallele condividono regime classifier, sizing e journal:
+
+- **Momentum** ([`propicks-scan`](docs/MOMENTUM_STRATEGY.md)) — Pro Picks AI mensile + scoring tecnico + thesis validator Claude
+- **Contrarian** ([`propicks-contra`](docs/CONTRARIAN_STRATEGY.md)) — quality-filtered mean reversion (long-only)
+- **Sector rotation** ([`propicks-rotate`](docs/ETF_ROTATION_STRATEGY.md)) — SPDR Select Sector / UCITS ZPD*.DE / Xtrackers WORLD, scoring RS + regime + momentum + trend
 
 ## Requisiti
 

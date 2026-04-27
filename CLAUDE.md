@@ -7,9 +7,11 @@ Pro Picks AI con analisi qualitativa (Claude/Perplexity) e tecnica (TradingView)
 Il sistema gestisce il ciclo completo: screening → scoring → execution →
 journaling → review.
 
-> **Documentazione di dettaglio**: questa CLAUDE.md è il punto d'ingresso per
-> orientarsi rapidamente. Per ogni strategia / sottosistema esiste un MD
-> dedicato in `docs/` con tesi, architettura, invarianti e trade-off espliciti.
+> **Manuale completo**: per il manuale operativo end-to-end (CLI, dashboard,
+> Pine, setup, security, FAQ) parti da [`WIKI.md`](WIKI.md). Questa CLAUDE.md è
+> il punto d'ingresso per orientarsi sull'**architettura interna** + invarianti
+> di business. Per ogni strategia / sottosistema esiste un MD dedicato in
+> `docs/` con tesi, architettura, invarianti e trade-off espliciti.
 > **Consulta sempre il MD specifico prima di toccare un sottosistema** — qui
 > trovi solo l'index e gli invarianti globali.
 
@@ -44,8 +46,23 @@ journaling → review.
 |-----|-------|
 | [`Trading_System_Playbook.md`](docs/Trading_System_Playbook.md) | Workflow operativo + prompt Perplexity/Claude |
 | [`Weekly_Operating_Framework.md`](docs/Weekly_Operating_Framework.md) | Cadenza weekly (Sab review, Dom plan, Lun-Ven exec) |
-| [`USER_GUIDE.md`](docs/USER_GUIDE.md) | Guida utente trader |
+| [`USER_GUIDE.md`](docs/USER_GUIDE.md) | Guida utente trader (quick start) |
 | [`NEXT_STEPS.md`](docs/NEXT_STEPS.md) | Roadmap |
+
+### Manuale & Reference (wiki)
+
+| Doc | Scopo |
+|-----|-------|
+| [`WIKI.md`](WIKI.md) | **Master index del manuale**: entry point per CLI/dashboard/pine/setup |
+| [`docs/INSTALLATION_AND_SETUP.md`](docs/INSTALLATION_AND_SETUP.md) | Setup completo, .env, Docker, smoke test |
+| [`docs/ARCHITECTURE_OVERVIEW.md`](docs/ARCHITECTURE_OVERVIEW.md) | Layer separation, data flow, dependency graph |
+| [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) | Reference esaustivo dei 14 entry points CLI |
+| [`docs/DASHBOARD_GUIDE.md`](docs/DASHBOARD_GUIDE.md) | Walkthrough delle 11 page Streamlit |
+| [`docs/PINE_SCRIPTS_REFERENCE.md`](docs/PINE_SCRIPTS_REFERENCE.md) | 4 Pine scripts (regime, daily, ETF, contrarian) |
+| [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md) | Schema SQLite — ogni tabella e colonna |
+| [`docs/SECURITY_AND_SECRETS.md`](docs/SECURITY_AND_SECRETS.md) | API key, .env, segreti, rotation |
+| [`docs/FAQ_AND_TROUBLESHOOTING.md`](docs/FAQ_AND_TROUBLESHOOTING.md) | Errori comuni, regime offtrack, cache stale |
+| [`docs/CONTRIBUTING_AND_TESTING.md`](docs/CONTRIBUTING_AND_TESTING.md) | Estendere il framework, convenzioni test |
 
 ---
 
