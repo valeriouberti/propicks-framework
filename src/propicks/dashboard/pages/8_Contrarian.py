@@ -310,6 +310,20 @@ if actionable:
 # Summary table — tutte le colonne serializzate come stringhe omogenee
 # (evita PyArrow errors quando i valori possono essere None o sentinel "—")
 # ---------------------------------------------------------------------------
+def _earnings_short(r: dict) -> str:
+    """Badge earnings compatto per summary table (mirror CLI contrarian)."""
+    days = r.get("days_to_earnings")
+    if not isinstance(days, int):
+        return "—"
+    if days < 0:
+        return f"📰{abs(days)}d"
+    if days <= 5:
+        return f"🚨{days}d"
+    if days <= 14:
+        return f"⚠️{days}d"
+    return f"{days}d"
+
+
 st.subheader("Risultati contrarian")
 rows = []
 for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
@@ -347,13 +361,16 @@ for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
         "R/R": f"{rr:.2f}" if isinstance(rr, (int, float)) and target_valid else "—",
         "Perf 1m": fmt_pct(r.get("perf_1m")),
         "Regime": (r.get("regime") or {}).get("regime", "N/D"),
+        "Earn.": _earnings_short(r),
     })
 st.dataframe(rows, width="stretch", hide_index=True)
 st.caption(
     "**Oversold** (40%): RSI + distanza EMA50 in ATR + barre rosse consecutive · "
     "**Quality** (25%): gate EMA200 weekly + depth correzione · "
     "**Context** (20%): regime fit inverso + VIX · "
-    "**R/R score** (15%): reversion a EMA50 vs stop a -3×ATR."
+    "**R/R score** (15%): reversion a EMA50 vs stop a -3×ATR · "
+    "**Earn.**: giorni al prossimo earnings (🚨 ≤5gg = hard gate, ⚠️ ≤14gg = "
+    "warning, 📰 = report passato → possibile post-flush)."
 )
 
 # ---------------------------------------------------------------------------
@@ -477,6 +494,33 @@ for r in results:
             if isinstance(rr_val, (int, float)) and target_valid
             else "—",
         )
+
+        # Earnings hard-gate awareness — su contrarian un earnings imminente
+        # è cruciale: il selloff può essere pre-report (BREAK probabile, REJECT)
+        # vs post-report (FLUSH tradable). Il dato è già nel dict da analyze_contra_ticker.
+        days_e = r.get("days_to_earnings")
+        next_e = r.get("next_earnings_date")
+        if isinstance(days_e, int) and next_e:
+            if 0 <= days_e <= 5:
+                st.error(
+                    f"🚨 **Earnings in {days_e}gg ({next_e})** — `add_position` "
+                    f"bloccato dal hard gate. Su contrarian questo è quasi sempre "
+                    f"BREAK (selloff pre-report). Override solo per intentional "
+                    f"post-earnings flush: `propicks-portfolio add ... "
+                    f"--ignore-earnings --contrarian`."
+                )
+            elif 6 <= days_e <= 14:
+                st.warning(
+                    f"⚠️ Earnings in {days_e}gg ({next_e}) — entry permessa ma "
+                    f"R/R reale è compresso dal report imminente. Considera di "
+                    f"aspettare il post-report se vuoi un flush vero."
+                )
+            elif -7 <= days_e < 0:
+                st.info(
+                    f"📰 Ultimo earnings {abs(days_e)}gg fa ({next_e}) — "
+                    f"setup post-flush plausibile, verifica cause selloff in "
+                    f"--validate (FLUSH vs BREAK)."
+                )
 
         # Manual watchlist add
         wl_col1, wl_col2 = st.columns([1, 3])

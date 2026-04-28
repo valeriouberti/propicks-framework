@@ -633,10 +633,11 @@ with tab_mgmt:
 with tab_size:
     st.caption(
         "Calcola shares da comprare dato entry, stop e convinzione. "
-        "Cap per asset type: 15% stock / 20% ETF. Non modifica il portfolio."
+        "Cap per asset type: 15% stock / 20% ETF. Bucket contrarian: 8% size, "
+        "12% loss, max 3 pos, 20% aggregate. Non modifica il portfolio."
     )
     with st.form("size_form", border=True):
-        cols = st.columns([2, 1, 1, 1, 1, 1])
+        cols = st.columns([2, 1, 1, 1, 1, 1, 1])
         ticker = cols[0].text_input("Ticker", placeholder="AAPL / XLK / XDWT.DE")
         entry = cols[1].number_input("Entry price", min_value=0.01, step=0.01, format="%.2f")
         stop = cols[2].number_input("Stop price", min_value=0.01, step=0.01, format="%.2f")
@@ -644,6 +645,15 @@ with tab_size:
         score_tech = cols[4].slider("Score tech", 0, 100, 70)
         asset_override = cols[5].selectbox(
             "Asset type", options=("auto", "STOCK", "SECTOR_ETF"), index=0
+        )
+        bucket_choice = cols[6].selectbox(
+            "Bucket",
+            options=("momentum", "contrarian"),
+            index=0,
+            help=(
+                "Contrarian → cap 8%, loss 12%, max 3 pos, 20% aggregate. "
+                "Override il cap asset-type."
+            ),
         )
         submitted = st.form_submit_button("Calcola", type="primary")
 
@@ -661,6 +671,7 @@ with tab_size:
             score_tech=score_tech,
             portfolio=portfolio,
             asset_type=asset_type,  # type: ignore[arg-type]
+            strategy_bucket=bucket_choice,  # type: ignore[arg-type]
         )
         if not result.get("ok"):
             st.error(result.get("error", "Errore sconosciuto."))
@@ -681,7 +692,7 @@ with tab_size:
 # ---------------------------------------------------------------------------
 # Add position
 # ---------------------------------------------------------------------------
-STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Altro")
+STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Contrarian", "Altro")
 
 with tab_add:
     st.caption(

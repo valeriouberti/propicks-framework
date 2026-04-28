@@ -192,7 +192,7 @@ with tab_stats:
 # ---------------------------------------------------------------------------
 # Add trade
 # ---------------------------------------------------------------------------
-STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Altro")
+STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Contrarian", "Altro")
 
 with tab_add:
     with st.form("add_trade_form", border=True):

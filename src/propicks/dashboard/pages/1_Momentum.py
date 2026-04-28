@@ -299,6 +299,20 @@ if actionable:
 # ---------------------------------------------------------------------------
 # Summary table
 # ---------------------------------------------------------------------------
+def _earnings_short(r: dict) -> str:
+    """Badge earnings compatto per summary table (mirror CLI momentum)."""
+    days = r.get("days_to_earnings")
+    if not isinstance(days, int):
+        return "—"
+    if days < 0:
+        return f"📰{abs(days)}d"
+    if days <= 5:
+        return f"🚨{days}d"
+    if days <= 14:
+        return f"⚠️{days}d"
+    return f"{days}d"
+
+
 st.subheader("Risultati")
 rows = []
 for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
@@ -316,12 +330,15 @@ for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
         "Perf 3m": fmt_pct(r.get("perf_3m")),
         "Regime": regime.get("regime", "N/D"),
         "Stop sugg.": f"{r['stop_suggested']:.2f}",
+        "Earn.": _earnings_short(r),
     })
 st.dataframe(rows, width="stretch", hide_index=True)
 st.caption(
     "Colonne: **Score**=tecnico 0-100 · **Class**=A/B/C/D · **RSI**=14d · "
     "**ATR%**=volatilità · **Dist52wH**=% dal max 52w · "
-    "**Perf**=performance a 5/21/63gg. Apri la legenda in fondo per il dettaglio."
+    "**Perf**=performance a 5/21/63gg · **Earn.**=giorni al prossimo earnings "
+    "(🚨 ≤5gg = hard gate, ⚠️ ≤14gg = warning, 📰 = report passato). "
+    "Apri la legenda in fondo per il dettaglio."
 )
 
 # ---------------------------------------------------------------------------
@@ -363,6 +380,27 @@ for r in results:
         tech_cols[1].write(f"EMA slow: {r['ema_slow']:.2f}")
         tech_cols[2].write(f"ATR: {r['atr']:.2f} ({fmt_pct(r.get('atr_pct'))})")
         tech_cols[3].write(f"52w high: {r['high_52w']:.2f}")
+
+        # Earnings hard-gate awareness — mirror CLI momentum + page Calendar.
+        days_e = r.get("days_to_earnings")
+        next_e = r.get("next_earnings_date")
+        if isinstance(days_e, int) and next_e:
+            if 0 <= days_e <= 5:
+                st.error(
+                    f"🚨 **Earnings in {days_e}gg ({next_e})** — `add_position` "
+                    f"bloccato dal hard gate. Override solo per intentional "
+                    f"post-earnings: `propicks-portfolio add ... --ignore-earnings`."
+                )
+            elif 6 <= days_e <= 14:
+                st.warning(
+                    f"⚠️ Earnings in {days_e}gg ({next_e}) — entry permessa ma "
+                    f"considera la volatilità del report imminente."
+                )
+            elif days_e < 0:
+                st.caption(
+                    f"📰 Ultimo earnings {abs(days_e)}gg fa ({next_e}) — "
+                    f"reazione post-report già scontata."
+                )
 
         # Pine inputs block — aiuta copia-incolla nei settings del Pine daily
         st.markdown("**TradingView Pine Inputs** (copia negli input del Pine daily):")

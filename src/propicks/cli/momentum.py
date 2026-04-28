@@ -64,6 +64,40 @@ def _rs_sector_row(rs: dict | None) -> str:
     )
 
 
+def _earnings_badge(r: dict) -> str:
+    """Badge earnings per output CLI momentum.
+
+    - Earnings entro 5gg → 🚨 hard gate (add_position bloccato senza --ignore-earnings)
+    - Earnings 6-14gg   → ⚠️  warning
+    - Earnings recenti  → 📰 info post-report
+    """
+    days = r.get("days_to_earnings")
+    next_date = r.get("next_earnings_date") or "—"
+    if isinstance(days, int):
+        if days < 0:
+            return f"📰 earnings {abs(days)}gg fa ({next_date})"
+        if days <= 5:
+            return f"🚨 EARNINGS {days}gg ({next_date}) — add bloccato senza --ignore-earnings"
+        if days <= 14:
+            return f"⚠️ earnings {days}gg ({next_date})"
+        return f"earnings in {days}gg ({next_date})"
+    return "—"
+
+
+def _earnings_short(r: dict) -> str:
+    """Badge earnings compatto per summary table."""
+    days = r.get("days_to_earnings")
+    if not isinstance(days, int):
+        return "—"
+    if days < 0:
+        return f"📰{abs(days)}d"
+    if days <= 5:
+        return f"🚨{days}d"
+    if days <= 14:
+        return f"⚠️{days}d"
+    return f"{days}d"
+
+
 def print_analysis(r: dict) -> None:
     """Output dettagliato per un singolo ticker."""
     header = [
@@ -96,6 +130,7 @@ def print_analysis(r: dict) -> None:
             "Performance 1w / 1m / 3m",
             f"{_fmt_pct(r['perf_1w'])}  /  {_fmt_pct(r['perf_1m'])}  /  {_fmt_pct(r['perf_3m'])}",
         ],
+        ["Earnings", _earnings_badge(r)],
     ]
     print(tabulate(header, tablefmt="simple"))
     print()
@@ -130,6 +165,7 @@ def print_summary_table(results: list[dict]) -> None:
         "MA×",
         "Stop",
         "1m",
+        "Earn.",
     ]
     rows = []
     for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
@@ -148,6 +184,7 @@ def print_summary_table(results: list[dict]) -> None:
                 f"{s['ma_cross']:.0f}",
                 f"{r['stop_suggested']:.2f}",
                 _fmt_pct(r["perf_1m"]),
+                _earnings_short(r),
             ]
         )
     print(tabulate(rows, headers=headers, tablefmt="github"))

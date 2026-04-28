@@ -446,6 +446,20 @@ def _print_advanced_size_result(ticker: str, r: dict) -> None:
 
 def cmd_add(args: argparse.Namespace) -> int:
     portfolio = load_portfolio()
+    strategy = args.strategy
+    if getattr(args, "contrarian", False):
+        # Shortcut: --contrarian default a strategy="Contrarian" se non già
+        # impostata. Se l'utente ha passato --strategy con un tag che NON
+        # inizia con "contra", segnala perché la chain di gate (size 8%,
+        # loss 12%, max 3 pos, 20% aggregate) si attiva solo dal prefisso.
+        if strategy is None:
+            strategy = "Contrarian"
+        elif not strategy.lower().startswith("contra"):
+            print(
+                f"[warning] --contrarian passato ma --strategy='{strategy}' non "
+                "inizia con 'contra': i gate bucket contrarian NON si attivano.",
+                file=sys.stderr,
+            )
     try:
         pos = add_position(
             portfolio,
@@ -454,7 +468,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             shares=args.shares,
             stop_loss=args.stop,
             target=args.target,
-            strategy=args.strategy,
+            strategy=strategy,
             score_claude=args.score_claude,
             score_tech=args.score_tech,
             catalyst=args.catalyst,
@@ -716,6 +730,15 @@ def main() -> int:
         help=(
             "Bypass earnings hard gate (5gg). Usa per trade intentional "
             "post-earnings flush (contrarian strategy)."
+        ),
+    )
+    p_add.add_argument(
+        "--contrarian",
+        action="store_true",
+        help=(
+            "Shortcut: default strategy='Contrarian' se non passata. Attiva i "
+            "gate bucket contrarian (size 8%%, loss 12%%, max 3 pos, 20%% "
+            "aggregate) via riconoscimento prefisso 'contra' in add_position."
         ),
     )
     p_add.set_defaults(func=cmd_add)

@@ -28,6 +28,7 @@ from propicks.config import (
     WEIGHT_VOLATILITY,
     WEIGHT_VOLUME,
 )
+from propicks.domain.calendar import days_to_earnings as _days_to_earnings
 from propicks.domain.indicators import compute_atr, compute_ema, compute_rsi, pct_change
 from propicks.domain.regime import classify_regime
 from propicks.domain.stock_rs import (
@@ -40,6 +41,7 @@ from propicks.market.yfinance_client import (
     download_benchmark_weekly,
     download_history,
     download_weekly_history,
+    get_next_earnings_date,
     get_ticker_sector,
 )
 
@@ -247,6 +249,15 @@ def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
                     weekly["Close"], sector_weekly, peer_etf=peer
                 )
 
+    # Earnings calendar: surface upcoming earnings per warning + hard gate.
+    # Fail-open su yfinance error (non blocca lo scoring se data source giù).
+    next_earnings_date: str | None = None
+    try:
+        next_earnings_date = get_next_earnings_date(ticker)
+    except Exception:
+        next_earnings_date = None
+    days_to_earnings = _days_to_earnings(next_earnings_date)
+
     close = hist["Close"]
     high = hist["High"]
     low = hist["Low"]
@@ -331,4 +342,6 @@ def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:
         "perf_3m": pct_change(close, 63),
         "regime": regime,
         "rs_vs_sector": rs_vs_sector,
+        "next_earnings_date": next_earnings_date,
+        "days_to_earnings": days_to_earnings,
     }
