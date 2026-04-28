@@ -187,7 +187,7 @@ else:
             for _t, _cur, _dist in sorted(ready_hits, key=lambda x: abs(x[2])):
                 st.markdown(
                     f"- **{_t}** @ {_cur:.2f} · {_dist * 100:+.2f}% dal target → "
-                    "vai su **Scanner** per validazione completa"
+                    "vai su **Momentum** per validazione completa"
                 )
         if invariant_alerts:
             st.markdown("**⚠️ Invariants**")
@@ -281,7 +281,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("Posizioni aperte")
 if not positions:
-    st.info("Nessuna posizione aperta. Vai su **Scanner** o **ETF Rotation** per analizzare setup.")
+    st.info("Nessuna posizione aperta. Vai su **Momentum** o **ETF Rotation** per analizzare setup.")
 else:
     denom = total + unrealized
     rows = []
@@ -381,7 +381,7 @@ _steps = [
         "🔍",
         "Analisi indicatori + classificazione A/B/C/D. Auto-add in watchlist "
         "per classe A (target = prezzo corrente) e B.",
-        "Scanner",
+        "Momentum",
         "propicks-momentum TICKER",
     ),
     (
@@ -397,7 +397,7 @@ _steps = [
         "🤖",
         "Claude verdict strutturato (CONFIRM / CAUTION / REJECT) con gate "
         "doppio: score ≥ 60 **e** regime ≥ NEUTRAL. Cache 24h.",
-        "Scanner → Valida",
+        "Momentum → Valida",
         "propicks-momentum TICKER --validate",
     ),
     (

@@ -633,7 +633,7 @@ classificato **A** (score ≥75, `"A — AZIONE IMMEDIATA"`) o **B** (60-74,
   earnings pullback).
 - **Classe C/D** → skip auto-add (sarebbero rumore in watchlist). Restano
   aggiungibili manualmente via `propicks-watchlist add` o via il bottone
-  "📋 Aggiungi a watchlist" nella dashboard Scanner per i casi in cui
+  "📋 Aggiungi a watchlist" nella dashboard Momentum per i casi in cui
   *sai* che vuoi tenerlo d'occhio nonostante lo score basso.
 
 ### Popolamento manuale

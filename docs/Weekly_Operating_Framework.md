@@ -10,7 +10,7 @@ un secondo lavoro.
 
 > **Nota:** tutti i comandi `propicks-*` citati in questo documento hanno
 > equivalente UI nella dashboard Streamlit (`propicks-dashboard` oppure
-> `docker compose up -d`). Scanner, ETF Rotation, Portfolio, Journal e
+> `docker compose up -d`). Momentum, ETF Rotation, Portfolio, Journal e
 > Reports sono le pages corrispondenti. CLI e dashboard usano la stessa
 > business logic — scegli l'interfaccia che preferisci, lo stato su
 > `data/` è condiviso.

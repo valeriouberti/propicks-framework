@@ -1,6 +1,7 @@
-"""Scanner tecnico + validazione AI opzionale.
+"""Momentum scanner — trend/quality stock screener.
 
-Equivalent UI di ``propicks-momentum [TICKER ...] [--validate]``.
+Equivalent UI di ``propicks-momentum [TICKER ...] [--validate]
+[--discover-sp500|--discover-ftsemib|--discover-stoxx600]``.
 """
 
 from __future__ import annotations
@@ -17,49 +18,244 @@ from propicks.dashboard._shared import (
     render_indicator_legend,
 )
 
-st.set_page_config(page_title="Scanner · Propicks", layout="wide")
+st.set_page_config(page_title="Momentum · Propicks", layout="wide")
 page_header(
-    "Scanner",
-    "Analisi tecnica single-ticker o batch. Validazione Claude opzionale (gate regime + score).",
+    "Momentum",
+    "Trend/quality stock screener single-ticker, batch o discovery universe-wide. "
+    "Validazione Claude opzionale (gate regime + score).",
 )
 invariants_note()
 
 STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "Altro")
 
-with st.form("scanner_form", border=True):
-    tickers_raw = st.text_input(
-        "Ticker (separati da spazio o virgola)",
-        placeholder="AAPL MSFT NVDA  oppure  ENI.MI ISP.MI",
+# ---------------------------------------------------------------------------
+# Mode selector: Manual (ticker espliciti) vs Discovery (universe-wide scan)
+# ---------------------------------------------------------------------------
+INDEX_OPTIONS = {
+    "S&P 500 (~500 nomi US)": "sp500",
+    "FTSE MIB (40 large-cap IT)": "ftsemib",
+    "STOXX Europe 600 (~600 nomi)": "stoxx600",
+}
+
+tab_manual, tab_discovery = st.tabs(["📝 Manual scan", "🔭 Discovery (universe-wide)"])
+
+# Init shared state
+tickers: list[str] = []
+strategy_val: str | None = None
+validate_ai = False
+force_ai = False
+discover_universe: str | None = None
+discover_top_n = 10
+discover_min_score = 60.0
+discover_rsi_min = 45.0
+discover_max_dist = 0.35
+discover_prefilter_cap: int | None = None
+discover_refresh = False
+submitted = False
+
+with tab_manual:
+    with st.form("momentum_form_manual", border=True):
+        tickers_raw = st.text_input(
+            "Ticker (separati da spazio o virgola)",
+            placeholder="AAPL MSFT NVDA  oppure  ENI.MI ISP.MI",
+        )
+        col1, col2, col3 = st.columns([2, 1, 1])
+        strategy = col1.selectbox(
+            "Strategy (opzionale)", STRATEGIES, index=0, key="m_strategy"
+        )
+        validate_ai_m = col2.checkbox("Valida con Claude", value=False, key="m_validate")
+        force_ai_m = col3.checkbox(
+            "Force (bypassa gate + cache)", value=False, key="m_force"
+        )
+        submit_manual = st.form_submit_button(
+            "Analizza", type="primary", width="stretch"
+        )
+
+    if submit_manual:
+        tickers = [
+            t.strip().upper()
+            for t in tickers_raw.replace(",", " ").split()
+            if t.strip()
+        ]
+        if not tickers:
+            st.warning("Inserisci almeno un ticker.")
+            st.stop()
+        strategy_val = strategy or None
+        validate_ai = validate_ai_m
+        force_ai = force_ai_m
+        submitted = True
+
+
+with tab_discovery:
+    st.markdown(
+        "**Discovery automatico**: scansiona un intero index, applica un "
+        "prefilter cheap (trend EMA50 + RSI vivo + dentro range 52w-high) e "
+        "ritorna i top N candidati ranked per composite. Il primo run di un "
+        "index può richiedere 5-10 min (cache OHLCV cold)."
     )
-    col1, col2, col3 = st.columns([2, 1, 1])
-    strategy = col1.selectbox("Strategy (opzionale)", STRATEGIES, index=0)
-    validate_ai = col2.checkbox("Valida con Claude", value=False)
-    force_ai = col3.checkbox("Force (bypassa gate + cache)", value=False)
-    submitted = st.form_submit_button("Analizza", type="primary", width="stretch")
+    with st.form("momentum_form_discovery", border=True):
+        col_a, col_b = st.columns([2, 1])
+        universe_label = col_a.selectbox(
+            "Universe", options=list(INDEX_OPTIONS.keys()), index=0, key="d_universe"
+        )
+        top_n_in = col_b.number_input(
+            "Top N", min_value=1, max_value=50, value=10, step=1, key="d_top_n"
+        )
+        col_c, col_d, col_e = st.columns(3)
+        strategy_d = col_c.selectbox(
+            "Strategy (tag)", STRATEGIES, index=0, key="d_strategy"
+        )
+        min_score_in = col_d.number_input(
+            "Min score (filtro post-scoring)",
+            min_value=0.0,
+            max_value=100.0,
+            value=60.0,
+            step=5.0,
+            help="Default 60 → solo classe A+B. 75 → solo A. 0 → nessun filtro.",
+            key="d_min_score",
+        )
+        prefilter_cap_in = col_e.number_input(
+            "Prefilter cap (0 = no cap)",
+            min_value=0,
+            max_value=500,
+            value=0,
+            step=10,
+            help="Limita il n. di ticker che passano allo stage 2 (full scoring).",
+            key="d_prefilter_cap",
+        )
+        col_f, col_g = st.columns(2)
+        rsi_min_in = col_f.number_input(
+            "Prefilter RSI min",
+            min_value=20.0,
+            max_value=70.0,
+            value=45.0,
+            step=1.0,
+            help="Default 45 (più permissivo del sweet-spot 50-65 dello score finale).",
+            key="d_rsi_min",
+        )
+        max_dist_in = col_g.number_input(
+            "Prefilter max dist 52w-high (frazione)",
+            min_value=0.05,
+            max_value=0.60,
+            value=0.35,
+            step=0.05,
+            format="%.2f",
+            help="Default 0.35 (dentro 35% dal massimo annuale).",
+            key="d_max_dist",
+        )
+        col_h, col_i, col_j = st.columns(3)
+        validate_ai_d = col_h.checkbox(
+            "Valida top con Claude", value=False, key="d_validate"
+        )
+        force_ai_d = col_i.checkbox("Force (bypassa gate)", value=False, key="d_force")
+        refresh_in = col_j.checkbox(
+            "Refresh universe (bypass cache 7gg)",
+            value=False,
+            help="Forza re-fetch della lista da Wikipedia.",
+            key="d_refresh",
+        )
+        submit_disc = st.form_submit_button(
+            "Esegui discovery", type="primary", width="stretch"
+        )
+
+    if submit_disc:
+        discover_universe = INDEX_OPTIONS[universe_label]
+        discover_top_n = int(top_n_in)
+        discover_min_score = float(min_score_in)
+        discover_rsi_min = float(rsi_min_in)
+        discover_max_dist = float(max_dist_in)
+        discover_prefilter_cap = (
+            int(prefilter_cap_in) if int(prefilter_cap_in) > 0 else None
+        )
+        discover_refresh = bool(refresh_in)
+        strategy_val = strategy_d or None
+        validate_ai = validate_ai_d
+        force_ai = force_ai_d
+        submitted = True
+
 
 if not submitted:
     st.stop()
 
-tickers = [t.strip().upper() for t in tickers_raw.replace(",", " ").split() if t.strip()]
-if not tickers:
-    st.warning("Inserisci almeno un ticker.")
-    st.stop()
-
-strategy_val = strategy or None
-
 # ---------------------------------------------------------------------------
-# Batch scan
+# Batch scan — manual vs discovery branch
 # ---------------------------------------------------------------------------
 results: list[dict] = []
-with st.spinner(f"Scanning {len(tickers)} ticker…"):
-    for t in tickers:
-        r = cached_analyze(t, strategy_val)
-        if r is not None:
-            results.append(r)
 
-if not results:
-    st.error("Nessun ticker analizzabile. Verifica i simboli o la connessione di rete.")
-    st.stop()
+if discover_universe is not None:
+    from propicks.domain.momentum_discovery import discover_momentum_candidates
+    from propicks.market.index_constituents import get_index_universe, index_label
+
+    label = index_label(discover_universe)
+    try:
+        with st.spinner(f"Loading {label} universe…"):
+            universe = get_index_universe(
+                discover_universe, force_refresh=discover_refresh
+            )
+    except Exception as exc:
+        st.error(f"Impossibile caricare l'universo {label}: {exc}")
+        st.stop()
+
+    st.caption(
+        f"Universe **{label}**: {len(universe)} ticker. "
+        f"Stage 1 prefilter (RSI ≥ {discover_rsi_min}, "
+        f"dist_from_high ≤ {discover_max_dist})…"
+    )
+
+    progress = st.progress(0.0, text="Discovery in corso…")
+
+    def _ui_progress(stage: str, current: int, total: int, ticker: str) -> None:
+        if total <= 0:
+            return
+        # Stage 1 occupa 0-70%, stage 2 70-100% (full scoring più lento)
+        if stage == "prefilter":
+            pct = 0.70 * (current / total)
+        else:
+            pct = 0.70 + 0.30 * (current / total)
+        progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
+
+    with st.spinner(f"Running discovery pipeline su {label}…"):
+        out = discover_momentum_candidates(
+            universe,
+            top_n=discover_top_n,
+            rsi_min=discover_rsi_min,
+            max_dist_from_high=discover_max_dist,
+            min_score=discover_min_score,
+            strategy=strategy_val,
+            prefilter_cap=discover_prefilter_cap,
+            progress_callback=_ui_progress,
+        )
+    progress.empty()
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Universe", out["universe_size"])
+    summary_cols[1].metric("Prefilter pass", out["prefilter_pass"])
+    summary_cols[2].metric("Scored", out["scored"])
+    summary_cols[3].metric("Returned (top N)", len(out["candidates"]))
+
+    results = out["candidates"]
+
+    if not results:
+        st.warning(
+            "**Nessun candidato qualificato dopo full scoring.** "
+            "Possibili cause: regime macro BEAR/STRONG_BEAR (gate weekly skippa "
+            "i long), oppure soglie prefilter troppo strict per il momento di "
+            "mercato. Prova a rilassare RSI min, allargare max dist 52w-high, "
+            "o abbassare min score a 45 per vedere classe C."
+        )
+        st.stop()
+else:
+    with st.spinner(f"Scanning {len(tickers)} ticker…"):
+        for t in tickers:
+            r = cached_analyze(t, strategy_val)
+            if r is not None:
+                results.append(r)
+
+    if not results:
+        st.error(
+            "Nessun ticker analizzabile. Verifica i simboli o la connessione di rete."
+        )
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # Auto-add classe A+B alla watchlist (coerente col CLI propicks-momentum)
@@ -105,7 +301,7 @@ if actionable:
 # ---------------------------------------------------------------------------
 st.subheader("Risultati")
 rows = []
-for r in results:
+for r in sorted(results, key=lambda x: x["score_composite"], reverse=True):
     regime = r.get("regime") or {}
     rows.append({
         "Ticker": r["ticker"],

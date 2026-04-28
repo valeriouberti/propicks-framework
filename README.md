@@ -273,7 +273,7 @@ UI web opzionale basata su **Streamlit** che espone gli stessi workflow della CL
 | Pagina | Equivalente CLI |
 |--------|-----------------|
 | **Overview** | `propicks-portfolio status` + `risk` + regime weekly |
-| **Scanner** | `propicks-momentum [TICKER ...] [--validate]` |
+| **Momentum** | `propicks-momentum [TICKER ...] [--validate]` |
 | **ETF Rotation** | `propicks-rotate --region <R> [--allocate] [--validate]` |
 | **Portfolio** | `propicks-portfolio size` + `add` + `update` + `remove` |
 | **Journal** | `propicks-journal add` + `close` + `list` + `stats` |

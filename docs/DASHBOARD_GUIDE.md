@@ -30,7 +30,7 @@ src/propicks/dashboard/
 ├── launcher.py               # Entry point propicks-dashboard
 ├── cadence.py                # Helper countdown/markup per stato job scheduler
 └── pages/
-    ├── 1_Scanner.py
+    ├── 1_Momentum.py
     ├── 2_ETF_Rotation.py
     ├── 3_Portfolio.py
     ├── 4_Journal.py
@@ -65,23 +65,44 @@ CLI equivalente: `propicks-portfolio status` + `propicks-portfolio risk`.
 
 ---
 
-## 1. Scanner — `pages/1_Scanner.py`
+## 1. Momentum — `pages/1_Momentum.py`
 
 **Screening momentum stock** (= [`propicks-momentum`](CLI_REFERENCE.md#propicks-momentum)).
 
+Due tab:
+
+### 📝 Manual scan
 Form input:
 - Tickers (textarea, uno per riga)
 - Strategy bucket (dropdown: TechTitans, DominaDow, BattiSP500, MiglioriItaliane)
 - Toggle "Validate via Claude" (richiede `ANTHROPIC_API_KEY`)
 - Toggle "Force validate" (bypass cache + gate)
 
-Output:
+### 🔭 Discovery (universe-wide)
+Scansiona un intero index, applica un prefilter cheap (trend EMA50 + RSI vivo +
+dentro range 52w-high) e ritorna i top N candidati ranked per composite.
+
+Form input:
+- Universe (selectbox: S&P 500 / FTSE MIB / STOXX Europe 600)
+- Top N (1-50, default 10)
+- Strategy tag (opzionale)
+- Min score (default 60 = solo classe A+B)
+- Prefilter cap (limita stage 2 full scoring)
+- Prefilter RSI min (default 45)
+- Prefilter max dist 52w-high (default 0.35 = 35%)
+- Toggle "Refresh universe" (bypass cache 7gg da Wikipedia)
+- Toggle "Validate top con Claude" + "Force"
+
+Progress bar a 2 fasi (prefilter 0-70%, full scoring 70-100%) + summary metric con
+universe size / prefilter pass / scored / returned.
+
+### Output (entrambi i tab)
 - Tabella riassuntiva ordinata per score (compare anche regime weekly + RS settoriale)
 - Per ogni ticker, expander con 6 sub-score, classification, AI verdict (se validato), e blocco "TradingView Pine inputs" copia-incollabile.
 
 Interazione speciale:
-- Click "→ Watchlist" su ogni row aggiunge alla watchlist senza tornare in CLI.
-- Click "→ Sizing" passa il ticker pre-compilato alla page Portfolio.
+- Auto-add classe A+B alla watchlist (source `auto_scan`).
+- Click "📋 Aggiungi a watchlist" manuale per qualunque classe.
 
 ---
 
@@ -230,7 +251,7 @@ Action:
 Sezioni:
 
 ### "Single ticker"
-Stesso input form dello Scanner ma usa contrarian engine. Mostra:
+Stesso input form dello Momentum ma usa contrarian engine. Mostra:
 - 4 sub-score (oversold/quality/market_context/reversion)
 - Quality gate INTACT/BROKEN
 - Stop suggested + target EMA50 + R/R

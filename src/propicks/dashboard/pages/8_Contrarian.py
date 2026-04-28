@@ -1,7 +1,7 @@
 """Contrarian scanner — quality-filtered mean reversion.
 
 Equivalent UI di ``propicks-contra [TICKER ...] [--validate]``. Parallelo
-allo Scanner momentum (page 1): stesso ticker può essere analizzato da
+alla page Momentum (page 1): stesso ticker può essere analizzato da
 entrambe le strategie, i verdict sono cached separatamente.
 """
 
@@ -20,7 +20,7 @@ st.set_page_config(page_title="Contrarian · Propicks", layout="wide")
 page_header(
     "Contrarian",
     "Quality-filtered mean reversion. Cerca setup oversold su titoli di qualità con trend strutturale intatto. "
-    "Parallelo allo Scanner momentum, NON lo sostituisce.",
+    "Parallelo alla page Momentum, NON la sostituisce.",
 )
 invariants_note(strategy_bucket="contrarian")
 

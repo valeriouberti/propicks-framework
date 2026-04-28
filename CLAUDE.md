@@ -273,7 +273,7 @@ pytest                                            # tutti senza rete
 | CLI | Dashboard page |
 |-----|----------------|
 | *(home — no CLI equivalent)* | `app.py` Portfolio Overview |
-| `propicks-momentum [--validate] [--discover-*]` | `pages/1_Scanner.py` |
+| `propicks-momentum [--validate] [--discover-*]` | `pages/1_Momentum.py` |
 | `propicks-rotate [--region]` | `pages/2_ETF_Rotation.py` |
 | `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py` (tabs base) |
 | `propicks-portfolio risk` | `pages/3_Portfolio.py` → tab "Rischio & esposizione" |

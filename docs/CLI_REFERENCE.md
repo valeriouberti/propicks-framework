@@ -15,7 +15,7 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 
 | Comando | Sezione |
 |---------|---------|
-| `propicks-momentum` | [Scanner momentum](#propicks-momentum) |
+| `propicks-momentum` | [Momentum momentum](#propicks-momentum) |
 | `propicks-contra` | [Contrarian mean reversion](#propicks-contra) |
 | `propicks-rotate` | [ETF sector rotation](#propicks-rotate) |
 | `propicks-portfolio` | [Portfolio & sizing](#propicks-portfolio) |
@@ -34,7 +34,7 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 
 ## propicks-momentum
 
-Scanner momentum/quality stock — replica l'engine `domain/scoring.py`.
+Momentum momentum/quality stock — replica l'engine `domain/scoring.py`.
 Vedi [MOMENTUM_STRATEGY](MOMENTUM_STRATEGY.md).
 
 ```bash

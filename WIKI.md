@@ -102,10 +102,10 @@ Per setup completo (Docker, scheduler daemon, bot Telegram) vedi
 
 | Workflow | CLI | Dashboard page | Pine script |
 |----------|-----|----------------|-------------|
-| Screening momentum stock | `propicks-momentum` | `1_Scanner.py` | `daily_signal_engine.pine` |
+| Screening momentum stock | `propicks-momentum` | `1_Momentum.py` | `daily_signal_engine.pine` |
 | Mean reversion contrarian | `propicks-contra` | `8_Contrarian.py` | `contrarian_signal_engine.pine` |
 | Rotazione settoriale ETF | `propicks-rotate` | `2_ETF_Rotation.py` | `etf_rotation_engine.pine` |
-| Regime macro weekly | *(parte del scan)* | *(visibile in Scanner)* | `weekly_regime_engine.pine` |
+| Regime macro weekly | *(parte del scan)* | *(visibile in Momentum)* | `weekly_regime_engine.pine` |
 | Sizing & risk | `propicks-portfolio size --advanced` | `3_Portfolio.py` → tab Rischio | — |
 | Trade management | `propicks-portfolio manage --apply` | `3_Portfolio.py` → tab Management | — |
 | Journaling | `propicks-journal add/close/list/stats` | `4_Journal.py` | — |

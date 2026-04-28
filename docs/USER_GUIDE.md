@@ -100,7 +100,7 @@ propicks-dashboard
 # Apri http://localhost:8501
 ```
 
-Naviga tra Portfolio / Scanner / Journal / Watchlist / Contrarian / ecc.
+Naviga tra Portfolio / Momentum / Journal / Watchlist / Contrarian / ecc.
 
 **Pronto.** Il resto del manuale ti guida in workflow avanzato.
 
@@ -537,14 +537,14 @@ Lancio: `propicks-dashboard` → http://localhost:8501
 | Page | CLI equivalente | Uso |
 |------|-----------------|-----|
 | **Home** | `propicks-portfolio status` | Overview: total, cash %, regime badge, alert recenti |
-| **Scanner** | `propicks-momentum` | Analisi momentum con score breakdown + AI validation on-demand |
+| **Momentum** | `propicks-momentum` | Analisi momentum con score breakdown + AI validation on-demand |
 | **ETF Rotation** | `propicks-rotate` | Ranking universo + allocation proposta |
 | **Portfolio** | `propicks-portfolio` | CRUD positions + risk tab + trade management |
 | **Journal** | `propicks-journal` | Add/close/list/stats con filtri |
 | **Reports** | `propicks-report` | Viewer markdown archive |
 | **Backtest** | `propicks-backtest` | UI walk-forward |
 | **Watchlist** | `propicks-watchlist` | CRUD + live score + READY flag |
-| **Contrarian** | `propicks-contra` | Scanner mean reversion |
+| **Contrarian** | `propicks-contra` | Momentum mean reversion |
 
 **Sidebar invariants** (live): posizioni aperte, cash %, rischio settimanale,
 regole. Cambia contenuto in base alla page (es. contrarian page mostra regole bucket).
@@ -553,7 +553,7 @@ regole. Cambia contenuto in base alla page (es. contrarian page mostra regole bu
 
 - **Cache OHLCV** preloadata → scan rapido anche su batch (~5-10× vs cold).
 - **Form pattern**: ogni page ha un `st.form` con bottone submit → nessun rerun accidentale.
-- **Expander "Prompt Perplexity"** in Scanner → copia-incolla prompt per cross-check indipendente da Claude.
+- **Expander "Prompt Perplexity"** in Momentum → copia-incolla prompt per cross-check indipendente da Claude.
 
 ---
 

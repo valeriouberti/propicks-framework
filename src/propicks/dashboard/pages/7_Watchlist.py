@@ -76,7 +76,7 @@ tab_attiva, tab_aggiungi, tab_stale = st.tabs(["Attiva (live score)", "Aggiungi"
 # ---------------------------------------------------------------------------
 with tab_attiva:
     if not tickers:
-        st.info("Watchlist vuota. Aggiungi un ticker dal tab *Aggiungi* o lancia lo Scanner (classe B viene auto-aggiunta).")
+        st.info("Watchlist vuota. Aggiungi un ticker dal tab *Aggiungi* o lancia Momentum (classe B viene auto-aggiunta).")
     else:
         refresh = st.button("🔄 Ricalcola score live", type="secondary")
         if refresh:
@@ -132,7 +132,7 @@ with tab_attiva:
         st.dataframe(rows, width="stretch", hide_index=True)
         st.caption(
             f"**READY** = score ≥{READY_SCORE_MIN} + entro {READY_DISTANCE_PCT * 100:.0f}% dal target. "
-            "Prossimo step: vai su Scanner per re-analisi completa, poi Portfolio → Size."
+            "Prossimo step: vai su Momentum per re-analisi completa, poi Portfolio → Size."
         )
 
         if ready:

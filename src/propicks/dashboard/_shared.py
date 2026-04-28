@@ -490,7 +490,7 @@ INDICATOR_HELP_PORTFOLIO: dict[str, str] = {
 def render_indicator_legend(scope: str = "etf") -> None:
     """Expander collassato con spiegazione completa degli indicatori.
 
-    ``scope``: ``"etf"`` per ETF Rotation, ``"stock"`` per Scanner,
+    ``scope``: ``"etf"`` per ETF Rotation, ``"stock"`` per Momentum,
     ``"portfolio"`` per Portfolio risk + trade management.
     """
     if scope == "etf":

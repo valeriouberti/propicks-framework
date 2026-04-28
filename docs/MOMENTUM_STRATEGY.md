@@ -183,7 +183,7 @@ Pro Picks (mensile)
 
 ### 7.2 Workflow di integrazione AI manuale (alternativa a `--validate`)
 
-1. **Scanner** → produce output strutturato che il trader incolla nel prompt Claude 3A
+1. **Momentum** → produce output strutturato che il trader incolla nel prompt Claude 3A
 2. **Portfolio status** → tabella per il prompt Claude 3B
 3. **Journal stats** → dati per il prompt Claude 3D (post-trade analysis)
 4. **Report** → sommario formattato come contesto per qualsiasi prompt

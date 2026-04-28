@@ -48,9 +48,9 @@ snapshot di score/regime/classification al momento dello scan.
 - **Classe B**: senza target — il trader lo imposta manualmente quando
   individua il livello (pullback EMA20, breakout, catalyst date).
 - **Classe C/D**: skip dell'auto-add (rumore). Restano disponibili via bottone
-  manuale "→ Aggiungi a watchlist" nella dashboard Scanner.
+  manuale "→ Aggiungi a watchlist" nella dashboard Momentum.
 
-Disabilitabile con `--no-watchlist`. La dashboard Scanner replica la stessa
+Disabilitabile con `--no-watchlist`. La dashboard Momentum replica la stessa
 policy A+B con toast di conferma + bottone manuale per ticker di qualunque
 classe.
 
