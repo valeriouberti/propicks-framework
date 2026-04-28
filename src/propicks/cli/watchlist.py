@@ -173,7 +173,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"entro {READY_DISTANCE_PCT * 100:.0f}% dal target): "
             f"{', '.join(ready_tickers)}"
         )
-        print("Prossimi passi: propicks-scan + propicks-portfolio size su ogni READY.")
+        print("Prossimi passi: propicks-momentum + propicks-portfolio size su ogni READY.")
     return 0
 
 

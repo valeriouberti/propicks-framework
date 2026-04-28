@@ -211,9 +211,9 @@ sul chart TradingView. Default Pine = config.py byte-per-byte. Vedi
 ### Scan momentum end-to-end
 
 ```
-User → propicks-scan AAPL --validate
+User → propicks-momentum AAPL --validate
   │
-  └─→ cli/scanner.py
+  └─→ cli/momentum.py
        │
        ├─→ domain/scoring.py::analyze_ticker("AAPL")
        │    ├─→ market/yfinance_client::download_history (cache 8h)

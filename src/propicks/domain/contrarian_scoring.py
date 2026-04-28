@@ -195,7 +195,7 @@ def score_quality_gate(
         # strutturale regge. Azzera invece di passare come neutro — il quality
         # gate è per design hard filter, non soft proxy. Tipicamente succede
         # su IPO recenti (<60 settimane di storia). Il trader può valutare
-        # a mano via propicks-scan + Perplexity, ma il contrarian engine skippa.
+        # a mano via propicks-momentum + Perplexity, ma il contrarian engine skippa.
         return {
             "score": 0.0,
             "above_ema200w": None,

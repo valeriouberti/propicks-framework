@@ -19,7 +19,7 @@ DB file: **`data/propicks.db`**. Zero file JSON nel runtime. Schema DDL in
 | `portfolio_meta` | KV singleton (cash, initial_capital, last_updated) | Scritto da `portfolio_store` e `watchlist_store` |
 | `trades` | Journal append-only (PK auto, mai deleted) | CRUD via `journal_store` |
 | `watchlist` | Incubatrice idee (PK ticker) | CRUD via `watchlist_store` |
-| `strategy_runs` | Ogni `propicks-scan`/`contra`/`rotate` produce 1 riga | Audit trail |
+| `strategy_runs` | Ogni `propicks-momentum`/`contra`/`rotate` produce 1 riga | Audit trail |
 | `ai_verdicts` | Cache + storia verdict Claude (sostituisce `data/ai_cache/`) | `io/db.py::ai_verdict_cache_*` helpers |
 | `daily_budget` | Counter giornaliero spesa AI (UPSERT by date) | `ai/budget.py` |
 | `regime_history` | Snapshot giornaliero regime ^GSPC | Popolato da scheduler Phase 3 |
@@ -107,7 +107,7 @@ propicks-cache clear --interval daily   # solo una granularità
 ### 2.5 Offline resilience
 
 Se la cache è popolata e fresh, uno scan completo funziona senza rete. Test:
-`propicks-cache warm` + disconnetti WiFi + `propicks-scan` → funziona fino a
+`propicks-cache warm` + disconnetti WiFi + `propicks-momentum` → funziona fino a
 scadenza TTL (8h daily).
 
 ### 2.6 Data quality

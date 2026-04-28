@@ -64,7 +64,7 @@ A: TTL daily è 8h (`MARKET_CACHE_TTL_DAILY_HOURS`). Se hai caricato i dati alle
 
 ```bash
 propicks-cache clear --ticker AAPL
-propicks-scan AAPL
+propicks-momentum AAPL
 ```
 
 Oppure `propicks-cache warm AAPL --force`.
@@ -91,7 +91,7 @@ A: Il ticker ha < 60 settimane di storia (IPO recente). Fail-closed by design
 post-SERIO-5 (vedi review history). Per forzare comunque la validazione:
 
 ```bash
-propicks-scan AAPL --force-validate
+propicks-momentum AAPL --force-validate
 ```
 
 ### Q: `[ai] daily call limit reached (50/50)`
@@ -99,7 +99,7 @@ propicks-scan AAPL --force-validate
 A: Budget cap giornaliero raggiunto. Reset alle 00:00 UTC. Per alzare:
 
 ```bash
-PROPICKS_AI_MAX_CALLS_PER_DAY=100 propicks-scan AAPL --validate
+PROPICKS_AI_MAX_CALLS_PER_DAY=100 propicks-momentum AAPL --validate
 ```
 
 O permanente in `.env`. Usa `--force-validate` solo per emergenze: bypassa
@@ -120,7 +120,7 @@ A: Cache TTL 24h momentum, 8h ETF rotation. Se l'earnings è stato annunciato do
 la generazione del verdict cached, il verdict è stale. Force refresh:
 
 ```bash
-propicks-scan AAPL --force-validate
+propicks-momentum AAPL --force-validate
 ```
 
 O delete cache row:
@@ -178,7 +178,7 @@ Ora hai un DB vuoto con schema fresh.
 Sezione critica perché il contratto Pine ↔ Python è la cosa più fragile del
 sistema (due implementazioni della stessa logica in linguaggi diversi).
 
-### Q: Pine score diverso da `propicks-scan` Python sullo stesso ticker
+### Q: Pine score diverso da `propicks-momentum` Python sullo stesso ticker
 
 A: Checklist in ordine di probabilità:
 
@@ -215,7 +215,7 @@ Cambia timeframe a 1D.
 
 Se il chart è già su daily, possibili cause secondarie:
 - Quality gate broken in Pine ma intact in Python: differenza weekly EMA40 calcolato vs ricevuto. Verifica `request.security` non sia stato modificato.
-- Regime cap STRONG_BULL/BEAR attivato in Pine: pannello mostra "STRONG BULL (skip)" o "STRONG BEAR (skip)". Confronta con `propicks-scan` regime panel — se differiscono, il chart Pine non è ancora warmed up (richiede ≥60 weekly bars).
+- Regime cap STRONG_BULL/BEAR attivato in Pine: pannello mostra "STRONG BULL (skip)" o "STRONG BEAR (skip)". Confronta con `propicks-momentum` regime panel — se differiscono, il chart Pine non è ancora warmed up (richiede ≥60 weekly bars).
 
 ### Q: Pine valid solo per US? Funziona anche con `.MI` o `.DE`?
 
@@ -320,7 +320,7 @@ A: 500 ticker × 5s di network = 40 min worst case. Ottimizzazioni:
 - `--top N` con `N=20`: il pipeline 3-stage skippa early i ticker che non passano stage 1.
 - Riduci universo: usa FTSE MIB (40 nomi) o STOXX 600 (~600 ma early-prune più aggressivo).
 
-### Q: `propicks-scan AAPL` ci mette >10s
+### Q: `propicks-momentum AAPL` ci mette >10s
 
 A: Cache miss + AI validation. Senza `--validate` deve scendere sotto i 3s.
 Se cache miss persiste:

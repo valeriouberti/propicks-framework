@@ -3,7 +3,7 @@
 #     docker compose up --build
 #     docker compose up -d             # detached
 #     docker compose logs -f           # segui log
-#     docker compose exec dashboard propicks-scan AAPL   # esegui CLI nel container
+#     docker compose exec dashboard propicks-momentum AAPL   # esegui CLI nel container
 
 services:
   dashboard:

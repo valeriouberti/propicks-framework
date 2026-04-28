@@ -1,6 +1,6 @@
 """Scanner tecnico + validazione AI opzionale.
 
-Equivalent UI di ``propicks-scan [TICKER ...] [--validate]``.
+Equivalent UI di ``propicks-momentum [TICKER ...] [--validate]``.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ if not results:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Auto-add classe A+B alla watchlist (coerente col CLI propicks-scan)
+# Auto-add classe A+B alla watchlist (coerente col CLI propicks-momentum)
 #   - Classe A → target = current_price per nuove entry (preserva target esistente)
 #   - Classe B → senza target (il trader imposta livello pullback/breakout manuale)
 # ---------------------------------------------------------------------------

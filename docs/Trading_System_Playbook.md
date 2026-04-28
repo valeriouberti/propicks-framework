@@ -18,8 +18,8 @@ Pro Picks Update (mensile)
          ▼
 ┌─────────────────────────────┐
 │  FASE 2: REGIME + SCORING   │  ← Weekly regime (Python + Pine weekly_regime_engine)
-│  entry_allowed ≥ NEUTRAL    │  ← propicks-scan (score 0-100, classe A/B/C/D)
-│  score tecnico + classifica │  ← propicks-scan --validate (Claude, gate su regime+score)
+│  entry_allowed ≥ NEUTRAL    │  ← propicks-momentum (score 0-100, classe A/B/C/D)
+│  score tecnico + classifica │  ← propicks-momentum --validate (Claude, gate su regime+score)
 │  verdict AI strutturato     │
 └────────┬────────────────────┘
          │  CLI stampa blocco TRADINGVIEW PINE INPUTS
@@ -269,7 +269,7 @@ regola. Se tocchi un parametro da un lato, aggiornalo anche dall'altro.
 | File | Timeframe | Scopo |
 |------|-----------|-------|
 | `weekly_regime_engine.pine` | Weekly | Filtro macro a 5 bucket (STRONG_BULL → STRONG_BEAR). Stessa logica replicata in `domain/regime.py`. Serve come gate: se regime ≤ BEAR nessun long. |
-| `daily_signal_engine.pine` | Daily | Rileva trigger di entry in tempo reale (BREAKOUT, PULLBACK, GOLDEN_CROSS, SQUEEZE, DIVERGENCE) che yfinance (EOD) non può vedere. I livelli Entry/Stop/Target vengono dal blocco **TRADINGVIEW PINE INPUTS** stampato da `propicks-scan`. |
+| `daily_signal_engine.pine` | Daily | Rileva trigger di entry in tempo reale (BREAKOUT, PULLBACK, GOLDEN_CROSS, SQUEEZE, DIVERGENCE) che yfinance (EOD) non può vedere. I livelli Entry/Stop/Target vengono dal blocco **TRADINGVIEW PINE INPUTS** stampato da `propicks-momentum`. |
 
 ### 4B. Indicatori standard da configurare su ogni titolo in watchlist
 
@@ -291,7 +291,7 @@ Opzionali ma utili:
 
 ### 4C. Handoff Python → TradingView (entry/stop/target)
 
-Al termine di `propicks-scan [--validate]`, la CLI stampa un blocco:
+Al termine di `propicks-momentum [--validate]`, la CLI stampa un blocco:
 
 ```
 ==============================================================
@@ -354,7 +354,7 @@ Messaggio: "VOLUME SPIKE: [TICKER] volume 2.5x la media.
 ### Entry Rules (tutte devono essere vere)
 - [ ] Il titolo è nel basket Pro Picks attivo
 - [ ] Perplexity conferma catalyst concreto e nessun red flag
-- [ ] **Regime weekly >= NEUTRAL** (`propicks-scan` mostra "✓ ENTRY OK", oppure Pine weekly ≥ 3/5). BEAR/STRONG_BEAR blocca l'entry salvo override esplicito.
+- [ ] **Regime weekly >= NEUTRAL** (`propicks-momentum` mostra "✓ ENTRY OK", oppure Pine weekly ≥ 3/5). BEAR/STRONG_BEAR blocca l'entry salvo override esplicito.
 - [ ] Score tecnico Python >= 60/100
 - [ ] Verdict Claude `--validate` = CONFIRM (o CAUTION con conviction ≥ 6/10)
 - [ ] Pine daily ha emesso un trigger (BRK/PB/GC/SQZ/DIV) o il setup è chiaramente definito sul grafico
@@ -405,7 +405,7 @@ invariante:
 
 ### Trattamento attuale: stock-like
 
-I tematici di interesse passano da `propicks-scan TICKER` come fossero
+I tematici di interesse passano da `propicks-momentum TICKER` come fossero
 single-stock e finiscono nel bucket satellite (max 15% per posizione).
 **Quattro regole auto-imposte** (manuali, non codate — vanno rispettate
 con disciplina):
@@ -608,7 +608,7 @@ maturi ma meritano di essere monitorati.
 
 ### Popolamento automatico (classe A+B)
 
-`propicks-scan` aggiunge **automaticamente** alla watchlist ogni ticker
+`propicks-momentum` aggiunge **automaticamente** alla watchlist ogni ticker
 classificato **A** (score ≥75, `"A — AZIONE IMMEDIATA"`) o **B** (60-74,
 `"B — WATCHLIST"`). Il comportamento è:
 
@@ -616,7 +616,7 @@ classificato **A** (score ≥75, `"A — AZIONE IMMEDIATA"`) o **B** (60-74,
 - snapshot di `score_at_add`, `regime_at_add`, `classification_at_add`
 - re-scan dello stesso ticker **aggiorna** i metadati, NON duplica né
   azzera `added_date` / `source` originali
-- disabilitabile con `propicks-scan TICKER --no-watchlist`
+- disabilitabile con `propicks-momentum TICKER --no-watchlist`
 
 **Policy target_entry:**
 
@@ -662,7 +662,7 @@ live, regime corrente. Un entry è **READY** quando:
 
 Il flag READY **non** apre la posizione. È segnale visivo che invita a:
 
-1. `propicks-scan TICKER --validate` (re-analisi completa + Claude)
+1. `propicks-momentum TICKER --validate` (re-analisi completa + Claude)
 2. Verifica regime weekly (entry gate)
 3. `propicks-portfolio size` + `propicks-portfolio add`
 
@@ -676,13 +676,13 @@ Rimuovi in blocco dalla dashboard o via CLI.
 ### Workflow integrato
 
 ```
-propicks-scan TICKER                   → se classe A o B: auto-add a watchlist
+propicks-momentum TICKER                   → se classe A o B: auto-add a watchlist
   ↓                                      (A con target=price → subito READY)
 (aspetti giorni/settimane)               (B senza target → setti manualmente)
   ↓
 propicks-watchlist status              → vedi flag READY su TICKER
   ↓
-propicks-scan TICKER --validate        → re-analisi completa + Claude
+propicks-momentum TICKER --validate        → re-analisi completa + Claude
   ↓
 propicks-portfolio size + add          → apertura
   ↓
@@ -703,7 +703,7 @@ se decidi di chiudere la posizione e volerla tenere ancora monitorata.
 □ Scarica lista nuovi ingressi e uscite
 □ Per ogni nuovo ingresso:
   □ Esegui prompt Perplexity 2A (o 2B per italiane) — cross-check fondamentale
-  □ Esegui propicks-scan TICKER --validate
+  □ Esegui propicks-momentum TICKER --validate
     ↳ include regime weekly + score tecnico + verdict Claude
     ↳ stampa il blocco TRADINGVIEW PINE INPUTS (entry/stop/target)
   □ Esegui prompt Claude 3A solo se vuoi approfondire (il verdict --validate copre già la tesi)
@@ -723,7 +723,7 @@ se decidi di chiudere la posizione e volerla tenere ancora monitorata.
 □ Se alert scattato su un titolo classe A/B:
   □ Esegui prompt Perplexity 2C (check red flag ultime 24h)
   □ Verifica che il regime weekly sia ancora ≥ NEUTRAL
-    (rilancia propicks-scan TICKER se dubbi — il regime cambia lentamente)
+    (rilancia propicks-momentum TICKER se dubbi — il regime cambia lentamente)
   □ Se tutto ok: propicks-portfolio size + add
   □ Logga con propicks-journal add
 □ Controlla P/L posizioni aperte (propicks-portfolio status — solo guardare, non agire d'impulso)
@@ -732,7 +732,7 @@ se decidi di chiudere la posizione e volerla tenere ancora monitorata.
 ### Venerdì sera — Review settimanale (30 minuti)
 ```
 □ propicks-portfolio status + propicks-portfolio risk → snapshot P/L e rischio a stop
-□ Rilancia propicks-scan su ogni posizione aperta per aggiornare regime weekly
+□ Rilancia propicks-momentum su ogni posizione aperta per aggiornare regime weekly
   ↳ se una posizione è scivolata a regime BEAR, tighten stop o chiudi
 □ Esegui prompt Claude 3B (revisione settimanale) con la tabella di status
 □ Aggiorna stop loss dove necessario (propicks-portfolio update)

@@ -29,7 +29,7 @@ blocca l'entry. È l'incubatrice dove i setup attendono il loro momento
 }
 ```
 
-### 1.2 Auto-populate da `propicks-scan` / `propicks-contra`
+### 1.2 Auto-populate da `propicks-momentum` / `propicks-contra`
 
 Lo scanner aggiunge automaticamente:
 - **Classe A** (score ≥ 75, `"A — AZIONE IMMEDIATA"`)
@@ -61,7 +61,7 @@ classe.
 - `|current_price − target_entry| / target_entry ≤ 2%`
 
 Un entry READY **non** apre la posizione automaticamente: è flag visivo che
-invita a passare da `propicks-scan` (re-analisi con regime + AI) e
+invita a passare da `propicks-momentum` (re-analisi con regime + AI) e
 `propicks-portfolio size/add` con sizing esplicito.
 
 ### 1.5 Dedup e stale handling

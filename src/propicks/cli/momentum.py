@@ -1,10 +1,15 @@
-"""CLI thin wrapper per lo scoring tecnico.
+"""CLI thin wrapper per lo scoring MOMENTUM (trend/quality stock screener).
 
 Esempi:
-    propicks-scan AAPL
-    propicks-scan AAPL MSFT NVDA --strategy TechTitans
-    propicks-scan AAPL --json
-    propicks-scan AAPL MSFT --brief
+    propicks-momentum AAPL                              # singolo
+    propicks-momentum AAPL MSFT NVDA --strategy TechTitans
+    propicks-momentum AAPL --validate                   # gate score≥60 + regime≥NEUTRAL
+    propicks-momentum AAPL --force-validate             # bypassa gate + cache
+    propicks-momentum AAPL --json --brief --no-watchlist
+    propicks-momentum --discover-sp500 --top 10
+    propicks-momentum --discover-sp500 --top 5 --validate --min-score 75
+    propicks-momentum --discover-ftsemib                # 40 large-cap IT
+    propicks-momentum --discover-stoxx600 --top 15
 """
 
 from __future__ import annotations
@@ -15,8 +20,21 @@ import sys
 
 from tabulate import tabulate
 
+from propicks.domain.momentum_discovery import (
+    DISCOVERY_DEFAULT_TOP_N,
+    DISCOVERY_PREFILTER_MAX_DIST_FROM_HIGH,
+    DISCOVERY_PREFILTER_RSI_MIN,
+    discover_momentum_candidates,
+)
 from propicks.domain.scoring import analyze_ticker
 from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
+from propicks.market.index_constituents import (
+    INDEX_NAME_FTSEMIB,
+    INDEX_NAME_SP500,
+    INDEX_NAME_STOXX600,
+    get_index_universe,
+    index_label,
+)
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -279,11 +297,30 @@ def _auto_watchlist_actionable(results: list[dict]) -> None:
     print(f"[watchlist] auto-update classe A+B: {'; '.join(msg_parts)}", file=sys.stderr)
 
 
+def _discovery_progress(stage: str, current: int, total: int, ticker: str) -> None:
+    """Progress callback per il discovery: stampa solo ogni 25 ticker per non spammare."""
+    if current == total or current % 25 == 0:
+        print(
+            f"[discovery/{stage}] {current}/{total} ({ticker})",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Scoring tecnico 0-100 per uno o più ticker (yfinance).",
+        description=(
+            "Scoring MOMENTUM 0-100 (trend/quality stock screener). "
+            "Cerca setup di accelerazione su titoli in trend up con momentum vivo."
+        ),
     )
-    parser.add_argument("tickers", nargs="+", help="Uno o più ticker (es. AAPL MSFT ENI.MI)")
+    parser.add_argument(
+        "tickers",
+        nargs="*",
+        help=(
+            "Uno o più ticker (es. AAPL MSFT ENI.MI). "
+            "Omettere se si usa --discover-sp500 / --discover-ftsemib / --discover-stoxx600."
+        ),
+    )
     parser.add_argument("--strategy", default=None, help="Nome della strategia Pro Picks")
     parser.add_argument("--json", action="store_true", help="Output in formato JSON")
     parser.add_argument("--brief", action="store_true", help="Solo tabella riassuntiva")
@@ -302,15 +339,152 @@ def main() -> int:
         action="store_true",
         help="Non aggiungere automaticamente i ticker classe A/B alla watchlist",
     )
+    discover_group = parser.add_mutually_exclusive_group()
+    discover_group.add_argument(
+        "--discover-sp500",
+        action="store_true",
+        help=(
+            "Discovery automatico su tutto S&P 500 (~500 nomi US). Pipeline "
+            "3-stage: prefilter cheap → full scoring → top N."
+        ),
+    )
+    discover_group.add_argument(
+        "--discover-ftsemib",
+        action="store_true",
+        help="Discovery su FTSE MIB (40 large-cap italiani).",
+    )
+    discover_group.add_argument(
+        "--discover-stoxx600",
+        action="store_true",
+        help=(
+            "Discovery su STOXX Europe 600 (~600 nomi multi-paese — universo "
+            "ampio, costo full scoring più alto)."
+        ),
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=DISCOVERY_DEFAULT_TOP_N,
+        help=f"Numero massimo di candidati da ritornare (default {DISCOVERY_DEFAULT_TOP_N}).",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help=(
+            "Score composito minimo per inclusione. Default: MIN_SCORE_TECH "
+            "(60) per filtrare almeno classe B; usa 75 per solo classe A, 0 per "
+            "nessun filtro."
+        ),
+    )
+    parser.add_argument(
+        "--prefilter-rsi-min",
+        type=float,
+        default=DISCOVERY_PREFILTER_RSI_MIN,
+        help=f"Soglia RSI minimo prefilter (default {DISCOVERY_PREFILTER_RSI_MIN}).",
+    )
+    parser.add_argument(
+        "--prefilter-max-dist",
+        type=float,
+        default=DISCOVERY_PREFILTER_MAX_DIST_FROM_HIGH,
+        help=(
+            f"Distanza massima da 52w-high (frazione, default "
+            f"{DISCOVERY_PREFILTER_MAX_DIST_FROM_HIGH})."
+        ),
+    )
+    parser.add_argument(
+        "--prefilter-cap",
+        type=int,
+        default=None,
+        help=(
+            "Cap opzionale sul n. ticker che passano allo stage 2 "
+            "(utile per limitare costo full scoring)."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-universe",
+        action="store_true",
+        help="Forza re-fetch della lista index da Wikipedia (bypass cache 7gg).",
+    )
     args = parser.parse_args()
 
+    # Determina se è in modalità discovery e quale index
+    discover_index: str | None = None
+    if args.discover_sp500:
+        discover_index = INDEX_NAME_SP500
+    elif args.discover_ftsemib:
+        discover_index = INDEX_NAME_FTSEMIB
+    elif args.discover_stoxx600:
+        discover_index = INDEX_NAME_STOXX600
+
+    # Validation: o ticker espliciti o discovery, ma non entrambi vuoti
+    if not args.tickers and discover_index is None:
+        parser.error(
+            "Specifica almeno un ticker oppure usa "
+            "--discover-sp500 / --discover-ftsemib / --discover-stoxx600."
+        )
+    if args.tickers and discover_index is not None:
+        parser.error(
+            "Discovery flags e ticker espliciti sono mutually exclusive: "
+            "scegli uno dei due flussi."
+        )
+
     results: list[dict] = []
-    for t in args.tickers:
-        r = analyze_ticker(t, strategy=args.strategy)
-        if r is not None:
-            results.append(r)
+    if discover_index is not None:
+        label = index_label(discover_index)
+        try:
+            universe = get_index_universe(
+                discover_index, force_refresh=args.refresh_universe
+            )
+        except Exception as exc:
+            print(
+                f"[errore] impossibile ottenere universo {label}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(
+            f"[discovery] universo {label}: {len(universe)} ticker. "
+            f"Stage 1 (prefilter RSI>={args.prefilter_rsi_min}, "
+            f"dist_from_high<={args.prefilter_max_dist})...",
+            file=sys.stderr,
+        )
+        # Default min_score = MIN_SCORE_TECH (60) per filtrare classe C/D: il
+        # discovery di default ritorna solo nomi tradeable (classe A+B).
+        from propicks.config import MIN_SCORE_TECH
+        effective_min_score = (
+            args.min_score if args.min_score is not None else float(MIN_SCORE_TECH)
+        )
+        out = discover_momentum_candidates(
+            universe,
+            top_n=args.top,
+            rsi_min=args.prefilter_rsi_min,
+            max_dist_from_high=args.prefilter_max_dist,
+            min_score=effective_min_score,
+            strategy=args.strategy,
+            prefilter_cap=args.prefilter_cap,
+            progress_callback=_discovery_progress,
+        )
+        print(
+            f"[discovery] universe={out['universe_size']} "
+            f"prefilter_pass={out['prefilter_pass']} "
+            f"scored={out['scored']} "
+            f"returned={len(out['candidates'])}",
+            file=sys.stderr,
+        )
+        results = out["candidates"]
+    else:
+        for t in args.tickers:
+            r = analyze_ticker(t, strategy=args.strategy)
+            if r is not None:
+                results.append(r)
 
     if not results:
+        if discover_index is not None:
+            print(
+                "[discovery] nessun candidato qualificato dopo full scoring.",
+                file=sys.stderr,
+            )
         return 1
 
     if args.validate or args.force_validate:
@@ -332,7 +506,9 @@ def main() -> int:
         print(json.dumps(results, indent=2, default=str))
         return 0
 
-    if args.brief:
+    # In discovery mode default a summary table: l'analysis dettagliata × 10
+    # è troppo rumorosa. Brief flag esplicito forza summary anche su single.
+    if args.brief or discover_index is not None:
         print_summary_table(results)
         return 0
 

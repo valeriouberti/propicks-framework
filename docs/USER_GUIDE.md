@@ -67,13 +67,13 @@ opzionale. Senza Telegram, skippa `PROPICKS_TELEGRAM_*`.
 
 ```bash
 # Scan tecnico AAPL (senza AI)
-propicks-scan AAPL
+propicks-momentum AAPL
 
 # Scan con validazione Claude (richiede ANTHROPIC_API_KEY)
-propicks-scan AAPL --validate
+propicks-momentum AAPL --validate
 
 # Scan multi-ticker compatto
-propicks-scan AAPL MSFT NVDA --brief
+propicks-momentum AAPL MSFT NVDA --brief
 ```
 
 Dovresti vedere score 0-100 + classificazione A/B/C/D + breakdown sub-score.
@@ -195,7 +195,7 @@ crontab -e
 
 | Strategia | Quando compra | Entry point | Size max |
 |-----------|---------------|-------------|----------|
-| **Momentum** | Forza che accelera (trend uptrend + RSI 50-65 + pullback EMA) | `propicks-scan` | 15% |
+| **Momentum** | Forza che accelera (trend uptrend + RSI 50-65 + pullback EMA) | `propicks-momentum` | 15% |
 | **Contrarian** | Qualità oversold (RSI<30 + stretch EMA50 + above EMA200w) | `propicks-contra` | 8% |
 | **ETF Rotation** | Settori in leadership + regime fit | `propicks-rotate` | 20% (ETF) |
 
@@ -242,7 +242,7 @@ Viene ri-classificato **daily 18:00 CET** dal scheduler (job `record_regime`).
 
 ### 3.5 AI validation (Claude)
 
-Flag `--validate` su `propicks-scan` e `propicks-contra`:
+Flag `--validate` su `propicks-momentum` e `propicks-contra`:
 - **Input**: analysis dict + regime (gate: no call se BEAR/STRONG_BEAR per momentum, no call se STRONG_BULL/STRONG_BEAR per contrarian)
 - **Output**: verdict CONFIRM/CAUTION/REJECT + conviction 0-10 + thesis summary + suggested adjustments
 - **Cache**: 24h per-ticker-per-day (in tabella `ai_verdicts`)
@@ -298,7 +298,7 @@ propicks-scheduler job regime   # aggiorna se non c'è automation
 propicks-rotate --region WORLD --top 3 --allocate
 
 # 2. Scan del basket Pro Picks mensile (se hai IDs)
-propicks-scan AAPL MSFT NVDA AMZN GOOGL META --strategy TechTitans --brief
+propicks-momentum AAPL MSFT NVDA AMZN GOOGL META --strategy TechTitans --brief
 
 # 3. Watchlist cleanup (manuale se alert stale)
 propicks-watchlist list --stale
@@ -311,7 +311,7 @@ Per ogni ticker in watchlist con flag READY:
 
 ```bash
 # 1. Fresh scan + AI validation
-propicks-scan AAPL --validate
+propicks-momentum AAPL --validate
 
 # 2. Check earnings calendar
 propicks-calendar check AAPL
@@ -367,17 +367,17 @@ attribution di sabato lo decompone in alpha/beta/sector/timing.
 
 ## 5. Comandi CLI — reference
 
-### 5.1 `propicks-scan` — Momentum scanner
+### 5.1 `propicks-momentum` — Momentum scanner
 
 ```bash
-propicks-scan AAPL                    # singolo ticker dettaglio
-propicks-scan AAPL MSFT NVDA          # batch
-propicks-scan AAPL --strategy TechTitans
-propicks-scan AAPL --validate         # + Claude AI verdict
-propicks-scan AAPL --force-validate   # bypass gate + cache
-propicks-scan AAPL --brief            # tabella compatta
-propicks-scan AAPL --json             # output JSON
-propicks-scan AAPL --no-watchlist     # no auto-add watchlist
+propicks-momentum AAPL                    # singolo ticker dettaglio
+propicks-momentum AAPL MSFT NVDA          # batch
+propicks-momentum AAPL --strategy TechTitans
+propicks-momentum AAPL --validate         # + Claude AI verdict
+propicks-momentum AAPL --force-validate   # bypass gate + cache
+propicks-momentum AAPL --brief            # tabella compatta
+propicks-momentum AAPL --json             # output JSON
+propicks-momentum AAPL --no-watchlist     # no auto-add watchlist
 ```
 
 ### 5.2 `propicks-contra` — Contrarian scanner
@@ -537,7 +537,7 @@ Lancio: `propicks-dashboard` → http://localhost:8501
 | Page | CLI equivalente | Uso |
 |------|-----------------|-----|
 | **Home** | `propicks-portfolio status` | Overview: total, cash %, regime badge, alert recenti |
-| **Scanner** | `propicks-scan` | Analisi momentum con score breakdown + AI validation on-demand |
+| **Scanner** | `propicks-momentum` | Analisi momentum con score breakdown + AI validation on-demand |
 | **ETF Rotation** | `propicks-rotate` | Ranking universo + allocation proposta |
 | **Portfolio** | `propicks-portfolio` | CRUD positions + risk tab + trade management |
 | **Journal** | `propicks-journal` | Add/close/list/stats con filtri |
@@ -646,7 +646,7 @@ sqlite3 data/propicks.db "DELETE FROM daily_budget WHERE date = date('now');"
 
 O aumenta cap via env:
 ```bash
-PROPICKS_AI_MAX_CALLS_PER_DAY=100 propicks-scan AAPL --validate
+PROPICKS_AI_MAX_CALLS_PER_DAY=100 propicks-momentum AAPL --validate
 ```
 
 ### yfinance rate-limited

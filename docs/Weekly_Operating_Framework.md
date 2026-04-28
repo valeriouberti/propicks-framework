@@ -44,16 +44,16 @@ L'allocazione si sposta col regime:
 #    (formato JSON con ticker per strategy)
 
 # 2. Scan batch sul basket completo per strategia
-propicks-scan AAPL MSFT NVDA AMZN GOOGL META --strategy TechTitans --brief
-propicks-scan JPM BAC WFC V MA --strategy DominaDow --brief
-propicks-scan ... --strategy BattiSP500 --brief
-propicks-scan ENI.MI ISP.MI UCG.MI --strategy MiglioriItaliane --brief
+propicks-momentum AAPL MSFT NVDA AMZN GOOGL META --strategy TechTitans --brief
+propicks-momentum JPM BAC WFC V MA --strategy DominaDow --brief
+propicks-momentum ... --strategy BattiSP500 --brief
+propicks-momentum ENI.MI ISP.MI UCG.MI --strategy MiglioriItaliane --brief
 
 # 3. Selezione: tieni solo score >= 60 E regime >= NEUTRAL
 
 # 4. Per i top 3-5 per strategy → validazione Claude
-propicks-scan AAPL --validate
-propicks-scan NVDA --validate
+propicks-momentum AAPL --validate
+propicks-momentum NVDA --validate
 # ... prendi solo verdict CONFIRM + conviction >= 7
 
 # 5. Crea/aggiorna la watchlist TradingView con alerts Pine daily_signal
@@ -99,7 +99,7 @@ per macro view Claude (cache 48h, ~$0.15).
 
 ```bash
 # Re-scan veloce di tutta la watchlist (solo tabella, no validate)
-propicks-scan AAPL MSFT NVDA JPM V ENI.MI ISP.MI --brief
+propicks-momentum AAPL MSFT NVDA JPM V ENI.MI ISP.MI --brief
 ```
 
 **Decisioni stock:**
@@ -140,7 +140,7 @@ Non aprire il terminale per guardare il mercato. Il trigger di engagement è
 
 ```bash
 # 1. Alert Pine arriva push → 15min di tempo per decidere
-propicks-scan TICKER --validate          # score + Claude + web search
+propicks-momentum TICKER --validate          # score + Claude + web search
 # → se CONFIRM + conviction >= 7: continua
 # → se CAUTION/REJECT: salta
 
@@ -302,7 +302,7 @@ I tematici (SMH/SOXX, XBI/IBB, CIBR, ROBO, ICLN, KWEB, XAR) **non passano
 da `propicks-rotate`**: l'engine rotation assume 11 GICS settori
 mutuamente esclusivi e i tematici overlap pesantemente coi parent sector
 (SMH ≈ 70% top-10 di XLK). Trattamento attuale **stock-like** via
-`propicks-scan` + `propicks-portfolio add`, dentro il budget satellite
+`propicks-momentum` + `propicks-portfolio add`, dentro il budget satellite
 single-stock (max 15%/posizione).
 
 **Quattro regole auto-imposte** (manuali, da rispettare con disciplina):

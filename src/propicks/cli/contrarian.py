@@ -1,7 +1,7 @@
 """CLI thin wrapper per lo scoring CONTRARIAN (quality-filtered mean reversion).
 
-Parallelo a ``propicks-scan`` (momentum) ma con scoring diverso: cerca setup
-oversold su titoli di qualità, non momentum che accelera.
+Parallelo a ``propicks-momentum`` ma con scoring diverso: cerca setup oversold
+su titoli di qualità, non momentum che accelera.
 
 Esempi:
     propicks-contra AAPL
@@ -308,7 +308,7 @@ def print_ai_verdict(r: dict) -> None:
 def _auto_watchlist_actionable(results: list[dict]) -> None:
     """Aggiunge ticker classe A/B alla watchlist con tag source=auto_scan_contra.
 
-    Policy identica a ``scanner._auto_watchlist_actionable`` ma con source
+    Policy identica a ``momentum._auto_watchlist_actionable`` ma con source
     dedicato per tracciare separatamente le idee generate dalla strategia
     contrarian nell'audit della watchlist.
     """

@@ -107,7 +107,7 @@ Se fallisce: dipendenze non installate correttamente. Re-run pip install.
 ### 2. Test market (rete yfinance)
 
 ```bash
-propicks-scan AAPL --no-watchlist --json | jq '.[0].score_composite'
+propicks-momentum AAPL --no-watchlist --json | jq '.[0].score_composite'
 ```
 
 Output atteso: un float 0-100. Se errore `DataUnavailable`: yfinance ha problemi
@@ -116,7 +116,7 @@ con quel ticker o sei rate-limited (raro con cache 8h).
 ### 3. Test AI (Anthropic API)
 
 ```bash
-propicks-scan AAPL --validate --no-watchlist --brief
+propicks-momentum AAPL --validate --no-watchlist --brief
 ```
 
 Output atteso: tabella con colonna AI verdict (CONFIRM/CAUTION/REJECT). Se

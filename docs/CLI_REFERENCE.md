@@ -15,7 +15,7 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 
 | Comando | Sezione |
 |---------|---------|
-| `propicks-scan` | [Scanner momentum](#propicks-scan) |
+| `propicks-momentum` | [Scanner momentum](#propicks-momentum) |
 | `propicks-contra` | [Contrarian mean reversion](#propicks-contra) |
 | `propicks-rotate` | [ETF sector rotation](#propicks-rotate) |
 | `propicks-portfolio` | [Portfolio & sizing](#propicks-portfolio) |
@@ -32,13 +32,13 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 
 ---
 
-## propicks-scan
+## propicks-momentum
 
 Scanner momentum/quality stock — replica l'engine `domain/scoring.py`.
 Vedi [MOMENTUM_STRATEGY](MOMENTUM_STRATEGY.md).
 
 ```bash
-propicks-scan <TICKER> [TICKER ...] [opzioni]
+propicks-momentum <TICKER> [TICKER ...] [opzioni]
 ```
 
 | Opzione | Default | Effetto |
@@ -53,10 +53,10 @@ propicks-scan <TICKER> [TICKER ...] [opzioni]
 **Esempi**:
 
 ```bash
-propicks-scan AAPL                           # singolo, output dettagliato
-propicks-scan AAPL MSFT NVDA --brief         # tabella batch
-propicks-scan AAPL --strategy TechTitans --validate
-propicks-scan AAPL --json | jq '.[0].score_composite'
+propicks-momentum AAPL                           # singolo, output dettagliato
+propicks-momentum AAPL MSFT NVDA --brief         # tabella batch
+propicks-momentum AAPL --strategy TechTitans --validate
+propicks-momentum AAPL --json | jq '.[0].score_composite'
 ```
 
 **Output**: 6 sub-score (trend/momentum/volume/dist-high/volatility/MA-cross) + composite + classification A/B/C/D + regime weekly + RS vs settore (US-only) + AI verdict opzionale + blocco TradingView Pine inputs.
@@ -251,7 +251,7 @@ propicks-watchlist <SUBCOMMAND>
 | `list [--stale]` | Elenca (`--stale` = entry vecchie >30gg senza azione) |
 | `status` | Distance-from-target per ogni ticker (READY se ≤1%) |
 
-**Auto-fill**: `propicks-scan` aggiunge automaticamente classe A/B (override con `--no-watchlist`).
+**Auto-fill**: `propicks-momentum` aggiunge automaticamente classe A/B (override con `--no-watchlist`).
 
 ---
 

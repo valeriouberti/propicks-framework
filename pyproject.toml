@@ -40,7 +40,7 @@ telegram = [
 ]
 
 [project.scripts]
-propicks-scan      = "propicks.cli.scanner:main"
+propicks-momentum  = "propicks.cli.momentum:main"
 propicks-contra    = "propicks.cli.contrarian:main"
 propicks-portfolio = "propicks.cli.portfolio:main"
 propicks-journal   = "propicks.cli.journal:main"

@@ -382,7 +382,7 @@ _steps = [
         "Analisi indicatori + classificazione A/B/C/D. Auto-add in watchlist "
         "per classe A (target = prezzo corrente) e B.",
         "Scanner",
-        "propicks-scan TICKER",
+        "propicks-momentum TICKER",
     ),
     (
         "2 · Watchlist",
@@ -398,7 +398,7 @@ _steps = [
         "Claude verdict strutturato (CONFIRM / CAUTION / REJECT) con gate "
         "doppio: score ≥ 60 **e** regime ≥ NEUTRAL. Cache 24h.",
         "Scanner → Valida",
-        "propicks-scan TICKER --validate",
+        "propicks-momentum TICKER --validate",
     ),
     (
         "4 · Size + Open",

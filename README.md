@@ -7,7 +7,7 @@ Motore Python per un trading system AI-driven che combina segnali da Investing P
 
 Tre strategie parallele condividono regime classifier, sizing e journal:
 
-- **Momentum** ([`propicks-scan`](docs/MOMENTUM_STRATEGY.md)) — Pro Picks AI mensile + scoring tecnico + thesis validator Claude
+- **Momentum** ([`propicks-momentum`](docs/MOMENTUM_STRATEGY.md)) — Pro Picks AI mensile + scoring tecnico + thesis validator Claude
 - **Contrarian** ([`propicks-contra`](docs/CONTRARIAN_STRATEGY.md)) — quality-filtered mean reversion (long-only)
 - **Sector rotation** ([`propicks-rotate`](docs/ETF_ROTATION_STRATEGY.md)) — SPDR Select Sector / UCITS ZPD*.DE / Xtrackers WORLD, scoring RS + regime + momentum + trend
 
@@ -40,7 +40,7 @@ pip install -e .
 
 ### Configurazione chiavi API (opzionale)
 
-Per usare la validazione AI (`propicks-scan --validate`) serve una chiave Anthropic. Crea un file `.env` nella root del progetto (già in `.gitignore`):
+Per usare la validazione AI (`propicks-momentum --validate`) serve una chiave Anthropic. Crea un file `.env` nella root del progetto (già in `.gitignore`):
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
@@ -63,7 +63,7 @@ L'install editable registra **6 comandi CLI** nel PATH del virtualenv:
 
 | Comando | Scopo |
 |---------|-------|
-| `propicks-scan` | Scoring tecnico 0-100 di uno o più ticker (single-stock) |
+| `propicks-momentum` | Scoring tecnico 0-100 di uno o più ticker (single-stock) |
 | `propicks-rotate` | Rotazione settoriale ETF (RS + regime + momentum + trend) |
 | `propicks-portfolio` | Position sizing, stato, rischio + esposizione, trailing/time stop |
 | `propicks-journal` | Registrazione trade (append-only), metriche |
@@ -77,7 +77,7 @@ In aggiunta, la **dashboard web** (Streamlit) espone gli stessi workflow via bro
 ### 1. Analizzare un ticker
 
 ```bash
-propicks-scan AAPL
+propicks-momentum AAPL
 ```
 
 Stampa tabella con **regime macro weekly** (STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR), indicatori (EMA, RSI, ATR, volume), sei sub-score, score composito 0-100, classificazione A/B/C/D e un **blocco pronto da incollare negli input del Pine daily** (`tradingview/daily_signal_engine.pine`) con entry / stop / target.
@@ -87,16 +87,16 @@ Per i **ticker US** l'output include anche una riga **RS vs settore**: forza rel
 Batch multi-ticker:
 
 ```bash
-propicks-scan AAPL MSFT NVDA AMZN --strategy TechTitans
-propicks-scan AAPL --json      # output JSON
-propicks-scan AAPL MSFT --brief # solo tabella riassuntiva
+propicks-momentum AAPL MSFT NVDA AMZN --strategy TechTitans
+propicks-momentum AAPL --json      # output JSON
+propicks-momentum AAPL MSFT --brief # solo tabella riassuntiva
 ```
 
 Validazione AI della tesi (richiede `ANTHROPIC_API_KEY`):
 
 ```bash
-propicks-scan AAPL --validate         # gate su score ≥ 60 E regime weekly ≥ NEUTRAL, cache giornaliera
-propicks-scan AAPL --force-validate   # bypassa gate e cache, forza la chiamata
+propicks-momentum AAPL --validate         # gate su score ≥ 60 E regime weekly ≥ NEUTRAL, cache giornaliera
+propicks-momentum AAPL --force-validate   # bypassa gate e cache, forza la chiamata
 ```
 
 La validazione viene **saltata** se il regime weekly è BEAR o STRONG_BEAR (mirror del filtro Pine `entryAllowed = regime >= NEUTRAL`): nessuna chiamata Claude, nessun costo. Usa `--force-validate` se vuoi comunque un'opinione su un setup controtrend.
@@ -273,7 +273,7 @@ UI web opzionale basata su **Streamlit** che espone gli stessi workflow della CL
 | Pagina | Equivalente CLI |
 |--------|-----------------|
 | **Overview** | `propicks-portfolio status` + `risk` + regime weekly |
-| **Scanner** | `propicks-scan [TICKER ...] [--validate]` |
+| **Scanner** | `propicks-momentum [TICKER ...] [--validate]` |
 | **ETF Rotation** | `propicks-rotate --region <R> [--allocate] [--validate]` |
 | **Portfolio** | `propicks-portfolio size` + `add` + `update` + `remove` |
 | **Journal** | `propicks-journal add` + `close` + `list` + `stats` |
@@ -309,7 +309,7 @@ docker compose up --build
 La CLI resta disponibile **dentro** il container:
 
 ```bash
-docker compose exec dashboard propicks-scan AAPL --validate
+docker compose exec dashboard propicks-momentum AAPL --validate
 docker compose exec dashboard propicks-journal stats
 ```
 
@@ -361,7 +361,7 @@ La cartella [`tradingview/`](./tradingview/) contiene due Pine script che affian
 **Divisione del lavoro**:
 - Python calcola regime weekly + score tecnico + validazione AI + sizing/journal.
 - TradingView osserva il prezzo in tempo reale e lancia gli alert di entry.
-- `propicks-scan --validate` stampa a fine output un blocco **TRADINGVIEW PINE INPUTS** con i livelli (entry / stop / target) da incollare direttamente nei settings del Pine daily.
+- `propicks-momentum --validate` stampa a fine output un blocco **TRADINGVIEW PINE INPUTS** con i livelli (entry / stop / target) da incollare direttamente nei settings del Pine daily.
 
 ## Regole di business (invarianti)
 
@@ -382,14 +382,14 @@ Queste regole sono hardcoded e applicate dalla validazione di `add_position`:
 
 Gli output CLI includono blocchi pronti da incollare nei prompt Claude:
 
-1. `propicks-scan` → **prompt Claude 3A** (analisi qualitativa del ticker)
+1. `propicks-momentum` → **prompt Claude 3A** (analisi qualitativa del ticker)
 2. `propicks-portfolio status` → **prompt Claude 3B** (review del portafoglio)
 3. `propicks-journal stats` → **prompt Claude 3D** (post-trade analysis)
 4. `propicks-report weekly|monthly` → contesto per qualsiasi prompt
 
 In alternativa al copia/incolla manuale, due validatori AI paralleli chiamano direttamente l'API Anthropic (Claude Opus 4.6 di default):
 
-- `propicks-scan --validate` → **thesis validator** (single-stock, prompt equity analyst, cache 24h, focus su earnings/catalyst/setup tecnico)
+- `propicks-momentum --validate` → **thesis validator** (single-stock, prompt equity analyst, cache 24h, focus su earnings/catalyst/setup tecnico)
 - `propicks-rotate --validate` → **rotation validator** (macro strategist, cache 48h, focus su macro drivers/breadth/positioning/rotation stage, niente earnings)
 
 Entrambi restituiscono verdict strutturati JSON-validated via pydantic. Il prompt di sistema è statico (prompt caching lato Anthropic) e il contenuto dinamico vive nel user prompt.

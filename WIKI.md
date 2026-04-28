@@ -45,7 +45,7 @@ sono il layer real-time che yfinance (EOD) non copre.
 
 | Doc | Comando |
 |-----|---------|
-| [MOMENTUM_STRATEGY](docs/MOMENTUM_STRATEGY.md) | `propicks-scan` — momentum/quality stock screener |
+| [MOMENTUM_STRATEGY](docs/MOMENTUM_STRATEGY.md) | `propicks-momentum` — momentum/quality stock screener |
 | [CONTRARIAN_STRATEGY](docs/CONTRARIAN_STRATEGY.md) | `propicks-contra` — quality-filtered mean reversion |
 | [ETF_ROTATION_STRATEGY](docs/ETF_ROTATION_STRATEGY.md) | `propicks-rotate` — sector ETF rotation US/EU/WORLD |
 
@@ -87,7 +87,7 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 pytest
 
 # 4. Primo scan
-propicks-scan AAPL --validate
+propicks-momentum AAPL --validate
 
 # 5. Dashboard
 propicks-dashboard            # http://localhost:8501
@@ -102,7 +102,7 @@ Per setup completo (Docker, scheduler daemon, bot Telegram) vedi
 
 | Workflow | CLI | Dashboard page | Pine script |
 |----------|-----|----------------|-------------|
-| Screening momentum stock | `propicks-scan` | `1_Scanner.py` | `daily_signal_engine.pine` |
+| Screening momentum stock | `propicks-momentum` | `1_Scanner.py` | `daily_signal_engine.pine` |
 | Mean reversion contrarian | `propicks-contra` | `8_Contrarian.py` | `contrarian_signal_engine.pine` |
 | Rotazione settoriale ETF | `propicks-rotate` | `2_ETF_Rotation.py` | `etf_rotation_engine.pine` |
 | Regime macro weekly | *(parte del scan)* | *(visibile in Scanner)* | `weekly_regime_engine.pine` |

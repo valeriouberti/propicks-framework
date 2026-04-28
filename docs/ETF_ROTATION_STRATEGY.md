@@ -130,7 +130,7 @@ drawdown — coerente col gate regime già usato in `validate_thesis`.
 
 ## 4. CLI `propicks-rotate`
 
-Entry point dedicato (non un branch di `propicks-scan`): la rotazione è un
+Entry point dedicato (non un branch di `propicks-momentum`): la rotazione è un
 workflow diverso dal setup single-stock e merita un comando suo.
 
 ```bash
@@ -220,7 +220,7 @@ ragioni architetturali:
 
 ### 8.1 Approccio attuale (MVP)
 
-I tematici di interesse passano da `propicks-scan` come single-stock e
+I tematici di interesse passano da `propicks-momentum` come single-stock e
 finiscono nel bucket satellite (max 15%/posizione). Quattro regole auto-imposte
 manuali (non codate):
 - Max 2 tematici aperti

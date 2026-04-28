@@ -84,7 +84,7 @@ Journal trade. Append-only: `close` aggiorna `exit_*` ma non cancella.
 **Indici**: `idx_trades_ticker`, `idx_trades_strategy_entry`, `idx_trades_status`, `idx_trades_exit_date`.
 
 ### `strategy_runs`
-Ogni esecuzione `propicks-scan` / `propicks-contra` / `propicks-rotate`
+Ogni esecuzione `propicks-momentum` / `propicks-contra` / `propicks-rotate`
 produce una row qui. Abilita "qual era lo score di X il Y?" + attribution.
 
 | Colonna | Tipo | Semantica |

@@ -55,7 +55,7 @@ def _fmt_watchlist_ready(alert: dict, meta: dict) -> str:
         )
     if score is not None:
         lines.append(f"Score: *{score:.1f}* {classif}")
-    lines.append("\n➡️ Se il setup è ancora valido: `propicks-scan {ticker} --validate`")
+    lines.append("\n➡️ Se il setup è ancora valido: `propicks-momentum {ticker} --validate`")
     return "\n".join(lines)
 
 

@@ -23,7 +23,7 @@ journaling → review.
 
 | Strategia | MD | Comando CLI | Scoring engine |
 |-----------|-----|-------------|----------------|
-| Stock momentum / quality | [`MOMENTUM_STRATEGY.md`](docs/MOMENTUM_STRATEGY.md) | `propicks-scan` | 6 sub-score (trend/momentum/volume/dist-high/vol/MA-cross) |
+| Stock momentum / quality | [`MOMENTUM_STRATEGY.md`](docs/MOMENTUM_STRATEGY.md) | `propicks-momentum` | 6 sub-score (trend/momentum/volume/dist-high/vol/MA-cross) |
 | Quality-filtered mean reversion | [`CONTRARIAN_STRATEGY.md`](docs/CONTRARIAN_STRATEGY.md) | `propicks-contra` | 4 sub-score (oversold/quality/context/reversion) |
 | Sector ETF rotation | [`ETF_ROTATION_STRATEGY.md`](docs/ETF_ROTATION_STRATEGY.md) | `propicks-rotate` | 4 sub-score (RS/regime-fit/abs-mom/trend) |
 
@@ -183,11 +183,14 @@ progetto. La dashboard Streamlit è **parallela** alla CLI, non la sostituisce.
 
 ```bash
 # Stock momentum / quality (vedi docs/MOMENTUM_STRATEGY.md)
-propicks-scan AAPL                                # singolo
-propicks-scan AAPL MSFT NVDA --strategy TechTitans
-propicks-scan AAPL --validate                     # gate score≥60 + regime≥NEUTRAL
-propicks-scan AAPL --force-validate               # bypassa gate + cache
-propicks-scan AAPL --json --brief --no-watchlist
+propicks-momentum AAPL                            # singolo
+propicks-momentum AAPL MSFT NVDA --strategy TechTitans
+propicks-momentum AAPL --validate                 # gate score≥60 + regime≥NEUTRAL
+propicks-momentum AAPL --force-validate           # bypassa gate + cache
+propicks-momentum AAPL --json --brief --no-watchlist
+propicks-momentum --discover-sp500 [--top N] [--min-score 75]  # ~500 nomi US
+propicks-momentum --discover-ftsemib                            # 40 large-cap IT
+propicks-momentum --discover-stoxx600                           # ~600 nomi EU
 
 # Contrarian (vedi docs/CONTRARIAN_STRATEGY.md)
 propicks-contra AAPL [--validate] [--json] [--brief] [--no-watchlist]
@@ -270,7 +273,7 @@ pytest                                            # tutti senza rete
 | CLI | Dashboard page |
 |-----|----------------|
 | *(home — no CLI equivalent)* | `app.py` Portfolio Overview |
-| `propicks-scan [--validate]` | `pages/1_Scanner.py` |
+| `propicks-momentum [--validate] [--discover-*]` | `pages/1_Scanner.py` |
 | `propicks-rotate [--region]` | `pages/2_ETF_Rotation.py` |
 | `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py` (tabs base) |
 | `propicks-portfolio risk` | `pages/3_Portfolio.py` → tab "Rischio & esposizione" |

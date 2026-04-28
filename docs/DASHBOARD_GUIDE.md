@@ -67,7 +67,7 @@ CLI equivalente: `propicks-portfolio status` + `propicks-portfolio risk`.
 
 ## 1. Scanner — `pages/1_Scanner.py`
 
-**Screening momentum stock** (= [`propicks-scan`](CLI_REFERENCE.md#propicks-scan)).
+**Screening momentum stock** (= [`propicks-momentum`](CLI_REFERENCE.md#propicks-momentum)).
 
 Form input:
 - Tickers (textarea, uno per riga)

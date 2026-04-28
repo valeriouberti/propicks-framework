@@ -163,7 +163,7 @@ La pipeline è **manuale** ma con contract rigidi tra gli stadi:
 ```
 Pro Picks (mensile)
   → Perplexity 2A/2B (news + catalyst, cross-check fondamentale)
-  → propicks-scan --validate          ← regime weekly + score + verdict Claude
+  → propicks-momentum --validate          ← regime weekly + score + verdict Claude
   → copy/paste TRADINGVIEW PINE INPUTS nei settings del Pine daily
   → Pine daily (timing real-time: BRK/PB/GC/SQZ/DIV → alert push)
   → Perplexity 2C (check red flag ultime 24h)
@@ -176,7 +176,7 @@ Pro Picks (mensile)
 - `domain/regime.py` = replica Python del Pine weekly (stessa classificazione 5-bucket)
 - `tradingview/*.pine` hanno header che punta a `config.py` come source of
   truth per EMA/RSI/ATR/volume/soglie
-- `propicks-scan` stampa sempre il blocco Pine-ready a fine output così il
+- `propicks-momentum` stampa sempre il blocco Pine-ready a fine output così il
   trader copia-incolla i livelli invece di digitarli
 - Il gate regime in `validate_thesis` impedisce chiamate Claude quando il Pine
   weekly direbbe NO ENTRY
@@ -188,7 +188,7 @@ Pro Picks (mensile)
 3. **Journal stats** → dati per il prompt Claude 3D (post-trade analysis)
 4. **Report** → sommario formattato come contesto per qualsiasi prompt
 
-In alternativa al copia/incolla manuale, `propicks-scan --validate` chiama
+In alternativa al copia/incolla manuale, `propicks-momentum --validate` chiama
 direttamente l'API Anthropic e restituisce verdict strutturato. Il prompt di
 sistema è statico (prompt caching abilitato), il contenuto dinamico nel user
 prompt per non invalidare la cache lato server.
@@ -200,17 +200,17 @@ prompt per non invalidare la cache lato server.
 
 ---
 
-## 8. CLI `propicks-scan`
+## 8. CLI `propicks-momentum`
 
 ```bash
-propicks-scan AAPL                              # singolo ticker
-propicks-scan AAPL MSFT NVDA                    # batch
-propicks-scan AAPL --validate                   # + Claude validation (gate score≥60 + regime≥NEUTRAL)
-propicks-scan AAPL --force-validate             # bypass gate + cache
-propicks-scan AAPL --json                       # output JSON
-propicks-scan AAPL MSFT --brief                 # solo summary
-propicks-scan AAPL --strategy TechTitans        # strategy tag custom
-propicks-scan AAPL --no-watchlist               # disabilita auto-add classe A+B
+propicks-momentum AAPL                              # singolo ticker
+propicks-momentum AAPL MSFT NVDA                    # batch
+propicks-momentum AAPL --validate                   # + Claude validation (gate score≥60 + regime≥NEUTRAL)
+propicks-momentum AAPL --force-validate             # bypass gate + cache
+propicks-momentum AAPL --json                       # output JSON
+propicks-momentum AAPL MSFT --brief                 # solo summary
+propicks-momentum AAPL --strategy TechTitans        # strategy tag custom
+propicks-momentum AAPL --no-watchlist               # disabilita auto-add classe A+B
 ```
 
 ---

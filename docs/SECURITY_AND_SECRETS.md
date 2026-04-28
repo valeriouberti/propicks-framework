@@ -34,7 +34,7 @@ shell ha precedenza. Conseguenza pratica: puoi sovrascrivere temporaneamente
 una key per una sessione senza toccare `.env`:
 
 ```bash
-PROPICKS_AI_MODEL=claude-haiku-4-5 propicks-scan AAPL --validate
+PROPICKS_AI_MODEL=claude-haiku-4-5 propicks-momentum AAPL --validate
 ```
 
 ---
@@ -48,7 +48,7 @@ PROPICKS_AI_MODEL=claude-haiku-4-5 propicks-scan AAPL --validate
    ```
    ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxx
    ```
-3. Verifica: `propicks-scan AAPL --validate --brief`
+3. Verifica: `propicks-momentum AAPL --validate --brief`
 
 ### Budget cap
 
@@ -77,7 +77,7 @@ ticker o senza `--validate`.
 # 2. Aggiorna .env
 # 3. Revoca la vecchia (sempre in console)
 # 4. Verifica
-propicks-scan AAPL --force-validate --brief
+propicks-momentum AAPL --force-validate --brief
 ```
 
 Nessun restart richiesto — `.env` viene riletto al prossimo run del CLI.
@@ -188,7 +188,7 @@ Il logger `propicks.obs.log` segue queste regole:
 Verifica:
 
 ```bash
-propicks-scan AAPL --validate 2>&1 | grep -iE "sk-|bearer|token" || echo "clean"
+propicks-momentum AAPL --validate 2>&1 | grep -iE "sk-|bearer|token" || echo "clean"
 ```
 
 Se vedi una key nel log, è un bug — apri issue.

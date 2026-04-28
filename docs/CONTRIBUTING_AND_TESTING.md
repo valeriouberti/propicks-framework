@@ -393,8 +393,8 @@ Schema migration: ogni breaking schema change → bump MAJOR + migration in
 Per profilare un comando:
 
 ```bash
-python -X importtime -m propicks.cli.scanner AAPL 2>&1 | grep "import time"
-python -m cProfile -o profile.out -m propicks.cli.scanner AAPL MSFT NVDA
+python -X importtime -m propicks.cli.momentum AAPL 2>&1 | grep "import time"
+python -m cProfile -o profile.out -m propicks.cli.momentum AAPL MSFT NVDA
 python -m pstats profile.out
 ```
 

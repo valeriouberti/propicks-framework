@@ -84,7 +84,7 @@ BEAR / STRONG_BEAR) — mirror esatto di `domain/regime.py`.
 `domain/scoring.py`.
 
 **Quando usarlo**:
-- Su ogni stock della watchlist Pro Picks dopo l'output di `propicks-scan`.
+- Su ogni stock della watchlist Pro Picks dopo l'output di `propicks-momentum`.
 - Configura gli `Entry Price`, `Stop Loss Price`, `Target Price` (sezione
   "Position") con i valori dal blocco copiato dalla CLI per attivare gli
   alert posizionali.
@@ -254,7 +254,7 @@ Marker `*` accanto allo score quando il cap è attivo.
 
 ```
 06:00 — propicks-scheduler ha già fatto warm cache + scan EOD
-08:00 — review CLI: propicks-scan AAPL (output A — 78/100)
+08:00 — review CLI: propicks-momentum AAPL (output A — 78/100)
         Output mostra blocco "TradingView Pine inputs":
             Entry: 185.50, Stop: 177.90, Target: 220.00
 08:05 — TradingView, chart AAPL daily:
