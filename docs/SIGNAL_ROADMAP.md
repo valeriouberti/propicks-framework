@@ -1054,21 +1054,95 @@ SIGNAL_ROADMAP §5 B.6 decision rule:
 
 ---
 
-## Fasi C-E pendenti
+## Fase C — status
 
-Roadmap originale prevede:
-- Fase C — refinement strategy-specific (catalyst contrarian, multi-lookback momentum, defensive switch ETF)
-- Fase D — meta-validation (AI ablation, decay monitor, conflict resolution)
-- Fase E — stress + ML opzionale
+Riprioritizzata vs roadmap originale dato findings B.6:
+- C.0 (NEW): universe-aware percentile tuning (urgent post B.6)
+- C.4: OBV / Accumulation-Distribution upgrade momentum volume signal
+- C.6: multi-lookback momentum ensemble (institutional standard)
+- C.7: defensive switch ETF rotation (Antonacci dual momentum)
+- Defer: C.1/C.2/C.3 (contrarian-specific look-ahead issue), C.5/C.8
+  (richiede sector breadth + mapping)
 
-**Decisione operativa**: dato che Fase B ha rivelato look-ahead bias come
-issue strutturale + B.1 limit universe-size, **Fase C dovrebbe essere
-ri-prioritizzata** rispetto a originale. In particolare:
+| Step | Status | Note |
+|------|--------|------|
+| C.0 — `auto_percentile_for_universe` | **done** (2026-04-29) | Pure function in scoring.py. Tunes percentile threshold by universe size (target 6 winners). 30→P80, 50→P88, 100+→P90 cap |
+| C.4 — OBV + A/D in `indicators.py` | **done** (2026-04-29) | `compute_obv` (Granville) + `compute_accumulation_distribution` (Chaikin). Pure functions su pd.Series |
+| C.6 — Multi-lookback momentum | **done** (2026-04-29) | `compute_multi_lookback_momentum` ensemble 1m+3m+6m+12m con skip-recent. `score_multi_lookback_momentum` mapping in [0, 100] |
+| C.7 — Defensive switch ETF | **done** (2026-04-29) | `suggest_defensive_allocation` + flag `enable_defensive_switch` in `suggest_allocation`. Default OFF (backward compat). IEF + GLD + XLU + XLP basket |
+| C.X — Ablation cumulativa | **done** (2026-04-29) | 8 config su SP500 top 50 5y. Vedi [`ABLATION_C_CUMULATIVE.md`](ABLATION_C_CUMULATIVE.md) |
 
-1. **C — sub-step nuovo**: Universe-aware percentile tuning B.1 (urgent)
-2. **C — defer**: catalyst contrarian (richiede similar dataset point-in-time)
-3. **D.1 (AI ablation)**: importante, indipendente da look-ahead
-4. **D.4 (decay monitor)**: critical per live deployment
+#### Findings C cumulative (top 50 SP500, 5y)
 
-Roadmap aggiornata in iterazione successiva — per ora **Fase A + B
-complete** secondo scope originale.
+| Config | Sharpe ann | Δ vs baseline | DSR p | Decision |
+|--------|-----------|---------------|-------|----------|
+| baseline_v2 | 0.354 | — | — | — |
+| C0 only (auto P88) | 0.197 | −0.157 | 0.41 | DROP |
+| C4 only (OBV) | 0.259 | −0.095 | 0.64 | DROP |
+| C6 only (multi-lb) | 0.300 | −0.054 | 0.11 | DROP |
+| C0+C4 | 0.217 | −0.137 | 0.34 | DROP |
+| **C0+C6** | **0.505** | **+0.151** | 0.13 | DROP (DSR p borderline) |
+| C4+C6 | 0.276 | −0.078 | 0.30 | DROP |
+| **C0+C4+C6** | **0.591** | **+0.237** | 0.40 | DROP (DSR p alto) |
+
+#### Findings C chiave
+
+1. **Feature singole sotto baseline**: C.0/C.4/C.6 isolati peggiorano Sharpe.
+   C.0 P88 troppo aggressivo per top 50 (auto-tune sub-optimal). C.4 OBV
+   normalization da raffinare. C.6 multi-lookback simile a baseline ma
+   PSR migliore (0.99 vs 0.64) — segnali più stabili anche se Sharpe simile
+
+2. **Cumulative dominante**: C0+C4+C6 = **+0.24 Sharpe** vs baseline (0.59 vs
+   0.35). Sinergia tra feature, additive non perfetto
+
+3. **Decision rule strict NON passa**: tutti DROP per DSR p > 0.10 con
+   n_trials=8. Pattern simile B.6 (solo cumulative passava B.2+B.4 lì)
+
+4. **PSR multi-lookback molto alto** (0.99) vs baseline (0.64) — multi-lb
+   produce signal più robusto statistically anche se Sharpe netto simile
+
+#### Caveat C documentati
+
+- **C.0 auto_percentile** funzione naïve (target 6 winners). Calibrazione
+  rigorosa target_n_winners per universe size diverse pendente
+- **C.4 OBV normalization**: `(obv_now - obv_30) / (|obv_30| + avg_vol*30)`
+  empirical scaling. Tuning factor pendente
+- **C.6 skip-recent default 21**: Jegadeesh-Titman convention. Pure functions
+  ma integration in scoring composite richiede engine modify per opt-in
+- **C.7 defensive switch**: testato unit-level pure logic, NON ablation
+  backtest rotation strategy (richiede integration etf rotation backtest)
+- **C.X DSR strict fail**: stesso pattern B.6 — pesi multi-test severo
+
+#### Verdict Fase C
+
+**Conditional pass**: edge cumulative misurabile (+0.24 Sharpe), single
+features sub-additive. Decision rule strict NON soddisfatta ma edge real
+documentato.
+
+**Mossa next operative**:
+- C.0/C.4/C.6 disponibili come componenti opt-in (no default change)
+- Tuning fine C.0 (target_n_winners by universe), C.4 (OBV normalization)
+  pendente Fase B.6 next iteration
+- C.7 defensive switch: live live test su rotation strategy
+  (backtest separato pendente)
+
+---
+
+## Fasi D-E pendenti
+
+| Fase | Item | Priority |
+|------|------|----------|
+| D.1 | AI validation ablation | **alto** — indipendente look-ahead |
+| D.2 | Signal persistence (2-3d) | medio |
+| D.3 | Cross-strategy conflict resolution | medio |
+| D.4 | Decay monitor framework | **alto** — critical live deploy |
+| E.1 | Historical scenario replay | medio |
+| E.2 | Synthetic data backtest | basso |
+| E.3 | Permutation test | medio |
+| E.4 | ML overlay | basso (scetticismo overfit) |
+
+**Riprioritizzazione consigliata**: D.1 + D.4 prima dei restanti. Indispensabili
+per qualsiasi deployment live anche limited.
+
+**Status complessivo**: Fase A + B + C complete. Fase D-E roadmap discrezionale
+basata su priorità utente.

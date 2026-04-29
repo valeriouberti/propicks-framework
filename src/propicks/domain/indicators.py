@@ -112,3 +112,116 @@ def compute_macd(
     signal_line = compute_ema(macd_line, signal)
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
+
+
+def compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """On-Balance Volume (Granville 1963). Cumulative volume signed by close direction.
+
+    Logica:
+    - Se close[t] > close[t-1] → OBV[t] = OBV[t-1] + volume[t]
+    - Se close[t] < close[t-1] → OBV[t] = OBV[t-1] - volume[t]
+    - Se close[t] == close[t-1] → OBV[t] = OBV[t-1]
+
+    Edge: divergenze OBV vs price (price up but OBV flat = weak rally).
+
+    Args:
+        close: pd.Series close prices.
+        volume: pd.Series volume (stessa lunghezza/index).
+
+    Returns:
+        pd.Series OBV cumulative. Primo valore = 0.
+    """
+    if len(close) != len(volume):
+        raise ValueError(f"length mismatch: close={len(close)} volume={len(volume)}")
+    direction = close.diff().fillna(0)
+    signed_volume = volume.where(direction > 0, -volume.where(direction < 0, 0)).fillna(0)
+    return signed_volume.cumsum()
+
+
+def compute_multi_lookback_momentum(
+    close: pd.Series,
+    lookbacks: tuple[int, ...] = (21, 63, 126, 252),
+    *,
+    skip_recent: int = 0,
+) -> float | None:
+    """Multi-lookback momentum ensemble (Fase C.6 SIGNAL_ROADMAP).
+
+    Razionale (AQR / Asness): single-window momentum (es. 12-1) vulnerabile
+    a single-window noise. Ensemble di più lookback → più robusto a regime
+    change. Standard institutional: 1m + 3m + 6m + 12m.
+
+    Formula:
+        avg_log_return = mean(log(close[-1] / close[-lookback])) for each lookback
+
+    Output in unità log-return (≈ percent change per piccoli valori).
+    Caller decide come mapparlo in score [0, 100].
+
+    Args:
+        close: pd.Series close prices, indicizzata cronologica.
+        lookbacks: tuple bar lookback (default 21/63/126/252 ≈ 1m/3m/6m/12m).
+        skip_recent: skip ultimi N bar (Jegadeesh-Titman skip-1 month
+            convention per evitare short-term reversal). Default 0 (no skip).
+
+    Returns:
+        Float = average log-return across lookbacks. None se dati insufficienti.
+
+    Edge cases:
+        - close ha < max(lookbacks) bar → None
+        - close[-1] o close[-lookback] <= 0 → quel lookback skipped
+    """
+    if not lookbacks:
+        return None
+    n = len(close)
+    max_lb = max(lookbacks)
+    if n < max_lb + skip_recent + 1:
+        return None
+    # close at "now" (post skip)
+    end_idx = n - 1 - skip_recent
+    end_price = float(close.iloc[end_idx])
+    if end_price <= 0:
+        return None
+
+    log_returns = []
+    for lb in lookbacks:
+        start_idx = end_idx - lb
+        if start_idx < 0:
+            continue
+        start_price = float(close.iloc[start_idx])
+        if start_price <= 0:
+            continue
+        log_returns.append(np.log(end_price / start_price))
+
+    if not log_returns:
+        return None
+    return float(np.mean(log_returns))
+
+
+def compute_accumulation_distribution(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+) -> pd.Series:
+    """Accumulation/Distribution Line (Chaikin). Cumulative volume × CLV.
+
+    Close Location Value (CLV):
+        CLV = ((close - low) - (high - close)) / (high - low)
+    Range [-1, +1]: +1 = close at high (accumulation), -1 = close at low
+    (distribution).
+
+    A/D Line = cumsum(CLV × volume).
+
+    Edge: misura intra-bar buying/selling pressure pesata dal volume.
+    Più informativa di OBV su singoli bar (OBV è binary up/down).
+
+    Args:
+        high, low, close: pd.Series OHLC.
+        volume: pd.Series volume.
+
+    Returns:
+        pd.Series A/D line cumulative.
+    """
+    rng = (high - low).replace(0, np.nan)
+    clv = ((close - low) - (high - close)) / rng
+    clv = clv.fillna(0)
+    return (clv * volume).cumsum()

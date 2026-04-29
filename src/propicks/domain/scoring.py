@@ -215,6 +215,28 @@ def classify(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Multi-lookback momentum (Fase C.6 SIGNAL_ROADMAP)
+# ---------------------------------------------------------------------------
+def score_multi_lookback_momentum(avg_log_return: float | None) -> float:
+    """Score [0, 100] da average log-return ensemble multi-lookback.
+
+    Mappatura: log-return 0 → 50, +0.20 (~+22% media) → 100, -0.20 → 0.
+    Saturazione lineare ±0.20 (≈ ±22% media annua su lookback misti).
+
+    Args:
+        avg_log_return: output di ``indicators.compute_multi_lookback_momentum``.
+
+    Returns:
+        Float [0, 100]. 50 se input None.
+    """
+    if avg_log_return is None:
+        return 50.0
+    val = float(avg_log_return)
+    saturated = max(-0.20, min(0.20, val))
+    return max(0.0, min(100.0, 50.0 + saturated * 250.0))
+
+
+# ---------------------------------------------------------------------------
 # Earnings revision overlay (Fase B.2 SIGNAL_ROADMAP)
 # ---------------------------------------------------------------------------
 def combine_with_earnings_revision(
@@ -256,6 +278,53 @@ def combine_with_earnings_revision(
 # ---------------------------------------------------------------------------
 # Cross-sectional ranking (Fase B.1 SIGNAL_ROADMAP)
 # ---------------------------------------------------------------------------
+def auto_percentile_for_universe(
+    universe_size: int,
+    *,
+    target_n_winners: int = 6,
+    min_pct: float = 50.0,
+    max_pct: float = 90.0,
+) -> float:
+    """Tuna percentile threshold cross-sectional in funzione dell'universe size.
+
+    Razionale (Fase C.0 SIGNAL_ROADMAP): B.6 ha mostrato che P80 fixed scala
+    male — top 30 OK (Sharpe 0.62), top 50 collassa (Sharpe 0.07). P80 con
+    50 ticker = top 10 ticker, ma combined con max_positions cap si finisce
+    su 5-6 ticker correlati = concentration risk + diversification persa.
+
+    Strategia auto-tuning: tieni il numero atteso di "winners" stabile
+    (default 6 ticker) variando il percentile con la dimensione universe.
+
+        winners ≈ universe_size × (1 - pct/100)
+        pct = 100 × (1 - target_n_winners / universe_size)
+
+    Args:
+        universe_size: ticker totali eligibili nell'universe.
+        target_n_winners: numero target di ticker sopra threshold (default 6
+            = ~max_positions configurato in BacktestConfig).
+        min_pct, max_pct: clamp range. min 50 (top half) prevent overfit.
+
+    Returns:
+        Percentile [min_pct, max_pct] auto-tuned.
+
+    Examples:
+        >>> auto_percentile_for_universe(30)   # 30 ticker → P80
+        80.0
+        >>> auto_percentile_for_universe(60)   # 60 ticker → P90 (clamp)
+        90.0
+        >>> auto_percentile_for_universe(100)  # 100 ticker → P94→P90 (clamp)
+        90.0
+        >>> auto_percentile_for_universe(20)   # 20 ticker → P70
+        70.0
+        >>> auto_percentile_for_universe(10)   # 10 ticker → P40→P50 (clamp)
+        50.0
+    """
+    if universe_size < 2:
+        return min_pct
+    raw = 100.0 * (1.0 - target_n_winners / universe_size)
+    return max(min_pct, min(max_pct, raw))
+
+
 def rank_universe(scores: dict[str, float]) -> dict[str, float]:
     """Converte score assoluti in percentile rank [0, 100] cross-sectional.
 
