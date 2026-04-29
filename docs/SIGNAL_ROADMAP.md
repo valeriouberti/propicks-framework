@@ -919,5 +919,44 @@ documentato. Pesi default in attesa B.6 tuning.
 backtest non OOS-credible per look-ahead. **NON adottare default**.
 Disponibile come flag opzionale per signal validation live.
 
-**Next**: B.5 — Cross-asset overlay rotation (yield curve, USD, HY OAS,
-copper/gold). Edge sector rotation documentato Faber 2007 + Antonacci 2014.
+### Fase B.5 — status
+
+| Step | Status | Note |
+|------|--------|------|
+| B.5.1 — Verify macro sources | **done** (2026-04-29) | FRED T10Y2Y (yield slope), DTWEXBGS (USD broad), BAMLH0A0HYM2 (HY OAS). yfinance HG=F, GC=F, CL=F (copper/gold/oil futures). Tutti accessibili |
+| B.5.2 — `domain/macro_overlay.py` features | **done** (2026-04-29) | compute_macro_zscores (rolling 252d) + sign convention auto (USD/HY OAS inverted). 5 features cross-asset |
+| B.5.3 — Sector sensitivity matrix | **done** (2026-04-29) | SECTOR_SENSITIVITY_MATRIX 11 ETF × 5 features. Macro_fit_score formula additive weighted normalized. Pure functions |
+| B.5.4 — Smoke test macro overlay | **done** (2026-04-29) | Latest ranking (2026-04-28): XLE 73.9 top (oil regime), XLY 41.9 bottom. Coerente con macro corrente. Vedi [`MACRO_OVERLAY.md`](MACRO_OVERLAY.md) |
+
+#### Findings B.5 chiave
+
+**Sector ranking corrente coerente**:
+
+- XLE top (oil/gold z=+1.57 → energy regime)
+- XLK/XLC favored (HY OAS calm → tech refinancing)
+- XLF basso (yield curve flat → banks NIM compressa)
+- XLY bottom (yield slope ambiguous + oil cara → consumer hurt)
+
+**Pattern qualitativo macro-coherent** sui sector — sensitivity matrix
+funziona come expected.
+
+#### Caveat B.5 documentati
+
+- **Sensitivity matrix arbitraria**: pesi default basati su rationale
+  qualitativo. Tuning rigoroso via regression Fama-MacBeth o DSR pendente
+- **USD data 1d delay** (DTWEXBGS T+1): NaN edge case, workaround ffill
+  necessario per production
+- **Integration in `etf_scoring.py` mancante**: standalone API ma non
+  wired in `domain/etf_scoring.py` come 5° sub-score. Pendente B.6
+- **Single-period z-score window 252d**: non adattivo a regime change
+- **Commodity futures vs spot**: roll yield può introdurre noise
+- **Solo US sector ETF**: STOXX Europe sector matrice diversa (ECB vs Fed)
+
+#### Verdict B.5
+
+**Pass operativo** — implementation pulita, ranking coherent. Edge OOS
+misurabile solo post-integration + B.6 ablation rotation backtest.
+
+**Next**: B.6 — Ablation framework cumulativo. Per ogni feature B.1-B.5:
+re-backtest isolato + cumulative. Decision rule strict: mantenere solo
++0.10 Sharpe AND DSR p < 0.10 vs baseline_v2.
