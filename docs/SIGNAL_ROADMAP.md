@@ -874,5 +874,50 @@ Da fare in B.6 ablation framework con confronto pre/post drawdown.
 **Acceptance gate B.3**: **pass operativo** — turning point lead time
 documentato. Pesi default in attesa B.6 tuning.
 
-**Next**: B.4 — Quality filter momentum (ROIC + gross profit/asset +
-debt/equity). Top tercile gate prima entry. Edge documented Asness QMJ 2013.
+### Fase B.4 — status
+
+| Step | Status | Note |
+|------|--------|------|
+| B.4.1 — Verify yfinance financials API | **done** (2026-04-29) | yfinance ``info`` espone returnOnAssets, grossMargins, debtToEquity, returnOnEquity. balance_sheet annual disponibile. **Caveat**: tutti snapshot oggi (TTM), no point-in-time |
+| B.4.2 — `domain/quality.py` pure scoring | **done** (2026-04-29) | compute_roa_score / gross_margin / debt_equity (inverted). score_quality composite default 1/3 each. is_above_quality_tercile cross-sectional |
+| B.4.3 — Fetcher + cache | **done** (2026-04-29) | get_quality_metrics in market/yfinance_client. Schema: 5 colonne nuove market_ticker_meta. TTL 90gg |
+| B.4.4 — Integration gate filter | **done** (2026-04-29) | BacktestConfig.quality_scores + quality_filter_pct. Filter applicato PRIMA scoring momentum, cross-sectional top-percentile |
+| B.4.5 — Smoke ablation | **done** (2026-04-29) | SP500 top 30 5y + cross-sectional. **CAVEAT LOOK-AHEAD** (yfinance snapshot only). Edge marginale su universe pre-filtered. Vedi [`ABLATION_B4_QUALITY.md`](ABLATION_B4_QUALITY.md) |
+
+#### Findings B.4 chiave
+
+**Numeri (con caveat look-ahead)**:
+
+| Config | Sharpe ann | N trade | Δ vs baseline |
+|--------|-----------|---------|---------------|
+| Baseline (XS, no quality filter) | 0.317 | 795 | — |
+| T50 (top half) | 0.204 | 703 | **−0.11** |
+| T67 (top tercile) | 0.300 | 614 | −0.02 |
+| T80 (top quintile) | 0.342 | 380 | **+0.03** |
+
+**Interpretation**:
+
+- Edge **marginale** su universe top 30 mega-cap (universo già filtered to high quality)
+- T80 leggermente positivo, T50 negativo (over-filtering perde diversification)
+- Pattern atteso più forte su universe broader (mid/small cap dove "junk" reale presente)
+- Banks (JPM) penalizzati per `grossMargins = 0` (banks reporting different) — **sector-aware quality scoring** TODO
+
+#### Caveat B.4 documentati
+
+- **Look-ahead bias** (stesso pattern B.2): yfinance fundamentals snapshot
+  oggi → backtest 2021-2026 sovrappone temporalmente con quei reporting period
+- **Universe top 30 sub-optimal** per testare quality: mega-cap S&P già
+  pre-filtered. Test su mid/small cap pendente
+- **Sector-aware scoring mancante**: banks / utilities / REIT hanno reporting
+  fundamentals diverso (no gross margin meaningful, ROE non comparable)
+- **Per OOS validation proper**: serve historical fundamentals point-in-time
+  (Compustat / Sharadar / SimFin)
+
+#### Verdict B.4
+
+**Conditional pass — feature live-only** (analogo a B.2). Numeri ablation
+backtest non OOS-credible per look-ahead. **NON adottare default**.
+Disponibile come flag opzionale per signal validation live.
+
+**Next**: B.5 — Cross-asset overlay rotation (yield curve, USD, HY OAS,
+copper/gold). Edge sector rotation documentato Faber 2007 + Antonacci 2014.

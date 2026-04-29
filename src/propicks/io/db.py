@@ -465,6 +465,25 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
                 conn.execute(ddl)
             except (sqlite3.OperationalError, ValueError):
                 pass
+
+    # Fase B.4 SIGNAL_ROADMAP: quality metrics (Asness QMJ)
+    for column, ddl in (
+        ("quality_roa",
+         "ALTER TABLE market_ticker_meta ADD COLUMN quality_roa REAL"),
+        ("quality_gross_margin",
+         "ALTER TABLE market_ticker_meta ADD COLUMN quality_gross_margin REAL"),
+        ("quality_debt_equity",
+         "ALTER TABLE market_ticker_meta ADD COLUMN quality_debt_equity REAL"),
+        ("quality_score",
+         "ALTER TABLE market_ticker_meta ADD COLUMN quality_score REAL"),
+        ("quality_fetched_at",
+         "ALTER TABLE market_ticker_meta ADD COLUMN quality_fetched_at TIMESTAMP"),
+    ):
+        if not _column_exists(conn, "market_ticker_meta", column):
+            try:
+                conn.execute(ddl)
+            except (sqlite3.OperationalError, ValueError):
+                pass
     try:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_meta_next_earnings "
@@ -941,6 +960,64 @@ def market_earnings_revision_upsert(
                 net_revisions_30d, n_analysts,
                 ticker.upper(),
             ),
+        )
+
+
+def market_quality_read(
+    ticker: str,
+    ttl_hours: float,
+    *,
+    path: str | None = None,
+) -> dict | None:
+    """Ritorna dict quality metrics se cache fresh. Else None.
+
+    Fields: roa, gross_margin, debt_equity, score, fetched_at.
+    TTL tipico 90gg (fundamentals slow-moving).
+    """
+    conn = _connect_for_table("market_ticker_meta", path)
+    try:
+        row = conn.execute(
+            """SELECT quality_roa AS roa,
+                      quality_gross_margin AS gross_margin,
+                      quality_debt_equity AS debt_equity,
+                      quality_score AS score,
+                      quality_fetched_at AS fetched_at
+               FROM market_ticker_meta
+               WHERE ticker = ?
+                 AND quality_fetched_at IS NOT NULL
+                 AND quality_fetched_at >= datetime('now', ?)""",
+            (ticker.upper(), f"-{ttl_hours} hours"),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def market_quality_upsert(
+    ticker: str,
+    *,
+    roa: float | None = None,
+    gross_margin: float | None = None,
+    debt_equity: float | None = None,
+    score: float | None = None,
+    path: str | None = None,
+) -> None:
+    """UPSERT quality metrics. None preserva esistente."""
+    with _transaction_for_table("market_ticker_meta", path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO market_ticker_meta (ticker, fetched_at) "
+            "VALUES (?, CURRENT_TIMESTAMP)",
+            (ticker.upper(),),
+        )
+        conn.execute(
+            """UPDATE market_ticker_meta SET
+                  quality_roa = COALESCE(?, quality_roa),
+                  quality_gross_margin = COALESCE(?, quality_gross_margin),
+                  quality_debt_equity = COALESCE(?, quality_debt_equity),
+                  quality_score = COALESCE(?, quality_score),
+                  quality_fetched_at = CURRENT_TIMESTAMP
+               WHERE ticker = ?""",
+            (roa, gross_margin, debt_equity, score, ticker.upper()),
         )
 
 

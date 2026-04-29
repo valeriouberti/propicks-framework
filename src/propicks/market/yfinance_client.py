@@ -576,6 +576,76 @@ def get_earnings_revision_metrics(
     }
 
 
+def get_quality_metrics(
+    ticker: str,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    """Fetch + cache quality metrics (Fase B.4 SIGNAL_ROADMAP).
+
+    Source: yfinance ``info`` (current snapshot, NO point-in-time historical).
+
+    Cache TTL 90gg (fundamentals slow-moving). Quality_score computed and
+    cached per evitare re-compute a ogni read.
+
+    Args:
+        ticker: simbolo yfinance.
+        force_refresh: bypass cache.
+
+    Returns:
+        Dict {roa, gross_margin, debt_equity, score, fetched_at}.
+        Score ricalcolato fresh se feature presenti, None se mancanti.
+    """
+    from propicks.io.db import (
+        market_quality_read,
+        market_quality_upsert,
+    )
+    from propicks.domain.quality import score_quality
+
+    ticker = ticker.upper()
+    ttl_hours = 24 * 90  # 90 giorni
+
+    if not force_refresh:
+        cached = market_quality_read(ticker, ttl_hours)
+        if cached is not None:
+            return cached
+
+    # Fetch yfinance info
+    info = _yf_fetch_info(ticker)
+    if info is None:
+        return {
+            "roa": None, "gross_margin": None, "debt_equity": None,
+            "score": None, "fetched_at": None,
+        }
+
+    def _safe_float(v):
+        try:
+            f = float(v)
+            return f if f == f else None  # NaN check
+        except (TypeError, ValueError):
+            return None
+
+    roa = _safe_float(info.get("returnOnAssets"))
+    gm = _safe_float(info.get("grossMargins"))
+    de = _safe_float(info.get("debtToEquity"))
+    score = score_quality(roa, gm, de)
+
+    market_quality_upsert(
+        ticker,
+        roa=roa,
+        gross_margin=gm,
+        debt_equity=de,
+        score=score,
+    )
+
+    return {
+        "roa": roa,
+        "gross_margin": gm,
+        "debt_equity": de,
+        "score": round(score, 2) if score is not None else None,
+    }
+
+
 def get_ticker_beta(ticker: str) -> float | None:
     """Beta vs mercato (SPX) — cache-aware (TTL 7gg).
 

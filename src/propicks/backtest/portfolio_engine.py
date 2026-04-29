@@ -122,6 +122,21 @@ class BacktestConfig:
     in quel giorno. Razionale: edge momentum cross-sectional > absolute
     (Jegadeesh-Titman 1993). Default False = behavior legacy (absolute)."""
 
+    # Fase B.4 SIGNAL_ROADMAP — quality filter (Asness QMJ 2013)
+    quality_scores: dict[str, float] | None = None
+    """Dict {ticker: quality_score [0,100]} precomputed via
+    ``market.yfinance_client.get_quality_metrics``. None = quality filter
+    disattivo. Caveat look-ahead: yfinance info è snapshot oggi → backtest
+    soggetto a look-ahead bias. Documentato in
+    docs/ABLATION_B4_QUALITY.md."""
+
+    quality_filter_pct: float | None = None
+    """Percentile threshold per quality filter cross-sectional. None = off,
+    67 = top tercile (T67+), 50 = top half, 80 = top quintile.
+    Applicato PRIMA dello score momentum: ticker sotto il percentile sono
+    skippati indipendentemente dal momentum score. Richiede ``quality_scores``
+    fornito."""
+
 
 # ---------------------------------------------------------------------------
 # Core simulation loop
@@ -226,6 +241,22 @@ def simulate_portfolio(
         if universe_provider is not None:
             eligible_set = set(universe_provider(today))
 
+        # Quality gate (Fase B.4 SIGNAL_ROADMAP): cross-sectional top tercile
+        # filter via quality_scores precomputed. Caveat look-ahead documentato
+        # in docs/ABLATION_B4_QUALITY.md (yfinance info snapshot only).
+        quality_pass_set: set[str] | None = None
+        if (
+            config.quality_filter_pct is not None
+            and config.quality_scores is not None
+            and len(config.quality_scores) >= 2
+        ):
+            from propicks.domain.quality import is_above_quality_tercile
+            mask = is_above_quality_tercile(
+                config.quality_scores,
+                percentile=config.quality_filter_pct,
+            )
+            quality_pass_set = {t for t, ok in mask.items() if ok}
+
         # Score tutti i candidate (gate + scoring, no threshold filter qui)
         scored: dict[str, float] = {}
         for ticker, df in universe.items():
@@ -233,6 +264,9 @@ def simulate_portfolio(
                 continue  # già aperto, skip
             # Membership gate point-in-time
             if eligible_set is not None and ticker not in eligible_set:
+                continue
+            # Quality gate (Fase B.4)
+            if quality_pass_set is not None and ticker not in quality_pass_set:
                 continue
             # Earnings gate (Phase 8)
             if (

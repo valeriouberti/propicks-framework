@@ -230,7 +230,14 @@ CREATE TABLE IF NOT EXISTS market_ticker_meta (
   earnings_growth_consensus REAL,        -- forward y/y growth (current snapshot)
   earnings_net_revisions_30d INTEGER,    -- upLast30 − downLast30 (current)
   earnings_n_analysts INTEGER,           -- # analyst covering
-  earnings_revision_fetched_at TIMESTAMP
+  earnings_revision_fetched_at TIMESTAMP,
+  -- Fase B.4 SIGNAL_ROADMAP: quality metrics (Asness QMJ). TTL 90gg
+  -- (fundamentals slow-moving). Source: yfinance ``info`` snapshot.
+  quality_roa REAL,                     -- returnOnAssets (frazione)
+  quality_gross_margin REAL,             -- grossMargins (frazione)
+  quality_debt_equity REAL,              -- debtToEquity (yfinance: %)
+  quality_score REAL,                    -- composite [0,100] pre-computed
+  quality_fetched_at TIMESTAMP
 );
 -- NB: idx_meta_next_earnings viene creato in ``db._apply_migrations`` dopo che
 -- la colonna ``next_earnings_date`` esiste anche sui DB esistenti pre-Phase 8.
