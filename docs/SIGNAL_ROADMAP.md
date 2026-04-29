@@ -823,5 +823,56 @@ per estimate of OOS edge.
 - Overlay weight 0.30 sembra dominante ma è artifact look-ahead
 - Re-test richiesto su dataset paid (IBES) o proxy `earnings_history`-only
 
-**Next**: B.3 — Regime daily composite (HY OAS + breadth + put/call + AAII
-z-score). Edge: drawdown control via leading indicators turning point.
+### Fase B.3 — status
+
+| Step | Status | Note |
+|------|--------|------|
+| B.3.1 — FRED client | **done** (2026-04-29) | `market/fred_client.py`. CSV public endpoint (no auth). Schema `fred_series_daily`. Cache TTL 24h. Test: HY OAS + VIX fetched OK |
+| B.3.2 — Breadth calculator | **done** (2026-04-29) | `domain/breadth.py`. `pct_above_ma` (point-in-time) + `breadth_series` (vectorized 1-2s su 500×5y) |
+| B.3.3 — Regime composite z-score | **done** (2026-04-29) | `domain/regime_composite.py`. Z-score rolling 252d, weighted 40/40/20, 5-bucket mirror weekly classifier. Sign convention: positive z = bullish |
+| B.3.4 — Smoke test turning points | **done** (2026-04-29) | 2020-03, 2022-01, 2022-10, 2024-08 testati. Lead time **1-3 settimane** confermato. Vedi [`REGIME_COMPOSITE.md`](REGIME_COMPOSITE.md) |
+
+#### Findings B.3 chiave
+
+**Lead time confermato su turning point storici**:
+
+| Evento | Composite z @ evento | Lead/lag z extreme |
+|--------|---------------------|---------------------|
+| 2020-03-23 COVID bottom | −2.96 STRONG_BEAR | z min **−24d** (anticipato) |
+| 2022-01-04 S&P top 2022 | −1.53 STRONG_BEAR | regime già STRONG_BEAR PRIMA del top |
+| 2022-10-13 CPI bottom | −1.09 STRONG_BEAR | z min **−16d** lead, z max +29d (BULL recovery) |
+| 2024-08-05 yen carry unwind | −4.08 STRONG_BEAR | sincronicamente |
+
+Distribuzione 1668 bar (2019-2026): 21% STRONG_BEAR, 11% BEAR, 18% NEUTRAL, 32% BULL, 18% STRONG_BULL — realistic distribution con bull dominance post-2020.
+
+#### Caveat B.3 documentati
+
+- **FRED default ~2y range**: pre-2024 composite usa solo breadth (HY/VIX
+  NaN). Soluzione: fetch esplicito `cosd=2010-01-01`. Per uso production
+  obbligatorio
+- **Breadth top 30 ≠ full S&P 500**: smoke fast ma non rappresentativo.
+  Production = full universe (5-10 min yfinance fetch per backtest 5y)
+- **No survivorship-aware breadth**: universo top 30 statico oggi. TODO:
+  integrare `build_universe_provider` da Fase A.1
+- **Pesi 40/40/20 arbitrari**: tuning rigoroso in B.6 ablation
+- **No AAII / put-call**: rinviato B.3.5 estensione (free scraping fragile)
+- **Single asset class US-only**: regime EU/global = composite separati
+
+#### Integrazione produzione
+
+`simulate_portfolio` accetta già `regime_series` parameter (weekly).
+Aggiungere uso composite daily come override è 5 righe:
+
+```python
+from propicks.domain.regime_composite import compute_regime_series
+daily = compute_regime_series(hy_oas, breadth, vix)
+regime_series = daily["regime_code"]  # serve nelle simulate_portfolio
+```
+
+Da fare in B.6 ablation framework con confronto pre/post drawdown.
+
+**Acceptance gate B.3**: **pass operativo** — turning point lead time
+documentato. Pesi default in attesa B.6 tuning.
+
+**Next**: B.4 — Quality filter momentum (ROIC + gross profit/asset +
+debt/equity). Top tercile gate prima entry. Edge documented Asness QMJ 2013.

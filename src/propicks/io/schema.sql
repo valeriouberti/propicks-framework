@@ -252,6 +252,20 @@ CREATE TABLE IF NOT EXISTS index_constituents (
 CREATE INDEX IF NOT EXISTS idx_constituents_index ON index_constituents(index_name);
 
 
+-- FRED series daily cache (Fase B.3 SIGNAL_ROADMAP) — macro indicators
+-- (HY OAS, VIX, yield curve). Source: fred.stlouisfed.org/graph/fredgraph.csv
+-- (CSV public endpoint, no auth). PK (series_id, date) per supportare
+-- multipli serie nello stesso DB.
+CREATE TABLE IF NOT EXISTS fred_series_daily (
+  series_id TEXT NOT NULL,           -- es. 'BAMLH0A0HYM2', 'VIXCLS', 'T10Y2Y'
+  date DATE NOT NULL,
+  value REAL,                         -- può essere NULL (festivi/dati mancanti)
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (series_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_fred_series ON fred_series_daily(series_id);
+
+
 -- Index membership history (Fase A.1 SIGNAL_ROADMAP) — snapshot point-in-time
 -- dei membri di un indice. Risolve il survivorship bias: con questi dati il
 -- backtest può chiedere "chi era nel S&P 500 il 2015-03-31?" invece di usare
