@@ -215,6 +215,45 @@ def classify(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Earnings revision overlay (Fase B.2 SIGNAL_ROADMAP)
+# ---------------------------------------------------------------------------
+def combine_with_earnings_revision(
+    base_score: float,
+    earnings_score: float | None,
+    *,
+    weight: float = 0.20,
+) -> float:
+    """Combina composite score classic con earnings revision score.
+
+    Pattern overlay non-breaking: il classic composite (6 sub-score) resta
+    invariato in produzione (Pine sync, signal validation). Questo overlay
+    è puro additivo, attivabile via flag config / CLI flag.
+
+    Formula:
+        if earnings_score is None: return base_score (no signal — neutral)
+        else: return base_score * (1 - weight) + earnings_score * weight
+
+    Args:
+        base_score: composite score classico [0, 100].
+        earnings_score: score earnings revision [0, 100], None se feature
+            non disponibile per ticker (es. ETF, IPO recente).
+        weight: peso earnings overlay. Default 0.20 = 20% earnings + 80%
+            classic. Range [0, 1]. SIGNAL_ROADMAP B.2 raccomanda 0.15-0.20.
+
+    Returns:
+        Composite combined [0, 100].
+    """
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError(f"weight {weight} must be in [0, 1]")
+    if earnings_score is None:
+        return base_score
+    if not (0.0 <= earnings_score <= 100.0):
+        # Out-of-range → no contribution (defensive)
+        return base_score
+    return base_score * (1.0 - weight) + earnings_score * weight
+
+
+# ---------------------------------------------------------------------------
 # Cross-sectional ranking (Fase B.1 SIGNAL_ROADMAP)
 # ---------------------------------------------------------------------------
 def rank_universe(scores: dict[str, float]) -> dict[str, float]:

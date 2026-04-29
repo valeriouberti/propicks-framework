@@ -435,6 +435,147 @@ def get_next_earnings_date(ticker: str, *, force_refresh: bool = False) -> str |
     return earnings_iso
 
 
+def get_earnings_revision_metrics(
+    ticker: str,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    """Fetch + cache earnings revision/surprise metrics (Fase B.2 SIGNAL_ROADMAP).
+
+    Combina 3 source yfinance:
+    - ``earnings_history`` → avg_surprise_4q + surprise_trend (storiche)
+    - ``earnings_estimate`` → growth_consensus + n_analysts (current)
+    - ``eps_revisions`` → net_revisions_30d (current)
+
+    Cache TTL 7gg (revisioni cambiano lente, surprise solo dopo earnings call).
+
+    Args:
+        ticker: simbolo yfinance (case-insensitive).
+        force_refresh: bypass cache.
+
+    Returns:
+        Dict con keys ``avg_surprise_4q``, ``surprise_trend``,
+        ``growth_consensus``, ``net_revisions_30d``, ``n_analysts``,
+        ``fetched_at``. Ogni valore può essere ``None`` se yfinance non lo
+        espone per il ticker (ETF, IPO recente, micro-cap).
+    """
+    from propicks.io.db import (
+        market_earnings_revision_read,
+        market_earnings_revision_upsert,
+    )
+    from propicks.domain.earnings_revision import compute_features_from_history
+
+    ticker = ticker.upper()
+    # TTL 7gg = 168h. Riusa MARKET_CACHE_TTL_META_HOURS (config) se diverso.
+    ttl_hours = 24 * 7
+
+    if not force_refresh:
+        cached = market_earnings_revision_read(ticker, ttl_hours)
+        if cached is not None:
+            return cached
+
+    # Cache miss / forced — fetch yfinance
+    import yfinance as yf
+    yt = yf.Ticker(ticker)
+
+    avg_surprise_4q: float | None = None
+    surprise_trend: float | None = None
+    growth_consensus: float | None = None
+    net_revisions_30d: int | None = None
+    n_analysts: int | None = None
+
+    # 1. earnings_history → surprise track record
+    try:
+        eh = yt.earnings_history
+        if eh is not None and len(eh) > 0 and "surprisePercent" in eh.columns:
+            # Index ordinato cronologicamente (oldest first per yfinance default)
+            surprises_pct = [
+                float(s) * 100 if isinstance(s, (int, float)) and abs(s) < 1.0
+                else float(s) if isinstance(s, (int, float)) else None
+                for s in eh["surprisePercent"].tolist()
+            ]
+            avg_surprise_4q, surprise_trend = compute_features_from_history(surprises_pct)
+    except Exception as exc:
+        _log.debug(
+            "earnings_history fetch failed",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
+
+    # 2. earnings_estimate → growth + n_analysts (next quarter ('+1q'))
+    # NB: yfinance ritorna numpy types (int64/float64) che non passano
+    # isinstance(int, float) — usiamo conversione esplicita try/except.
+    try:
+        ee = yt.earnings_estimate
+        if ee is not None and len(ee) > 0:
+            row = None
+            if "+1q" in ee.index:
+                row = ee.loc["+1q"]
+            elif "0q" in ee.index:
+                row = ee.loc["0q"]
+            else:
+                row = ee.iloc[0]
+            if row is not None:
+                try:
+                    g = float(row.get("growth"))
+                    if g == g:  # not NaN
+                        growth_consensus = g
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    na = int(row.get("numberOfAnalysts"))
+                    if na > 0:
+                        n_analysts = na
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:
+        _log.debug(
+            "earnings_estimate fetch failed",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
+
+    # 3. eps_revisions → net revisions 30d (next quarter)
+    try:
+        er = yt.eps_revisions
+        if er is not None and len(er) > 0:
+            row = None
+            if "+1q" in er.index:
+                row = er.loc["+1q"]
+            elif "0q" in er.index:
+                row = er.loc["0q"]
+            else:
+                row = er.iloc[0]
+            if row is not None:
+                try:
+                    up = int(row.get("upLast30days") or 0)
+                    dn = int(row.get("downLast30days") or 0)
+                    net_revisions_30d = up - dn
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:
+        _log.debug(
+            "eps_revisions fetch failed",
+            extra={"ctx": {"ticker": ticker, "error": str(exc)}},
+        )
+
+    # Persist
+    market_earnings_revision_upsert(
+        ticker,
+        avg_surprise_4q=avg_surprise_4q,
+        surprise_trend=surprise_trend,
+        growth_consensus=growth_consensus,
+        net_revisions_30d=net_revisions_30d,
+        n_analysts=n_analysts,
+    )
+
+    return {
+        "avg_surprise_4q": avg_surprise_4q,
+        "surprise_trend": surprise_trend,
+        "growth_consensus": growth_consensus,
+        "net_revisions_30d": net_revisions_30d,
+        "n_analysts": n_analysts,
+    }
+
+
 def get_ticker_beta(ticker: str) -> float | None:
     """Beta vs mercato (SPX) — cache-aware (TTL 7gg).
 

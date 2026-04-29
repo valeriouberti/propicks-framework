@@ -432,6 +432,39 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
                 conn.execute(ddl)
             except (sqlite3.OperationalError, ValueError):
                 pass
+
+    # Fase B.2 SIGNAL_ROADMAP: earnings revision/surprise metrics
+    for column, ddl in (
+        (
+            "earnings_avg_surprise_4q",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_avg_surprise_4q REAL",
+        ),
+        (
+            "earnings_surprise_trend",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_surprise_trend REAL",
+        ),
+        (
+            "earnings_growth_consensus",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_growth_consensus REAL",
+        ),
+        (
+            "earnings_net_revisions_30d",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_net_revisions_30d INTEGER",
+        ),
+        (
+            "earnings_n_analysts",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_n_analysts INTEGER",
+        ),
+        (
+            "earnings_revision_fetched_at",
+            "ALTER TABLE market_ticker_meta ADD COLUMN earnings_revision_fetched_at TIMESTAMP",
+        ),
+    ):
+        if not _column_exists(conn, "market_ticker_meta", column):
+            try:
+                conn.execute(ddl)
+            except (sqlite3.OperationalError, ValueError):
+                pass
     try:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_meta_next_earnings "
@@ -842,6 +875,72 @@ def market_meta_upsert(
                    name = COALESCE(excluded.name, name),
                    fetched_at = CURRENT_TIMESTAMP""",
             (ticker.upper(), sector, beta, name),
+        )
+
+
+def market_earnings_revision_read(
+    ticker: str,
+    ttl_hours: float,
+    *,
+    path: str | None = None,
+) -> dict | None:
+    """Ritorna dict earnings revision metrics se cache fresh. Else None.
+
+    Fields: avg_surprise_4q, surprise_trend, growth_consensus,
+    net_revisions_30d, n_analysts, fetched_at. Tutti None-safe.
+    """
+    conn = _connect_for_table("market_ticker_meta", path)
+    try:
+        row = conn.execute(
+            """SELECT earnings_avg_surprise_4q AS avg_surprise_4q,
+                      earnings_surprise_trend AS surprise_trend,
+                      earnings_growth_consensus AS growth_consensus,
+                      earnings_net_revisions_30d AS net_revisions_30d,
+                      earnings_n_analysts AS n_analysts,
+                      earnings_revision_fetched_at AS fetched_at
+               FROM market_ticker_meta
+               WHERE ticker = ?
+                 AND earnings_revision_fetched_at IS NOT NULL
+                 AND earnings_revision_fetched_at >= datetime('now', ?)""",
+            (ticker.upper(), f"-{ttl_hours} hours"),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def market_earnings_revision_upsert(
+    ticker: str,
+    *,
+    avg_surprise_4q: float | None = None,
+    surprise_trend: float | None = None,
+    growth_consensus: float | None = None,
+    net_revisions_30d: int | None = None,
+    n_analysts: int | None = None,
+    path: str | None = None,
+) -> None:
+    """UPSERT earnings revision metrics. Tutti None preservano valore esistente."""
+    with _transaction_for_table("market_ticker_meta", path) as conn:
+        # Garantisce che la row esista prima dell'UPDATE COALESCE
+        conn.execute(
+            "INSERT OR IGNORE INTO market_ticker_meta (ticker, fetched_at) "
+            "VALUES (?, CURRENT_TIMESTAMP)",
+            (ticker.upper(),),
+        )
+        conn.execute(
+            """UPDATE market_ticker_meta SET
+                  earnings_avg_surprise_4q = COALESCE(?, earnings_avg_surprise_4q),
+                  earnings_surprise_trend = COALESCE(?, earnings_surprise_trend),
+                  earnings_growth_consensus = COALESCE(?, earnings_growth_consensus),
+                  earnings_net_revisions_30d = COALESCE(?, earnings_net_revisions_30d),
+                  earnings_n_analysts = COALESCE(?, earnings_n_analysts),
+                  earnings_revision_fetched_at = CURRENT_TIMESTAMP
+               WHERE ticker = ?""",
+            (
+                avg_surprise_4q, surprise_trend, growth_consensus,
+                net_revisions_30d, n_analysts,
+                ticker.upper(),
+            ),
         )
 
 

@@ -221,7 +221,16 @@ CREATE TABLE IF NOT EXISTS market_ticker_meta (
   fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   -- Phase 8: earnings date cache (TTL separato, refresh settimanale)
   next_earnings_date DATE,
-  earnings_fetched_at TIMESTAMP
+  earnings_fetched_at TIMESTAMP,
+  -- Fase B.2 SIGNAL_ROADMAP: earnings revision/surprise metrics. TTL 7gg
+  -- (revisioni cambiano lente, surprise solo post-earnings call).
+  -- Source: yfinance (earnings_history + earnings_estimate + eps_revisions)
+  earnings_avg_surprise_4q REAL,        -- mean surprise % ultimi 4 quarter
+  earnings_surprise_trend REAL,          -- surprise[-1] − mean(surprise[-4:-1])
+  earnings_growth_consensus REAL,        -- forward y/y growth (current snapshot)
+  earnings_net_revisions_30d INTEGER,    -- upLast30 − downLast30 (current)
+  earnings_n_analysts INTEGER,           -- # analyst covering
+  earnings_revision_fetched_at TIMESTAMP
 );
 -- NB: idx_meta_next_earnings viene creato in ``db._apply_migrations`` dopo che
 -- la colonna ``next_earnings_date`` esiste anche sui DB esistenti pre-Phase 8.
