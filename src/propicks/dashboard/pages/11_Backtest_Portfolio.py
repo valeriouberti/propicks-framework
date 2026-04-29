@@ -238,8 +238,8 @@ if oos_split > 0:
         },
         {
             "Metric": "N trades",
-            "Train": wf.train_metrics.get("n_trades", 0),
-            "Test": wf.test_metrics.get("n_trades", 0),
+            "Train": f"{wf.train_metrics.get('n_trades', 0)}",
+            "Test": f"{wf.test_metrics.get('n_trades', 0)}",
         },
     ]
     st.dataframe(compare_rows, width="stretch", hide_index=True)
