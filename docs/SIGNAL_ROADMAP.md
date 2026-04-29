@@ -776,5 +776,52 @@ Cross-sectional P90 produce +0.50 Sharpe vs baseline. Largamente sopra
 threshold "+0.10 cumulativo" SIGNAL_ROADMAP §5 B.6. **Candidate per
 default in produzione** dopo Fase B completa + ablation cumulativo.
 
-**Next**: B.2 — Earnings revision momentum (eps_estimate trend 30d/90d
-come 7° sub-score). Edge documentato Chan-Jegadeesh-Lakonishok 1996.
+### Fase B.2 — status
+
+| Step | Status | Note |
+|------|--------|------|
+| B.2.1 — Verify yfinance API | **done** (2026-04-29) | yfinance 1.2.2: `earnings_history` (storico 4q surprise — usable backtest), `earnings_estimate` (snapshot consensus + growth + n_analysts), `eps_revisions` (snapshot up/down 7d/30d). Trend EPS storico NON disponibile |
+| B.2.2 — `domain/earnings_revision.py` pure scoring | **done** (2026-04-29) | `score_earnings_revision`, `score_earnings_history_only` (backtest-safe), `has_falling_knife_signal`, `compute_features_from_history` |
+| B.2.3 — Fetcher + cache | **done** (2026-04-29) | `get_earnings_revision_metrics` in `market/yfinance_client.py`. Schema migration: 6 colonne nuove `market_ticker_meta`. UPSERT helper in `db.py`. TTL 7gg |
+| B.2.4 — Integration scoring | **done** (2026-04-29) | `combine_with_earnings_revision(base, earn, weight)` overlay non-breaking. Pure function. Backward compat preservata (default config non cambiato) |
+| B.2.5 — Smoke ablation | **done** (2026-04-29) | SP500 top 30 5y + cross-sectional. **CAVEAT LOOK-AHEAD**: earnings_score snapshot oggi include surprise di 2024-2026, backtest 2021-2026 sovrappone. Numeri inflated. Vedi [`ABLATION_B2_EARNINGS_REVISION.md`](ABLATION_B2_EARNINGS_REVISION.md) |
+
+#### Findings B.2 + warning critico
+
+**Numeri (inflated da look-ahead)**:
+
+| Config | Sharpe ann | Δ vs baseline |
+|--------|-----------|---------------|
+| Baseline (XS, no overlay) | 0.319 | — |
+| + overlay 0.15 | 0.602 | +0.28 |
+| + overlay 0.30 | **0.776** | **+0.46** |
+
+**⚠ Look-ahead bias documentato**:
+
+- `earnings_score` = snapshot oggi (include surprise 2024-2026)
+- Backtest 2021-2026 sovrappone temporalmente
+- Trade aperti 2021-2024 vengono filtrati da info che non avresti avuto allora
+- Numeri sopra non interpretabili come edge OOS reale
+
+**Conclusione**:
+
+- Feature **utile in live signal mode** (snapshot davvero current = real-time)
+- ❌ NON adottare overlay default basandosi su backtest
+- → Disponibile come **opzionale via flag CLI**, validate live N mesi
+- → Re-validation con dataset point-in-time pendente (richiede IBES paid o
+  costruzione proxy storico via `earnings_history` sliding window)
+
+**Acceptance gate B.2**: **conditional pass — feature live-only**. Numeri
+backtest validi per *ranking ticker oggi* (signal output current), non
+per estimate of OOS edge.
+
+#### Caveat B.2 documentati
+
+- yfinance no point-in-time revisions/estimates → impossibile alpha test
+  proper Chan-Jegadeesh-Lakonishok dinamico
+- B.2 effectively diventa "ticker quality prior" not "alpha-generating signal"
+- Overlay weight 0.30 sembra dominante ma è artifact look-ahead
+- Re-test richiesto su dataset paid (IBES) o proxy `earnings_history`-only
+
+**Next**: B.3 — Regime daily composite (HY OAS + breadth + put/call + AAII
+z-score). Edge: drawdown control via leading indicators turning point.
