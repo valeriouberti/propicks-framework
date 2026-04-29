@@ -151,7 +151,7 @@ with tab_discovery:
             "Valida top con Claude", value=False, key="d_validate"
         )
         force_ai_d = col_g.checkbox(
-            "Force (bypassa gate)", value=False, key="d_force"
+            "Force (bypassa gate + cache)", value=False, key="d_force"
         )
         refresh_in = col_h.checkbox(
             "Refresh universe (bypass cache 7gg)",
