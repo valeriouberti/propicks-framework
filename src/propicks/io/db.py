@@ -63,6 +63,84 @@ import threading as _threading
 _LIBSQL_POOL: dict[str, object] = {}
 _LIBSQL_POOL_LOCK = _threading.Lock()
 
+# Tabelle che NON vanno replicate su Turso: dati di cache regenerabili.
+# In modalità Turso le redirigamo a un file SQLite locale separato per
+# evitare il network round-trip ~300ms per write (bottleneck su discovery
+# pipelines di 100+ ticker).
+_LOCAL_CACHE_TABLES = frozenset({
+    "market_ohlcv_daily",
+    "market_ohlcv_weekly",
+    "market_ticker_meta",
+    "index_constituents",
+})
+
+
+def _local_cache_path() -> str:
+    """Path SQLite locale per le tabelle di cache regenerabili. Sibling
+    del DB principale con suffisso ``.cache``. In modalità non-Turso
+    coincide con il DB principale (single file)."""
+    return _get_db_path() + ".cache"
+
+
+_LOCAL_CACHE_SCHEMA_APPLIED: set[str] = set()
+
+
+def _connect_local_cache() -> sqlite3.Connection:
+    """Apre connessione SQLite stdlib al file di cache locale (per tabelle
+    in ``_LOCAL_CACHE_TABLES``). Bypassa libsql replica → write veloci.
+
+    Schema condiviso con il DB principale (riusa schema.sql, le tabelle
+    non-cache sono no-op CREATE IF NOT EXISTS extra ma idempotenti).
+    """
+    cache_path = _local_cache_path()
+    cache_dir = os.path.dirname(cache_path)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+    conn = sqlite3.connect(cache_path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    if cache_path not in _LOCAL_CACHE_SCHEMA_APPLIED:
+        conn.executescript(_load_schema_sql())
+        conn.commit()
+        _LOCAL_CACHE_SCHEMA_APPLIED.add(cache_path)
+    return conn
+
+
+def _connect_for_table(table: str, path: str | None = None) -> sqlite3.Connection:
+    """Dispatcher: tabelle cache → SQLite locale, altre → connect() standard.
+
+    In Turso il routing evita network round-trip per cache. In test
+    (path override) bypassa il routing — usa il path esplicito per
+    preservare isolation.
+    """
+    if path is None and _is_turso_enabled() and table in _LOCAL_CACHE_TABLES:
+        return _connect_local_cache()
+    return connect(path)
+
+
+@contextmanager
+def _transaction_for_table(table: str, path: str | None = None):
+    """Transaction context routato per tabella. Mirror di ``transaction()``
+    ma sceglie SQLite locale per le tabelle cache in modalità Turso.
+    """
+    if path is None and _is_turso_enabled() and table in _LOCAL_CACHE_TABLES:
+        # Local SQLite — niente lock globale necessario (file separato dal pool)
+        conn = _connect_local_cache()
+        try:
+            conn.execute("BEGIN")
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+    else:
+        with transaction(path) as conn:
+            yield conn
+
 
 def _get_db_path() -> str:
     """Re-reads ``config.DB_FILE`` at each call — permette monkeypatch nei test."""
@@ -323,7 +401,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         if not _column_exists(conn, "alerts", column):
             try:
                 conn.execute(ddl)
-            except sqlite3.OperationalError:
+            except (sqlite3.OperationalError, ValueError):
                 # Tabella alerts non esiste ancora (edge case, race con CREATE).
                 # Safe ignore: CREATE TABLE IF NOT EXISTS in schema.sql la creerà.
                 pass
@@ -335,7 +413,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_alerts_undelivered "
             "ON alerts(delivered, created_at)"
         )
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, ValueError):
         pass
 
     # Phase 8: earnings date columns su market_ticker_meta
@@ -352,14 +430,14 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         if not _column_exists(conn, "market_ticker_meta", column):
             try:
                 conn.execute(ddl)
-            except sqlite3.OperationalError:
+            except (sqlite3.OperationalError, ValueError):
                 pass
     try:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_meta_next_earnings "
             "ON market_ticker_meta(next_earnings_date)"
         )
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, ValueError):
         pass
 
 
@@ -368,10 +446,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     Ordine: CREATE TABLE IF NOT EXISTS (nuove tabelle) → ALTER TABLE per
     colonne aggiunte (migrations). Entrambi idempotenti.
+
+    In modalità Turso, lo schema remoto è source of truth: `executescript`
+    è no-op (CREATE IF NOT EXISTS) e `_apply_migrations` viene skippato per
+    evitare ALTER TABLE su colonne già presenti — la sync pulla lo schema
+    completo dal remote. Le migration sono pensate per upgrade in-place di
+    DB SQLite locali pre-esistenti.
     """
     conn.executescript(_load_schema_sql())
-    _apply_migrations(conn)
     conn.commit()
+    if not _is_turso_enabled():
+        _apply_migrations(conn)
+        conn.commit()
 
 
 def init_schema(path: str | None = None) -> None:
@@ -559,7 +645,7 @@ def market_ohlcv_is_fresh(
     assert interval in ("daily", "weekly"), f"interval invalido: {interval}"
     table = f"market_ohlcv_{interval}"
 
-    conn = connect(path)
+    conn = _connect_for_table(table, path)
     try:
         row = conn.execute(
             f"""SELECT COUNT(*) AS n FROM {table}
@@ -588,7 +674,7 @@ def market_ohlcv_read(
     table = f"market_ohlcv_{interval}"
     date_col = "date" if interval == "daily" else "week_start"
 
-    conn = connect(path)
+    conn = _connect_for_table(table, path)
     try:
         rows = conn.execute(
             f"""SELECT ticker, {date_col} AS date,
@@ -626,7 +712,7 @@ def market_ohlcv_upsert(
     date_col = "date" if interval == "daily" else "week_start"
 
     n = 0
-    with transaction(path) as conn:
+    with _transaction_for_table(table, path) as conn:
         for bar in bars:
             conn.execute(
                 f"""INSERT INTO {table} (
@@ -674,7 +760,8 @@ def market_ohlcv_clear(
         else ("market_ohlcv_daily", "market_ohlcv_weekly")
     )
     total = 0
-    with transaction(path) as conn:
+    # Tutti i tables sono cache → routing identico (uso il primo come repr).
+    with _transaction_for_table(tables[0], path) as conn:
         for tbl in tables:
             clauses: list[str] = []
             params: list = []
@@ -692,7 +779,7 @@ def market_ohlcv_clear(
 
 def market_ohlcv_stats(*, path: str | None = None) -> dict:
     """Ritorna statistiche aggregate della cache OHLCV."""
-    conn = connect(path)
+    conn = _connect_for_table("market_ohlcv_daily", path)
     try:
         stats: dict = {}
         for interval in ("daily", "weekly"):
@@ -723,7 +810,7 @@ def market_meta_read(
     path: str | None = None,
 ) -> dict | None:
     """Ritorna dict con sector/beta/name se cache fresh, altrimenti None."""
-    conn = connect(path)
+    conn = _connect_for_table("market_ticker_meta", path)
     try:
         row = conn.execute(
             """SELECT sector, beta, name, fetched_at FROM market_ticker_meta
@@ -745,7 +832,7 @@ def market_meta_upsert(
     path: str | None = None,
 ) -> None:
     """UPSERT ticker meta. Campi None sono preservati se la riga esiste."""
-    with transaction(path) as conn:
+    with _transaction_for_table("market_ticker_meta", path) as conn:
         conn.execute(
             """INSERT INTO market_ticker_meta (ticker, sector, beta, name, fetched_at)
                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -765,7 +852,7 @@ def market_earnings_read(
     path: str | None = None,
 ) -> str | None:
     """Ritorna next_earnings_date ISO se in cache e non scaduto. Else None."""
-    conn = connect(path)
+    conn = _connect_for_table("market_ticker_meta", path)
     try:
         row = conn.execute(
             """SELECT next_earnings_date FROM market_ticker_meta
@@ -788,7 +875,7 @@ def market_earnings_upsert(
     path: str | None = None,
 ) -> None:
     """UPSERT earnings date. None valido = ticker senza earnings annunciato."""
-    with transaction(path) as conn:
+    with _transaction_for_table("market_ticker_meta", path) as conn:
         conn.execute(
             """INSERT INTO market_ticker_meta (
                     ticker, next_earnings_date, earnings_fetched_at, fetched_at
@@ -807,7 +894,7 @@ def index_constituents_is_fresh(
     path: str | None = None,
 ) -> bool:
     """True se la cache ha ALMENO UNA riga non stale per ``index_name``."""
-    conn = connect(path)
+    conn = _connect_for_table("index_constituents", path)
     try:
         row = conn.execute(
             """SELECT COUNT(*) AS n FROM index_constituents
@@ -826,7 +913,7 @@ def index_constituents_read(
     path: str | None = None,
 ) -> list[dict]:
     """Ritorna list di dict {ticker, company_name, sector, added_date, fetched_at}."""
-    conn = connect(path)
+    conn = _connect_for_table("index_constituents", path)
     try:
         rows = conn.execute(
             """SELECT ticker, company_name, sector, added_date, fetched_at
@@ -856,7 +943,7 @@ def index_constituents_replace(
     if not rows:
         return 0
     n = 0
-    with transaction(path) as conn:
+    with _transaction_for_table("index_constituents", path) as conn:
         conn.execute(
             "DELETE FROM index_constituents WHERE index_name = ?", (index_name,)
         )
@@ -881,7 +968,7 @@ def market_earnings_all_from_cache(*, path: str | None = None) -> dict[str, str 
     """Ritorna mappa {ticker: next_earnings_date} di TUTTE le righe in cache
     (anche stale). Usato per report / bulk check.
     """
-    conn = connect(path)
+    conn = _connect_for_table("market_ticker_meta", path)
     try:
         rows = conn.execute(
             """SELECT ticker, next_earnings_date FROM market_ticker_meta

@@ -40,3 +40,7 @@ data/
 # libsql embedded replica (creati a runtime quando TURSO_* env set)
 *.libsql
 *.libsql-*
+
+# Local OHLCV/meta/index_constituents cache (regenerabile, non sync su Turso)
+*.db.cache
+*.db.cache-*
