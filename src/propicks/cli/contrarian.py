@@ -11,6 +11,9 @@ Esempi:
     propicks-contra AAPL MSFT --brief
     propicks-contra --discover-sp500 --top 10
     propicks-contra --discover-sp500 --top 5 --validate --min-score 60
+    propicks-contra --discover-nasdaq --top 10
+    propicks-contra --discover-ftsemib
+    propicks-contra --discover-stoxx600 --top 15
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from propicks.domain.contrarian_scoring import analyze_contra_ticker
 from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
 from propicks.market.index_constituents import (
     INDEX_NAME_FTSEMIB,
+    INDEX_NAME_NASDAQ100,
     INDEX_NAME_SP500,
     INDEX_NAME_STOXX600,
     get_index_universe,
@@ -418,6 +422,14 @@ def main() -> int:
             "ampio, costo full scoring più alto)."
         ),
     )
+    discover_group.add_argument(
+        "--discover-nasdaq",
+        action="store_true",
+        help=(
+            "Discovery su Nasdaq-100 (~100 nomi US tech-heavy). Mean reversion "
+            "su quality tech che ha avuto pullback recente."
+        ),
+    )
     parser.add_argument(
         "--top",
         type=int,
@@ -471,12 +483,14 @@ def main() -> int:
         discover_index = INDEX_NAME_FTSEMIB
     elif args.discover_stoxx600:
         discover_index = INDEX_NAME_STOXX600
+    elif args.discover_nasdaq:
+        discover_index = INDEX_NAME_NASDAQ100
 
     # Validation: o ticker espliciti o discovery, ma non entrambi vuoti
     if not args.tickers and discover_index is None:
         parser.error(
             "Specifica almeno un ticker oppure usa "
-            "--discover-sp500 / --discover-ftsemib / --discover-stoxx600."
+            "--discover-sp500 / --discover-nasdaq / --discover-ftsemib / --discover-stoxx600."
         )
     if args.tickers and discover_index is not None:
         parser.error(

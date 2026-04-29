@@ -1,7 +1,7 @@
 """Momentum scanner — trend/quality stock screener.
 
 Equivalent UI di ``propicks-momentum [TICKER ...] [--validate]
-[--discover-sp500|--discover-ftsemib|--discover-stoxx600]``.
+[--discover-sp500|--discover-nasdaq|--discover-ftsemib|--discover-stoxx600]``.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "
 # ---------------------------------------------------------------------------
 INDEX_OPTIONS = {
     "S&P 500 (~500 nomi US)": "sp500",
+    "Nasdaq-100 (~100 nomi tech US)": "nasdaq100",
     "FTSE MIB (40 large-cap IT)": "ftsemib",
     "STOXX Europe 600 (~600 nomi)": "stoxx600",
 }

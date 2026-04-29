@@ -189,12 +189,14 @@ propicks-momentum AAPL --validate                 # gate score≥60 + regime≥N
 propicks-momentum AAPL --force-validate           # bypassa gate + cache
 propicks-momentum AAPL --json --brief --no-watchlist
 propicks-momentum --discover-sp500 [--top N] [--min-score 75]  # ~500 nomi US
+propicks-momentum --discover-nasdaq                             # ~100 nomi tech US
 propicks-momentum --discover-ftsemib                            # 40 large-cap IT
 propicks-momentum --discover-stoxx600                           # ~600 nomi EU
 
 # Contrarian (vedi docs/CONTRARIAN_STRATEGY.md)
 propicks-contra AAPL [--validate] [--json] [--brief] [--no-watchlist]
 propicks-contra --discover-sp500 [--top N] [--min-score 60]   # ~500 nomi US
+propicks-contra --discover-nasdaq                             # ~100 nomi tech US
 propicks-contra --discover-ftsemib                            # 40 large-cap IT
 propicks-contra --discover-stoxx600                           # ~600 nomi EU
 

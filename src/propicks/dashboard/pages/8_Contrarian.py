@@ -59,6 +59,7 @@ def cached_vix() -> float | None:
 # ---------------------------------------------------------------------------
 INDEX_OPTIONS = {
     "S&P 500 (~500 nomi US)": "sp500",
+    "Nasdaq-100 (~100 nomi tech US)": "nasdaq100",
     "FTSE MIB (40 large-cap IT)": "ftsemib",
     "STOXX Europe 600 (~600 nomi)": "stoxx600",
 }

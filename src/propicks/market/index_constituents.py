@@ -42,6 +42,8 @@ from propicks.config import (
     FTSEMIB_WIKIPEDIA_URL,
     INDEX_CONSTITUENTS_CACHE_TTL_HOURS,
     INDEX_MIN_CONSTITUENTS,
+    NASDAQ100_MIN_CONSTITUENTS,
+    NASDAQ100_WIKIPEDIA_URL,
     SP500_WIKIPEDIA_URL,
     STOXX600_MIN_CONSTITUENTS,
     STOXX600_WIKIPEDIA_URL,
@@ -58,8 +60,14 @@ _log = get_logger("market.index_constituents")
 INDEX_NAME_SP500 = "sp500"
 INDEX_NAME_FTSEMIB = "ftsemib"
 INDEX_NAME_STOXX600 = "stoxx600"
+INDEX_NAME_NASDAQ100 = "nasdaq100"
 
-SUPPORTED_INDEXES = (INDEX_NAME_SP500, INDEX_NAME_FTSEMIB, INDEX_NAME_STOXX600)
+SUPPORTED_INDEXES = (
+    INDEX_NAME_SP500,
+    INDEX_NAME_FTSEMIB,
+    INDEX_NAME_STOXX600,
+    INDEX_NAME_NASDAQ100,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +261,51 @@ STOXX600_FALLBACK: list[dict] = [
     {"ticker": "MBG.DE", "company_name": "Mercedes-Benz Group", "sector": "Consumer Cyclical"},
     {"ticker": "STLAM.MI", "company_name": "Stellantis", "sector": "Consumer Cyclical"},
     {"ticker": "RACE.MI", "company_name": "Ferrari N.V.", "sector": "Consumer Cyclical"},
+]
+
+
+# ---------------------------------------------------------------------------
+# Nasdaq-100 fallback — top 30 mega-cap tech (snapshot 2026)
+# ---------------------------------------------------------------------------
+# Coverage parziale ma sufficient come safety net. Nasdaq-100 ha ~100 nomi
+# tech-heavy, overlap forte con SP500_FALLBACK; qui evitiamo duplicazione
+# limitando ai mega-cap incontestati. Aggiornare ~annualmente.
+NASDAQ100_FALLBACK: list[dict] = [
+    {"ticker": "AAPL", "company_name": "Apple Inc.", "sector": "Technology"},
+    {"ticker": "MSFT", "company_name": "Microsoft Corp.", "sector": "Technology"},
+    {"ticker": "NVDA", "company_name": "NVIDIA Corp.", "sector": "Technology"},
+    {"ticker": "AMZN", "company_name": "Amazon.com Inc.", "sector": "Consumer Cyclical"},
+    {"ticker": "META", "company_name": "Meta Platforms", "sector": "Communication Services"},
+    {"ticker": "GOOGL", "company_name": "Alphabet Inc. Class A", "sector": "Communication Services"},
+    {"ticker": "GOOG", "company_name": "Alphabet Inc. Class C", "sector": "Communication Services"},
+    {"ticker": "TSLA", "company_name": "Tesla Inc.", "sector": "Consumer Cyclical"},
+    {"ticker": "AVGO", "company_name": "Broadcom Inc.", "sector": "Technology"},
+    {"ticker": "COST", "company_name": "Costco Wholesale", "sector": "Consumer Defensive"},
+    {"ticker": "NFLX", "company_name": "Netflix Inc.", "sector": "Communication Services"},
+    {"ticker": "ADBE", "company_name": "Adobe Inc.", "sector": "Technology"},
+    {"ticker": "AMD", "company_name": "Advanced Micro Devices", "sector": "Technology"},
+    {"ticker": "PEP", "company_name": "PepsiCo Inc.", "sector": "Consumer Defensive"},
+    {"ticker": "CSCO", "company_name": "Cisco Systems", "sector": "Technology"},
+    {"ticker": "TMUS", "company_name": "T-Mobile US", "sector": "Communication Services"},
+    {"ticker": "INTC", "company_name": "Intel Corp.", "sector": "Technology"},
+    {"ticker": "QCOM", "company_name": "Qualcomm Inc.", "sector": "Technology"},
+    {"ticker": "LIN", "company_name": "Linde plc", "sector": "Basic Materials"},
+    {"ticker": "AMAT", "company_name": "Applied Materials", "sector": "Technology"},
+    {"ticker": "TXN", "company_name": "Texas Instruments", "sector": "Technology"},
+    {"ticker": "AMGN", "company_name": "Amgen Inc.", "sector": "Healthcare"},
+    {"ticker": "INTU", "company_name": "Intuit Inc.", "sector": "Technology"},
+    {"ticker": "ISRG", "company_name": "Intuitive Surgical", "sector": "Healthcare"},
+    {"ticker": "BKNG", "company_name": "Booking Holdings", "sector": "Consumer Cyclical"},
+    {"ticker": "MU", "company_name": "Micron Technology", "sector": "Technology"},
+    {"ticker": "ADI", "company_name": "Analog Devices", "sector": "Technology"},
+    {"ticker": "LRCX", "company_name": "Lam Research", "sector": "Technology"},
+    {"ticker": "SBUX", "company_name": "Starbucks Corp.", "sector": "Consumer Cyclical"},
+    {"ticker": "MDLZ", "company_name": "Mondelez International", "sector": "Consumer Defensive"},
+    {"ticker": "GILD", "company_name": "Gilead Sciences", "sector": "Healthcare"},
+    {"ticker": "ADP", "company_name": "Automatic Data Processing", "sector": "Industrials"},
+    {"ticker": "PANW", "company_name": "Palo Alto Networks", "sector": "Technology"},
+    {"ticker": "REGN", "company_name": "Regeneron Pharmaceuticals", "sector": "Healthcare"},
+    {"ticker": "VRTX", "company_name": "Vertex Pharmaceuticals", "sector": "Healthcare"},
 ]
 
 
@@ -520,6 +573,78 @@ def _fetch_stoxx600_from_wikipedia() -> list[dict]:
     return rows
 
 
+def _fetch_nasdaq100_from_wikipedia() -> list[dict]:
+    """Fetch + parse della tabella Nasdaq-100 da Wikipedia.
+
+    La pagina ha una sezione "Components" con tabella ~100 righe. Le colonne
+    canoniche sono ``Ticker`` (o ``Symbol``) e ``Company`` + ``GICS Sector``.
+    Strategia: prima tabella con colonna Ticker/Symbol e ≥ min_constituents.
+    Ticker sono nativi yfinance (no suffix exchange), nessuna normalizzazione
+    speciale richiesta oltre strip/upper.
+    """
+    tables = _read_wikipedia_tables(NASDAQ100_WIKIPEDIA_URL)
+    if not tables:
+        raise ValueError("Wikipedia Nasdaq-100 returned no tables")
+
+    components_df: pd.DataFrame | None = None
+    for df in tables:
+        cols = {str(c) for c in df.columns}
+        has_ticker = any(c in cols for c in ("Ticker", "Symbol"))
+        if has_ticker and len(df) >= NASDAQ100_MIN_CONSTITUENTS:
+            components_df = df
+            break
+
+    if components_df is None:
+        raise ValueError(
+            "Wikipedia Nasdaq-100: no table found with Ticker/Symbol column "
+            f"and ≥ {NASDAQ100_MIN_CONSTITUENTS} rows"
+        )
+
+    ticker_col = next(
+        (c for c in ("Ticker", "Symbol") if c in components_df.columns), None
+    )
+    if ticker_col is None:
+        raise ValueError("Wikipedia Nasdaq-100: ticker column not identified")
+
+    name_col = next(
+        (c for c in ("Company", "Security", "Name") if c in components_df.columns), None
+    )
+    sector_col = next(
+        (c for c in ("GICS Sector", "Sector", "Industry") if c in components_df.columns),
+        None,
+    )
+
+    rows: list[dict] = []
+    for _, row in components_df.iterrows():
+        sym = row.get(ticker_col)
+        if not isinstance(sym, str) or not sym.strip():
+            continue
+        rows.append(
+            {
+                "ticker": _normalize_yf_ticker(sym),
+                "company_name": (
+                    row.get(name_col)
+                    if name_col and isinstance(row.get(name_col), str)
+                    else None
+                ),
+                "sector": (
+                    row.get(sector_col)
+                    if sector_col and isinstance(row.get(sector_col), str)
+                    else None
+                ),
+                "added_date": None,
+            }
+        )
+
+    if len(rows) < NASDAQ100_MIN_CONSTITUENTS:
+        raise ValueError(
+            f"Wikipedia Nasdaq-100 returned only {len(rows)} constituents "
+            f"(min expected: {NASDAQ100_MIN_CONSTITUENTS})"
+        )
+
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -544,6 +669,12 @@ _INDEX_REGISTRY: dict[str, dict] = {
         "fallback": STOXX600_FALLBACK,
         "min_constituents": STOXX600_MIN_CONSTITUENTS,
         "label": "STOXX Europe 600",
+    },
+    INDEX_NAME_NASDAQ100: {
+        "fetch_fn": lambda: _fetch_nasdaq100_from_wikipedia(),
+        "fallback": NASDAQ100_FALLBACK,
+        "min_constituents": NASDAQ100_MIN_CONSTITUENTS,
+        "label": "Nasdaq-100",
     },
 }
 
@@ -671,6 +802,16 @@ def get_stoxx600_universe(*, force_refresh: bool = False) -> list[str]:
 def get_stoxx600_universe_detailed(*, force_refresh: bool = False) -> list[dict]:
     """STOXX 600 con metadata."""
     return _get_universe_detailed(INDEX_NAME_STOXX600, force_refresh=force_refresh)
+
+
+def get_nasdaq100_universe(*, force_refresh: bool = False) -> list[str]:
+    """Nasdaq-100 ticker list (US tech-heavy, no exchange suffix)."""
+    return get_index_universe(INDEX_NAME_NASDAQ100, force_refresh=force_refresh)
+
+
+def get_nasdaq100_universe_detailed(*, force_refresh: bool = False) -> list[dict]:
+    """Nasdaq-100 con metadata."""
+    return _get_universe_detailed(INDEX_NAME_NASDAQ100, force_refresh=force_refresh)
 
 
 def index_label(name: str) -> str:

@@ -700,6 +700,7 @@ INDEX_CONSTITUENTS_CACHE_TTL_HOURS: float = 24.0 * 7
 INDEX_MIN_CONSTITUENTS: int = 480  # S&P 500 è 500 ± qualche split-letter
 FTSEMIB_MIN_CONSTITUENTS: int = 35  # FTSE MIB ha esattamente 40 nomi
 STOXX600_MIN_CONSTITUENTS: int = 500  # STOXX 600 può variare 595-605, Wikipedia talvolta espone tabelle parziali
+NASDAQ100_MIN_CONSTITUENTS: int = 95  # Nasdaq-100 ha ~100 nomi (talvolta 101-102 per share class)
 
 # Fonte Wikipedia per S&P 500. Tabella ID 0, colonna "Symbol". I ticker con
 # dot ("BRK.B") vanno normalizzati a dash ("BRK-B") per yfinance.
@@ -714,6 +715,13 @@ FTSEMIB_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/FTSE_MIB"
 # Universo eterogeneo: alcuni ticker hanno bassa liquidità o storia daily
 # corta — il prefilter contrarian li scarterà al EMA50 warmup.
 STOXX600_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/STOXX_Europe_600"
+
+# Nasdaq-100: ~100 large-cap US tech-heavy (no financials per index rule).
+# Overlap forte con S&P 500 ma concentrazione tech maggiore (AAPL/MSFT/NVDA
+# weighted top). Wikipedia tabella "Components" con colonna "Ticker" — ticker
+# nativi yfinance (no suffix). I dot-class come "BRK.B" non sono presenti nel
+# Nasdaq-100 (no berkshire), quindi normalize dot→dash è no-op qui.
+NASDAQ100_WIKIPEDIA_URL: str = "https://en.wikipedia.org/wiki/Nasdaq-100"
 
 
 # ---------------------------------------------------------------------------
