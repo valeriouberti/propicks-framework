@@ -46,6 +46,23 @@ _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 # un'init fresca, corretto.
 _SCHEMA_APPLIED_PATHS: set[str] = set()
 
+# Throttle libsql ``conn.sync()`` per replica: il pull da Turso remote ha
+# costo di rete (round-trip ~100-500ms vs nanosec dello SQLite stdlib).
+# Il design del codebase apre una connessione per call → senza throttle ogni
+# read della dashboard triggera un round-trip.
+# Strategia: sync una volta per processo (cold start) + ogni N secondi
+# (TTL configurabile via PROPICKS_LIBSQL_SYNC_INTERVAL_S, default 60s).
+# Single-user: writes locali sono già visibili in replica senza sync remoto.
+_LAST_SYNC_TS: dict[str, float] = {}
+
+# Pool connessioni libsql per processo. ``libsql.connect()`` ha handshake
+# ~1s + ``PRAGMA foreign_keys`` round-trip ~800ms. Riusare la stessa
+# connessione elimina entrambi gli overhead. Threading: dashboard Streamlit
+# è multi-thread ma single-user; lock per sicurezza, contention bassa.
+import threading as _threading
+_LIBSQL_POOL: dict[str, object] = {}
+_LIBSQL_POOL_LOCK = _threading.Lock()
+
 
 def _get_db_path() -> str:
     """Re-reads ``config.DB_FILE`` at each call — permette monkeypatch nei test."""
@@ -61,14 +78,146 @@ def _load_schema_sql() -> str:
     return _SCHEMA_CACHE
 
 
+def _is_turso_enabled() -> bool:
+    """True se le env vars Turso sono entrambe set.
+
+    Modalità libsql embedded replica: file locale + sync remoto. Stessa API di
+    sqlite3 (drop-in via ``libsql-experimental``). Senza env vars resta
+    sqlite3 puro — comportamento identico a prima per dev locale.
+    """
+    return bool(os.environ.get("TURSO_DATABASE_URL")) and bool(
+        os.environ.get("TURSO_AUTH_TOKEN")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Row/Cursor wrapper per libsql_experimental
+# ---------------------------------------------------------------------------
+# libsql_experimental.Cursor.fetchone() ritorna tuple — non ``sqlite3.Row``.
+# Il codebase fa accesso ``row["col"]`` ovunque, quindi quando si usa libsql
+# wrappiamo Connection/Cursor per emulare ``sqlite3.Row``. Sqlite3 path resta
+# nativo (zero overhead).
+class _LibsqlRow:
+    """Tuple + description → dict-like row (compatibile con sqlite3.Row).
+
+    Supporta: ``row["col"]``, ``row[0]``, ``dict(row)``, ``r is None``,
+    ``"col" in row`` non supportato (non usato dal codebase).
+    """
+    __slots__ = ("_data", "_keys")
+
+    def __init__(self, data: tuple, keys: list[str]) -> None:
+        self._data = data
+        self._keys = keys
+
+    def __getitem__(self, key):  # int o str
+        if isinstance(key, int):
+            return self._data[key]
+        try:
+            return self._data[self._keys.index(key)]
+        except ValueError as e:
+            raise KeyError(key) from e
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def keys(self) -> list[str]:
+        return list(self._keys)
+
+    def __repr__(self) -> str:
+        return f"_LibsqlRow({dict(zip(self._keys, self._data))})"
+
+
+class _LibsqlCursorWrap:
+    """Wrap libsql.Cursor: fetchone/fetchall/fetchmany ritornano _LibsqlRow."""
+    def __init__(self, cur) -> None:
+        self._cur = cur
+
+    def __getattr__(self, name):
+        # Forward attributi non override (rowcount, lastrowid, description, close, ecc.)
+        return getattr(self._cur, name)
+
+    def _keys(self) -> list[str]:
+        desc = self._cur.description
+        return [d[0] for d in desc] if desc else []
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        return _LibsqlRow(row, self._keys())
+
+    def fetchall(self):
+        rows = self._cur.fetchall()
+        if not rows:
+            return []
+        keys = self._keys()
+        return [_LibsqlRow(r, keys) for r in rows]
+
+    def fetchmany(self, size: int | None = None):
+        rows = self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+        if not rows:
+            return []
+        keys = self._keys()
+        return [_LibsqlRow(r, keys) for r in rows]
+
+    def __iter__(self):
+        keys = self._keys()
+        for row in self._cur:
+            yield _LibsqlRow(row, keys)
+
+
+class _LibsqlConnectionWrap:
+    """Wrap libsql.Connection: execute() → _LibsqlCursorWrap.
+
+    Espone ``row_factory`` come attributo no-op (settable) per compat con
+    codice che fa ``conn.row_factory = sqlite3.Row``. Sempre wrappiamo righe
+    indipendentemente dal valore.
+    """
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        self.row_factory = None  # no-op, sempre wrap
+
+    def __getattr__(self, name):
+        # Forward: commit, rollback, close, sync, in_transaction, autocommit, ecc.
+        return getattr(self._conn, name)
+
+    def execute(self, *args, **kwargs):
+        return _LibsqlCursorWrap(self._conn.execute(*args, **kwargs))
+
+    def executemany(self, *args, **kwargs):
+        return _LibsqlCursorWrap(self._conn.executemany(*args, **kwargs))
+
+    def executescript(self, *args, **kwargs):
+        return self._conn.executescript(*args, **kwargs)
+
+    def cursor(self):
+        return _LibsqlCursorWrap(self._conn.cursor())
+
+    def close(self) -> None:
+        # No-op: la connessione è poolata a livello di processo (vedi
+        # ``_LIBSQL_POOL``). Chiusura reale solo a process exit. Le call site
+        # del codebase fanno ``conn.close()`` dopo ogni op (pattern sqlite3
+        # stdlib); per libsql il close è troppo costoso (ricreare = 1.8s).
+        return None
+
+
 def connect(path: str | None = None) -> sqlite3.Connection:
     """Apre una connessione SQLite con settings standardizzati.
 
     - ``row_factory = sqlite3.Row`` → accesso per colonna via ``row["col"]``
     - ``PRAGMA foreign_keys = ON`` → integrity referenziale
-    - ``PRAGMA journal_mode = WAL`` → reader concorrenti durante write
+    - ``PRAGMA journal_mode = WAL`` → reader concorrenti durante write (solo locale)
     - Parse esplicito di timestamp via ``detect_types``
     - Schema inizializzato se DB nuovo
+
+    Driver selection (env-driven):
+    - ``TURSO_DATABASE_URL`` + ``TURSO_AUTH_TOKEN`` set → ``libsql-experimental``
+      embedded replica (file locale sincronizzato con Turso remote). Usato in
+      deploy Streamlit Cloud / dashboard online.
+    - Altrimenti → ``sqlite3`` stdlib (default per dev locale, CLI, tests).
 
     Args:
         path: override per test. Default: ``config.DB_FILE``.
@@ -78,18 +227,67 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    # Niente ``detect_types``: le colonne DATE / TIMESTAMP sono gestite come
-    # TEXT ISO-formatted lato applicativo. Evita fragilità di parsing quando
-    # il formato del timestamp non è il default atteso da sqlite3 (es.
-    # legacy ``YYYY-MM-DD HH:MM`` senza secondi).
-    conn = sqlite3.connect(
-        db_path,
-        isolation_level=None,  # autocommit off — noi gestiamo transazioni
-    )
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")  # trade-off perf/safety ragionevole
+    if _is_turso_enabled():
+        try:
+            import libsql_experimental as libsql  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "TURSO_DATABASE_URL set but libsql-experimental non installato. "
+                "Install: pip install -e '.[turso]'"
+            ) from e
+        # Replica path separato dal file SQLite stdlib: libsql usa formato
+        # WAL proprietario, in conflitto con eventuale file SQLite preesistente
+        # (errore ``wal_insert_begin failed``). Path canonico:
+        # ``<original>.libsql``. Permette anche di tenere lo SQLite locale
+        # come backup leggibile.
+        replica_path = db_path + ".libsql"
+
+        # Pool: una sola connessione per replica_path nel processo. Riusata
+        # da tutti i call siti (CLAUDE.md "connection per call" rilassato in
+        # modalità Turso per evitare ~1.8s overhead per call).
+        with _LIBSQL_POOL_LOCK:
+            cached = _LIBSQL_POOL.get(replica_path)
+            if cached is None:
+                raw_conn = libsql.connect(
+                    replica_path,
+                    sync_url=os.environ["TURSO_DATABASE_URL"],
+                    auth_token=os.environ["TURSO_AUTH_TOKEN"],
+                )
+                conn = _LibsqlConnectionWrap(raw_conn)
+                conn.execute("PRAGMA foreign_keys = ON")
+                _LIBSQL_POOL[replica_path] = conn
+            else:
+                conn = cached  # type: ignore[assignment]
+                raw_conn = conn._conn  # type: ignore[attr-defined]
+
+        # Sync throttle: cold start sync + refresh ogni N secondi.
+        # Default 60s — sufficiente per dashboard single-user. Force con
+        # ``PROPICKS_LIBSQL_SYNC_INTERVAL_S=0`` (sync ad ogni connect, lento).
+        import time as _time
+        sync_interval = float(os.environ.get("PROPICKS_LIBSQL_SYNC_INTERVAL_S", "60"))
+        now = _time.monotonic()
+        last = _LAST_SYNC_TS.get(replica_path, 0.0)
+        if now - last >= sync_interval:
+            try:
+                raw_conn.sync()
+            except Exception:
+                # Cold start con DB remoto vuoto: sync no-op accettabile.
+                pass
+            _LAST_SYNC_TS[replica_path] = now
+        # journal_mode WAL non applicabile in modalità replica (gestito server-side).
+    else:
+        # Niente ``detect_types``: le colonne DATE / TIMESTAMP sono gestite come
+        # TEXT ISO-formatted lato applicativo. Evita fragilità di parsing quando
+        # il formato del timestamp non è il default atteso da sqlite3 (es.
+        # legacy ``YYYY-MM-DD HH:MM`` senza secondi).
+        conn = sqlite3.connect(
+            db_path,
+            isolation_level=None,  # autocommit off — noi gestiamo transazioni
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")  # trade-off perf/safety ragionevole
 
     # Applica lo schema al primo connect per path in questo processo.
     # Idempotente (CREATE TABLE IF NOT EXISTS) ma evitiamo l'overhead ripetuto.
@@ -188,6 +386,9 @@ def init_schema(path: str | None = None) -> None:
         conn.close()
 
 
+_TRANSACTION_LOCK = _threading.Lock()
+
+
 @contextmanager
 def transaction(path: str | None = None):
     """Context manager per transazioni atomiche con commit/rollback automatici.
@@ -197,17 +398,28 @@ def transaction(path: str | None = None):
             conn.execute("INSERT INTO positions ...")
             conn.execute("UPDATE portfolio_meta SET value=? WHERE key='cash'", (100,))
         # commit automatico; su exception → rollback
+
+    In modalità Turso la connessione è poolata (singola per processo); il
+    lock ``_TRANSACTION_LOCK`` serializza i ``BEGIN/COMMIT`` per evitare
+    nesting illegale (BEGIN-on-BEGIN). Single-user, contention bassa.
     """
-    conn = connect(path)
+    pooled = _is_turso_enabled()
+    if pooled:
+        _TRANSACTION_LOCK.acquire()
     try:
-        conn.execute("BEGIN")
-        yield conn
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+        conn = connect(path)
+        try:
+            conn.execute("BEGIN")
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        if pooled:
+            _TRANSACTION_LOCK.release()
 
 
 # ---------------------------------------------------------------------------

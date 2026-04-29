@@ -10,6 +10,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+# Bridge st.secrets → env vars (precede ogni import propicks.*).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.backtest import backtest_ticker, compute_metrics
 from propicks.backtest.metrics import aggregate_metrics
 from propicks.dashboard._shared import (

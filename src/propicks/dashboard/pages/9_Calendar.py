@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+# Bridge st.secrets → env vars (precede import propicks.config).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.config import EARNINGS_HARD_GATE_DAYS
 from propicks.dashboard._shared import invariants_note, page_header
 

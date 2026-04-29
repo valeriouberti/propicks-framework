@@ -29,9 +29,14 @@ reports/*.md
 
 .env
 .env.local
+.streamlit/secrets.toml
 
 corp-ca-bundle.pem
 certs-corporate/
 
 
 data/
+
+# libsql embedded replica (creati a runtime quando TURSO_* env set)
+*.libsql
+*.libsql-*

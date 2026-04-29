@@ -12,6 +12,8 @@ from datetime import datetime
 
 import streamlit as st
 
+# Bridge st.secrets → env vars (precede import propicks.config).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.config import DATE_FMT, REPORTS_DIR
 from propicks.dashboard._shared import invariants_note, page_header
 from propicks.reports.attribution_report import weekly_attribution_report

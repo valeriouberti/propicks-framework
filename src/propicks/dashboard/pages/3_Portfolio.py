@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+# Bridge st.secrets → env vars (precede import propicks.config).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.config import MAX_LOSS_WEEKLY_PCT, MIN_CASH_RESERVE_PCT
 from propicks.dashboard._shared import (
     INDICATOR_HELP_PORTFOLIO,

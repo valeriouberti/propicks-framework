@@ -12,6 +12,11 @@ dallo store dopo la mutazione.
 
 from __future__ import annotations
 
+# Bridge ``st.secrets`` → env vars PRIMA di importare ``propicks.config``
+# (config legge env vars all'import). Ogni page importa _shared come primo
+# import propicks.* → garanzia ordine.
+from propicks.dashboard import _bootstrap  # noqa: F401
+
 import streamlit as st
 
 from propicks.config import (

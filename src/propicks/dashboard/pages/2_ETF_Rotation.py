@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+# Bridge st.secrets → env vars (deve precedere ogni import propicks.config / .io / .ai).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.config import get_etf_benchmark
 from propicks.dashboard._shared import (
     INDICATOR_HELP_ETF,

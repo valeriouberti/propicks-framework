@@ -6,6 +6,10 @@ Questa è la pagina di default (sidebar top entry).
 
 from __future__ import annotations
 
+# IMPORTANTE: bridge secrets → env PRIMA di qualsiasi import propicks.*
+# (config.py legge env vars all'import).
+from propicks.dashboard import _bootstrap  # noqa: F401
+
 from datetime import date
 
 import streamlit as st

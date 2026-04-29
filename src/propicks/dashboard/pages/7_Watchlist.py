@@ -10,6 +10,8 @@ from datetime import datetime
 
 import streamlit as st
 
+# Bridge st.secrets → env vars (precede import propicks.config).
+from propicks.dashboard import _bootstrap  # noqa: F401
 from propicks.config import DATE_FMT
 from propicks.dashboard._shared import (
     cached_analyze,

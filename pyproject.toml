@@ -38,6 +38,9 @@ dashboard = [
 telegram = [
     "python-telegram-bot>=20.0",
 ]
+turso = [
+    "libsql-experimental>=0.0.41",
+]
 
 [project.scripts]
 propicks-momentum  = "propicks.cli.momentum:main"

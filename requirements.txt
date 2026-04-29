@@ -1,0 +1,9 @@
+# Requirements per Streamlit Community Cloud (deploy online).
+#
+# Streamlit Cloud auto-detect questo file e installa con `pip install -r`.
+# In locale continua a usare `pip install -e '.[dev,dashboard]'` (pyproject.toml).
+#
+# `-e .[dashboard,turso]` installa il pacchetto editable + extra dashboard
+# (streamlit/plotly) + turso (libsql-experimental). pyproject.toml resta source
+# of truth per le dipendenze; questo file le risolve via extras.
+-e .[dashboard,turso]
