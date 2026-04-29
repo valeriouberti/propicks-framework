@@ -243,6 +243,43 @@ CREATE TABLE IF NOT EXISTS index_constituents (
 CREATE INDEX IF NOT EXISTS idx_constituents_index ON index_constituents(index_name);
 
 
+-- Index membership history (Fase A.1 SIGNAL_ROADMAP) — snapshot point-in-time
+-- dei membri di un indice. Risolve il survivorship bias: con questi dati il
+-- backtest può chiedere "chi era nel S&P 500 il 2015-03-31?" invece di usare
+-- la lista odierna (look-ahead).
+--
+-- Granularità: snapshot mensile (sufficiente — index cambia ~5-10 nomi/anno).
+-- Storage cost: ~500 ticker × 12 month × 30 anni ≈ 180k row → trivial.
+--
+-- Source: GitHub `fja05680/sp500` (CSV mensile 1996+) per S&P 500 e Nasdaq-100.
+-- Per FTSE MIB / STOXX 600 ricostruzione manuale via iShares ETF holdings
+-- snapshot annuali (rinviato a Fase A.1 step 2).
+--
+-- Query pattern:
+--   SELECT ticker FROM index_membership_history
+--   WHERE index_name=? AND snapshot_date = (
+--     SELECT MAX(snapshot_date) FROM index_membership_history
+--     WHERE index_name=? AND snapshot_date <= ?
+--   )
+-- → ritorna la lista del MOST RECENT snapshot ≤ data richiesta.
+CREATE TABLE IF NOT EXISTS index_membership_history (
+  index_name TEXT NOT NULL,           -- 'sp500' | 'nasdaq100' | 'ftsemib' | 'stoxx600'
+  snapshot_date DATE NOT NULL,        -- data dello snapshot (es. '2015-03-01')
+  ticker TEXT NOT NULL,               -- ticker normalizzato per yfinance
+  company_name TEXT,
+  sector TEXT,
+  source TEXT,                        -- 'fja05680' | 'wikipedia' | 'ishares' | 'manual'
+  imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (index_name, snapshot_date, ticker)
+);
+-- Lookup principale: dato (index, date) trova snapshot più recente ≤ date.
+CREATE INDEX IF NOT EXISTS idx_membership_history_lookup
+  ON index_membership_history(index_name, snapshot_date);
+-- Query reverse: traccia presenza di un ticker nel tempo (delisting / re-add).
+CREATE INDEX IF NOT EXISTS idx_membership_history_ticker
+  ON index_membership_history(index_name, ticker, snapshot_date);
+
+
 -- Daily AI budget counter — 1 riga per giorno.
 -- Popolato da ``ai/budget.py`` ad ogni chiamata all'API; TTL implicito del
 -- bucket giornaliero è la data key stessa (domani = nuova riga, reset a 0).

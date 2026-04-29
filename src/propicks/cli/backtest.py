@@ -201,7 +201,34 @@ def _run_portfolio_backtest(args: argparse.Namespace) -> int:
         cost_model=cost_model,
         strategy_tag="momentum",
         use_earnings_gate=False,  # backtest storico: earnings non disponibili pre-Phase 8
+        use_cross_sectional_rank=args.cross_sectional,
     )
+
+    # Survivorship-bias fix (Fase A.1 SIGNAL_ROADMAP): filtra ticker eligible
+    # at-time-T tramite membership history se ``--historical-membership`` attivo.
+    universe_provider = None
+    if args.historical_membership:
+        from propicks.io.index_membership import (
+            build_universe_provider,
+            count_membership_rows,
+            get_membership_date_range,
+        )
+        idx_name = args.historical_membership.lower()
+        rng = get_membership_date_range(idx_name)
+        n_rows = count_membership_rows(idx_name)
+        if rng is None or n_rows == 0:
+            print(
+                f"[errore] nessuna membership history per '{idx_name}'. "
+                f"Esegui prima: python scripts/import_sp500_history.py",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"[membership] {idx_name} point-in-time (snapshot range {rng[0]} → "
+            f"{rng[1]}, {n_rows:,} rows)",
+            file=sys.stderr,
+        )
+        universe_provider = build_universe_provider(idx_name)
 
     # Walk-forward mode?
     if args.oos_split:
@@ -211,6 +238,7 @@ def _run_portfolio_backtest(args: argparse.Namespace) -> int:
             scoring_fn=_scoring_fn,
             split_ratio=args.oos_split,
             config=config,
+            universe_provider=universe_provider,
         )
 
         header = [
@@ -238,6 +266,7 @@ def _run_portfolio_backtest(args: argparse.Namespace) -> int:
         universe=universe,
         scoring_fn=_scoring_fn,
         config=config,
+        universe_provider=universe_provider,
     )
 
     metrics = compute_portfolio_metrics(state)
@@ -367,6 +396,28 @@ def main() -> int:
         type=float,
         default=10_000.0,
         help="Phase 6: capitale iniziale portfolio (default 10.000)",
+    )
+    parser.add_argument(
+        "--historical-membership",
+        type=str,
+        default=None,
+        metavar="INDEX",
+        help=(
+            "Fase A.1 SIGNAL_ROADMAP: filtra i ticker eligible at-time-T tramite "
+            "snapshot membership index (es. 'sp500'). Risolve survivorship bias. "
+            "Richiede dati importati con scripts/import_sp500_history.py. "
+            "Solo modalità --portfolio."
+        ),
+    )
+    parser.add_argument(
+        "--cross-sectional",
+        action="store_true",
+        help=(
+            "Fase B.1 SIGNAL_ROADMAP: interpreta --threshold come PERCENTILE "
+            "rank (0-100) cross-sectional invece di score assoluto. "
+            "Es. --threshold 80 + --cross-sectional = entry top quintile (P80+). "
+            "Edge documentato Jegadeesh-Titman 1993. Solo modalità --portfolio."
+        ),
     )
     args = parser.parse_args()
 

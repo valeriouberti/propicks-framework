@@ -33,6 +33,7 @@ stretto, il risultato è robusto. Se largo, il punto è dominato dal luck.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 
@@ -69,12 +70,15 @@ def walk_forward_split(
     regime_series: pd.Series | None = None,
     earnings_dates: dict[str, str] | None = None,
     config: BacktestConfig | None = None,
+    universe_provider: Callable[[date], list[str]] | None = None,
 ) -> WalkForwardResult:
     """Esegue backtest in-sample (train) + out-of-sample (test).
 
     Args:
         split_ratio: frazione del totale dedicata al train (default 0.70).
             Il test va dal boundary fino a end.
+        universe_provider: passato through a ``simulate_portfolio`` per
+            survivorship-corretto entry filtering point-in-time.
 
     Returns: ``WalkForwardResult`` con stati + metriche + degradation_score.
         ``degradation_score > 0`` = test performa meglio di train (probabile
@@ -106,6 +110,7 @@ def walk_forward_split(
         config=config,
         start_date=train_start,
         end_date=train_end,
+        universe_provider=universe_provider,
     )
 
     # Test backtest (parte da capital originale — no carryover)
@@ -117,6 +122,7 @@ def walk_forward_split(
         config=config,
         start_date=test_start,
         end_date=test_end,
+        universe_provider=universe_provider,
     )
 
     from propicks.backtest.metrics_v2 import compute_portfolio_metrics

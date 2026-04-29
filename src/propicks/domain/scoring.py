@@ -215,6 +215,80 @@ def classify(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Cross-sectional ranking (Fase B.1 SIGNAL_ROADMAP)
+# ---------------------------------------------------------------------------
+def rank_universe(scores: dict[str, float]) -> dict[str, float]:
+    """Converte score assoluti in percentile rank [0, 100] cross-sectional.
+
+    Razionale (Jegadeesh-Titman 1993): l'edge momentum classico è top quintile
+    vs bottom quintile, non score assoluto. Score 65 in un BULL market dove la
+    media universe è 70 = sotto-mediana. Score 65 in BEAR dove la media è 40 =
+    top quintile. ``rank_universe`` rende il threshold relativo allo stato del
+    mercato, non assoluto.
+
+    Args:
+        scores: dict {ticker: score 0-100}. Score può venire da
+            ``analyze_ticker``, ``analyze_contra_ticker``, ecc.
+
+    Returns:
+        Dict {ticker: percentile_rank 0-100} dove 100 = miglior score
+        nell'universo, 0 = peggiore. Tie handling: average rank
+        ("rankdata method='average'").
+
+    Edge cases:
+        - dict vuoto → {}
+        - 1 elemento → {ticker: 50.0}
+        - tutti score uguali → tutti a 50.0
+        - NaN nei score: trattati come -inf (rank 0)
+
+    Convention:
+        Compatible con threshold percentile: ``rank >= 80`` = top quintile
+        (P80+, top 20% dell'universe). Threshold absolute (60) e percentile
+        (60) hanno semantica diversa — chi usa rank_universe deve adeguare
+        soglie (vedi BacktestConfig.use_cross_sectional_rank).
+    """
+    if not scores:
+        return {}
+    if len(scores) == 1:
+        return {next(iter(scores)): 50.0}
+
+    import math
+    items = list(scores.items())
+    # Sostituisci NaN con -inf per rankizzazione consistente
+    cleaned = [
+        (t, s if (s is not None and isinstance(s, (int, float)) and not math.isnan(s))
+         else float("-inf"))
+        for t, s in items
+    ]
+    # Sort ASC per score; rank corrispondente è index+1
+    sorted_items = sorted(cleaned, key=lambda x: x[1])
+    n = len(sorted_items)
+
+    # Calcola rank con tie-handling 'average'
+    ranks_by_ticker: dict[str, float] = {}
+    i = 0
+    while i < n:
+        j = i
+        # Trova run di ticker con score uguale
+        while j + 1 < n and sorted_items[j + 1][1] == sorted_items[i][1]:
+            j += 1
+        # Rank medio (1-indexed) per il run [i, j]
+        avg_rank = (i + j + 2) / 2  # ((i+1) + (j+1)) / 2
+        for k in range(i, j + 1):
+            ranks_by_ticker[sorted_items[k][0]] = avg_rank
+        i = j + 1
+
+    # Normalizza rank → percentile [0, 100]: rank 1 = pct 0, rank n = pct 100
+    if n == 1:
+        return {next(iter(ranks_by_ticker)): 50.0}
+    out: dict[str, float] = {}
+    for ticker, rank in ranks_by_ticker.items():
+        pct = (rank - 1) / (n - 1) * 100.0
+        out[ticker] = round(pct, 4)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Orchestrazione
 # ---------------------------------------------------------------------------
 def analyze_ticker(ticker: str, strategy: str | None = None) -> dict | None:

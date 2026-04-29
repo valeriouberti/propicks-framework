@@ -21,16 +21,37 @@ import statistics
 import pandas as pd
 
 from propicks.backtest.portfolio_engine import PortfolioState
+from propicks.domain.risk_stats import (
+    deflated_sharpe_ratio,
+    probabilistic_sharpe_ratio,
+    sharpe_with_confidence,
+)
 
 TRADING_DAYS_PER_YEAR = 252
 
 
-def compute_portfolio_metrics(state: PortfolioState) -> dict:
+def compute_portfolio_metrics(
+    state: PortfolioState,
+    *,
+    n_trials_for_dsr: int = 1,
+    var_sr_trials_for_dsr: float = 1.0,
+) -> dict:
     """Calcola KPIs portfolio-level dall'equity curve + closed trades.
+
+    Args:
+        state: PortfolioState dopo simulate_portfolio.
+        n_trials_for_dsr: numero strategie/parametrizzazioni testate. Se > 1
+            calcola DSR (deflated by E[max SR | N]). Default 1 = single
+            strategy (DSR = PSR).
+        var_sr_trials_for_dsr: varianza Sharpe attraverso i trials. Usata
+            solo se n_trials_for_dsr > 1. Default 1.0 (unit variance).
 
     Returns dict con:
     - ``total_return_pct``, ``cagr_pct``
     - ``sharpe_annualized``, ``sortino_annualized``
+    - ``sharpe_per_trade``, ``sharpe_per_trade_ci`` (CI 95%)
+    - ``psr`` (Probabilistic Sharpe Ratio, Bailey-Lopez 2012)
+    - ``dsr`` (Deflated SR, solo se n_trials_for_dsr > 1)
     - ``max_drawdown_pct``, ``calmar_ratio``
     - ``n_trades``, ``win_rate``, ``profit_factor``
     - ``avg_duration_days``
@@ -104,6 +125,32 @@ def compute_portfolio_metrics(state: PortfolioState) -> dict:
         statistics.mean([t.duration_days for t in trades]) if trades else 0
     )
 
+    # PSR / DSR su per-trade returns (pnl_pct in unità %, normalizziamo a frazione)
+    trade_returns_frac = [t.pnl_pct / 100.0 for t in trades]
+    psr = None
+    dsr = None
+    sharpe_per_trade = None
+    sharpe_per_trade_ci: tuple[float | None, float | None] = (None, None)
+    if len(trade_returns_frac) >= 3:
+        try:
+            psr_val, _ = probabilistic_sharpe_ratio(trade_returns_frac, sr_benchmark=0.0)
+            psr = round(psr_val, 4)
+            sr, lo, hi = sharpe_with_confidence(trade_returns_frac, alpha=0.05)
+            sharpe_per_trade = round(sr, 4)
+            sharpe_per_trade_ci = (round(lo, 4), round(hi, 4))
+            if n_trials_for_dsr > 1:
+                dsr_val, _ = deflated_sharpe_ratio(
+                    trade_returns_frac,
+                    n_trials=n_trials_for_dsr,
+                    var_sr_trials=var_sr_trials_for_dsr,
+                )
+                dsr = round(dsr_val, 4)
+            else:
+                dsr = psr  # single trial → DSR = PSR
+        except (ValueError, ZeroDivisionError):
+            # Edge case: returns degenerati (tutti uguali, std=0) → skip stats
+            pass
+
     # Per-strategy breakdown
     by_strategy: dict[str, dict] = {}
     strategies = {t.strategy for t in trades}
@@ -133,6 +180,12 @@ def compute_portfolio_metrics(state: PortfolioState) -> dict:
         "cagr_pct": round(cagr * 100, 4) if cagr is not None else None,
         "sharpe_annualized": round(sharpe_ann, 4) if sharpe_ann is not None else None,
         "sortino_annualized": round(sortino_ann, 4) if sortino_ann is not None else None,
+        "sharpe_per_trade": sharpe_per_trade,
+        "sharpe_per_trade_ci_lower": sharpe_per_trade_ci[0],
+        "sharpe_per_trade_ci_upper": sharpe_per_trade_ci[1],
+        "psr": psr,
+        "dsr": dsr,
+        "n_trials_for_dsr": n_trials_for_dsr,
         "max_drawdown_pct": round(max_dd * 100, 4),
         "calmar_ratio": round(calmar, 4) if calmar is not None else None,
         "n_trades": len(trades),
