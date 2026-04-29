@@ -1128,21 +1128,118 @@ documentato.
 
 ---
 
-## Fasi D-E pendenti
+## Fase D — status
 
-| Fase | Item | Priority |
-|------|------|----------|
-| D.1 | AI validation ablation | **alto** — indipendente look-ahead |
-| D.2 | Signal persistence (2-3d) | medio |
-| D.3 | Cross-strategy conflict resolution | medio |
-| D.4 | Decay monitor framework | **alto** — critical live deploy |
-| E.1 | Historical scenario replay | medio |
-| E.2 | Synthetic data backtest | basso |
-| E.3 | Permutation test | medio |
-| E.4 | ML overlay | basso (scetticismo overfit) |
+Priority alta: D.1 + D.4. D.2/D.3 deferred.
 
-**Riprioritizzazione consigliata**: D.1 + D.4 prima dei restanti. Indispensabili
-per qualsiasi deployment live anche limited.
+| Step | Status | Note |
+|------|--------|------|
+| D.1.1 — Brier + reliability + ECE | **done** (2026-04-29) | `domain/calibration_stats.py`. Pure functions: brier_score, reliability_diagram, expected_calibration_error, ai_add_value_sharpe. Test su scenari noti |
+| D.1.2 — Retrospective AI analyzer | **done** (2026-04-29) | `scripts/analyze_ai_verdicts.py`. Query ai_verdicts + match trades + Brier + decision rule. **Sample 17 verdict / 1 matched trade — INSUFFICIENT** per analisi statistica. Framework pronto per future |
+| D.4.1 — Decay monitor pure | **done** (2026-04-29) | `domain/decay_monitor.py`. Rolling Sharpe + CUSUM (Page 1954) + SPRT (Wald 1945) + composite `decay_alert_summary` |
+| D.4.2 — Smoke decay test | **done** (2026-04-29) | 5 scenari sintetici. Detection ALIVE/DEAD/ABRUPT_DECAY/REGIME_SHIFT funziona; gradual decay sub-optimal con default sens. DB reale 4 trades insufficient. Vedi [`DECAY_MONITOR.md`](DECAY_MONITOR.md) |
 
-**Status complessivo**: Fase A + B + C complete. Fase D-E roadmap discrezionale
-basata su priorità utente.
+#### Findings D chiave
+
+**D.1 AI ablation** (sample 17 verdict, 1 matched trade):
+- Distribution: 15 CAUTION (avg conv 5.5) + 2 CONFIRM (avg conv 8.0). Zero REJECT.
+- Brier 0.36, ECE 0.60 — sample troppo piccolo per statistical conclusion
+- Decision: **INSUFFICIENT_DATA** per drop AI gate decision
+- **Framework pronto** — re-run periodico man mano che storia accumula 50+ trade matched
+
+**D.4 decay monitor** (smoke 5 scenari):
+
+| Scenario | Composite | CUSUM @ | SPRT |
+|----------|-----------|---------|------|
+| ALIVE +0.5%/trade | `ALIVE` | — | EDGE_ALIVE@156 |
+| DEAD zero mean | `ALERT_DECAY` | @65 | CONTINUE |
+| GRADUAL_DECAY | `MONITOR` ⚠ | — | CONTINUE |
+| ABRUPT_DECAY | `ALERT_DECAY` | @150 | CONTINUE |
+| REGIME_SHIFT | `ALERT_DECAY` | @178 | EDGE_ALIVE@26 (sticky) |
+
+#### Caveat D documentati
+
+- **D.1 sample insufficient**: analisi rigorosa richiede ≥50 verdict
+  matched con outcome chiari. Wait-and-see + accumulate
+- **D.4 CUSUM gradual decay miss**: sensitivity 0.5σ ottimo per abrupt,
+  troppo strict per gradual drift. Tuning empirical pendente
+- **D.4 SPRT sticky**: decision early non si aggiorna. Sliding window /
+  reset periodico per regime change detection
+- **D.4 sigma-stationarity assumption**: false alarm possibili in vol regime change
+- **D.2 (signal persistence)**: deferred — quick win 1d effort se richiesto
+- **D.3 (cross-strategy conflict)**: deferred — momentum vs contrarian
+  override resolution rinviato
+
+#### Verdict Fase D
+
+**Pass operativo**:
+
+- ✓ Framework calibration AI pronto (Brier/ECE/Reliability/AddValue)
+- ✓ Framework decay monitor pronto (CUSUM/SPRT/Rolling)
+- ✓ Smoke test sintetici confermano detection abrupt + regime shift
+- ⚠ Real DB sample insufficient per validation reale
+- ⚠ Gradual decay tuning + SPRT reset per next iteration
+
+**Pre-deploy live raccomandazione**: configurare cron daily decay monitor +
+Telegram push se ALERT_DECAY. Audit trail decay decisions in nuova table
+`decay_runs`.
+
+---
+
+## Fase E — pendente
+
+| Item | Priority | Effort |
+|------|----------|--------|
+| E.1 — Historical scenario replay (2008/2020/2022) | medio | 1w |
+| E.2 — Synthetic data backtest | basso | 3-4d |
+| E.3 — Permutation test null hypothesis | medio | 2-3d |
+| E.4 — ML overlay (opzionale) | basso | 2-3w |
+
+**Status complessivo**: **Fase A + B + C + D complete** secondo scope
+ridotto operativo (focus su funzionalità minimum viable). Fase E roadmap
+discrezionale.
+
+---
+
+## Riepilogo cumulative scope completed
+
+### Fase A (validity backtest)
+- ✓ A.1 Survivorship bias fix (170k row membership SP500 1996-2026)
+- ✓ A.2 DSR + PSR + CPCV + threshold calibration framework
+- ✓ A.3 Re-baseline v1 vs v2 + JSON snapshot
+
+### Fase B (signal alpha core)
+- ✓ B.1 Cross-sectional rank percentile (limit universe-size identified)
+- ✓ B.2 Earnings revision overlay (look-ahead caveat live-only)
+- ✓ B.3 Regime daily composite (HY OAS + breadth + VIX)
+- ✓ B.4 Quality filter (look-ahead caveat live-only)
+- ✓ B.5 Cross-asset macro overlay rotation (sensitivity matrix)
+- ✓ B.6 Ablation cumulative (DSR strict pattern)
+
+### Fase C (refinement)
+- ✓ C.0 Universe-aware percentile auto-tuning (NEW post B.6)
+- ✓ C.4 OBV + Accumulation-Distribution
+- ✓ C.6 Multi-lookback momentum ensemble
+- ✓ C.7 Defensive switch ETF rotation
+- ✓ C.X Ablation cumulative (Δ +0.24 Sharpe ma DSR p > 0.10)
+
+### Fase D (meta-validation)
+- ✓ D.1 AI ablation framework (sample insufficient, framework ready)
+- ✓ D.4 Decay monitor (CUSUM + SPRT + rolling)
+
+### Edge realistico stimato (post-discount caveat)
+
+Su SP500 momentum + survivorship-correct universe-aware:
+- Sharpe annualized lordo realistic: **0.40-0.60** (vs baseline 0.20)
+- Net post slippage/TC realistic (out-of-scope): **0.20-0.40**
+- vs SPY buy-hold benchmark Sharpe ~0.6: **borderline**
+
+**Conclusione realistica**: edge documentato modesto. Cumulative C0+C4+C6
+raggiunge Sharpe 0.59 lordo ma DSR strict fail per multi-test n=8.
+
+Per **promotion default + adoption produzione**:
+1. Re-validation universe broader (top 100-200 invece di 30-50)
+2. Multi-period backtest (2010-2015, 2015-2020, 2020-2025) per stability
+3. Cost-aware backtest (TC + slippage realistic)
+4. Live paper trade 3-6 mesi per OOS validation
+5. Decay monitor cron + alert
