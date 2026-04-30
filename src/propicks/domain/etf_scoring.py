@@ -457,11 +457,70 @@ def rank_universe(
     return results
 
 
+# Defensive basket per ETF rotation (Fase C.7 SIGNAL_ROADMAP).
+# Antonacci dual momentum: in STRONG_BEAR → bonds long duration + gold + defensive
+# sectors. Default lista tickers; override via parametro a suggest_allocation.
+DEFENSIVE_DEFAULT_TICKERS: tuple[str, ...] = (
+    "IEF",   # iShares 7-10 Year Treasury Bond ETF (long duration safe haven)
+    "GLD",   # SPDR Gold Shares (anti-fiat hedge)
+    "XLU",   # Utilities Select Sector (defensive yield-play)
+    "XLP",   # Consumer Staples Select Sector (defensive)
+)
+
+
+def suggest_defensive_allocation(
+    *,
+    tickers: tuple[str, ...] = DEFENSIVE_DEFAULT_TICKERS,
+    aggregate_pct: float = 0.40,
+) -> dict:
+    """Defensive allocation per regime STRONG_BEAR (Fase C.7).
+
+    Razionale (Antonacci 2014, Dual Momentum): in BEAR severa, instead of
+    flat cash, spostare a basket defensive (bonds + gold + low-beta sectors).
+    Cattura yield + decorrelation hedge.
+
+    Args:
+        tickers: lista ETF defensive. Default IEF + GLD + XLU + XLP.
+        aggregate_pct: % capitale totale dedicato (default 40%, resto cash).
+
+    Returns:
+        Dict positions equal-weighted dentro aggregate_pct.
+    """
+    if not tickers or aggregate_pct <= 0:
+        return {"positions": [], "aggregate_pct": 0.0, "note": "no defensive"}
+    per_etf = aggregate_pct / len(tickers)
+    positions = [
+        {
+            "ticker": tk,
+            "sector_key": "defensive",
+            "score": None,
+            "classification": "DEFENSIVE",
+            "allocation_pct": round(per_etf, 4),
+            "price": None,
+            "stop_suggested": None,
+        }
+        for tk in tickers
+    ]
+    return {
+        "positions": positions,
+        "aggregate_pct": round(aggregate_pct, 4),
+        "regime_code": 1,
+        "note": (
+            f"STRONG_BEAR defensive switch (Antonacci): "
+            f"{len(tickers)} ticker × {per_etf:.1%} each"
+        ),
+    }
+
+
 def suggest_allocation(
     ranked: list[dict],
     top_n: int = 3,
     max_per_etf_pct: float = ETF_MAX_POSITION_SIZE_PCT,
     max_aggregate_pct: float = ETF_MAX_AGGREGATE_EXPOSURE_PCT,
+    *,
+    enable_defensive_switch: bool = False,
+    defensive_tickers: tuple[str, ...] = DEFENSIVE_DEFAULT_TICKERS,
+    defensive_aggregate_pct: float = 0.40,
 ) -> dict:
     """Propone l'allocazione dai top-N ranked ETF.
 
@@ -470,7 +529,16 @@ def suggest_allocation(
     - Equal-weight tra i selezionati, cap ``max_per_etf_pct`` per singolo
     - Cap aggregato ``max_aggregate_pct`` sul totale sector ETF
     - In BEAR: N ridotto a 1 (solo top difensivo)
-    - In STRONG_BEAR: allocazione vuota (flat)
+    - In STRONG_BEAR:
+        - Se ``enable_defensive_switch=False`` (default backward-compat):
+          allocazione vuota (flat) — comportamento legacy
+        - Se ``enable_defensive_switch=True`` (Fase C.7): basket defensive
+          (IEF + GLD + XLU + XLP) con aggregate ``defensive_aggregate_pct``
+
+    Args:
+        enable_defensive_switch: attivato in C.7 per Antonacci-style switch.
+        defensive_tickers: ETF defensive da usare.
+        defensive_aggregate_pct: % capitale totale defensive (default 40%).
     """
     if not ranked:
         return {"positions": [], "aggregate_pct": 0.0, "note": "universo vuoto"}
@@ -478,6 +546,11 @@ def suggest_allocation(
     regime_code = ranked[0].get("regime_code")
 
     if regime_code == 1:  # STRONG_BEAR
+        if enable_defensive_switch:
+            return suggest_defensive_allocation(
+                tickers=defensive_tickers,
+                aggregate_pct=defensive_aggregate_pct,
+            )
         return {
             "positions": [],
             "aggregate_pct": 0.0,

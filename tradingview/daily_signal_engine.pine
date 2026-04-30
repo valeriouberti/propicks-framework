@@ -39,6 +39,9 @@ indicator("AI Trading System — Daily", overlay=true, max_labels_count=50, max_
 // Trend
 emaFastLen   = input.int(20, "EMA Fast", minval=5, maxval=50, group="Trend")
 emaSlowLen   = input.int(50, "EMA Slow", minval=20, maxval=200, group="Trend")
+useMultiLookback = input.bool(false, "Use multi-lookback momentum (Fase C.6)",
+                                group="Trend",
+                                tooltip="Sostituisce trend score con ensemble 1m+3m+6m+12m skip-21 (AQR style). Pure mathematical, NO look-ahead. Vedi docs/ABLATION_C_CUMULATIVE.md")
 
 // Momentum
 rsiLen       = input.int(14, "RSI Period", minval=5, maxval=30, group="Momentum")
@@ -104,7 +107,24 @@ bbSqueeze = bbWidth < ta.sma(bbWidth, 50) * 0.75  // Squeeze quando BB strette
 // ─── SCORING (replica del motore Python) ────────────────────────────────────
 
 // Score Trend (0-100)
-scoreTrend = close > emaFast and close > emaSlow and emaFast > emaSlow ? 100.0 : close > emaFast and close > emaSlow ? 80.0 : close > emaFast and close < emaSlow ? 60.0 : close < emaFast and close > emaSlow ? 40.0 : close < emaFast and close < emaSlow and emaFast < emaSlow ? 0.0 : 20.0
+scoreTrendClassic = close > emaFast and close > emaSlow and emaFast > emaSlow ? 100.0 : close > emaFast and close > emaSlow ? 80.0 : close > emaFast and close < emaSlow ? 60.0 : close < emaFast and close > emaSlow ? 40.0 : close < emaFast and close < emaSlow and emaFast < emaSlow ? 0.0 : 20.0
+
+// Multi-lookback ensemble (Fase C.6 SIGNAL_ROADMAP) — replica
+// indicators.compute_multi_lookback_momentum + scoring.score_multi_lookback_momentum.
+// Skip-recent 21 (Jegadeesh-Titman skip-1 month). Lookbacks 21/63/126/252.
+skipBars = 21
+endIdx   = skipBars
+endPrice = close[endIdx]
+mlb1m    = endPrice > 0 and close[endIdx + 21] > 0 ? math.log(endPrice / close[endIdx + 21]) : 0.0
+mlb3m    = endPrice > 0 and close[endIdx + 63] > 0 ? math.log(endPrice / close[endIdx + 63]) : 0.0
+mlb6m    = endPrice > 0 and close[endIdx + 126] > 0 ? math.log(endPrice / close[endIdx + 126]) : 0.0
+mlb12m   = endPrice > 0 and close[endIdx + 252] > 0 ? math.log(endPrice / close[endIdx + 252]) : 0.0
+avgLogRet = (mlb1m + mlb3m + mlb6m + mlb12m) / 4.0
+// Map ±0.20 → ±50 → score [0, 100]
+mlbSaturated = math.max(-0.20, math.min(0.20, avgLogRet))
+scoreMultiLookback = math.max(0.0, math.min(100.0, 50.0 + mlbSaturated * 250.0))
+
+scoreTrend = useMultiLookback ? scoreMultiLookback : scoreTrendClassic
 
 // Score Momentum RSI (0-100)
 scoreMomentum = rsi >= 50 and rsi <= 65 ? 100.0 : rsi > 65 and rsi <= 70 ? 75.0 : rsi >= 40 and rsi < 50 ? 60.0 : rsi > 70 and rsi <= 80 ? 40.0 : rsi >= 30 and rsi < 40 ? 45.0 : rsi > 80 ? 15.0 : rsi < 30 ? 20.0 : 50.0

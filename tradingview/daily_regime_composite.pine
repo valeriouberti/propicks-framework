@@ -1,0 +1,126 @@
+// ============================================================================
+// AI TRADING SYSTEM — Daily Regime Composite v1.0 (Fase B.3 SIGNAL_ROADMAP)
+// ============================================================================
+// Timeframe: DAILY (overlay separator pane)
+// Scopo: Visualizza regime daily composite (HY OAS proxy + breadth + VIX)
+//        per anticipare turning point del weekly regime classifier.
+//
+// Lead time atteso 1-3 settimane su turning point critici (COVID 2020-03,
+// top 2022-01, CPI bottom 2022-10, yen carry 2024-08).
+//
+// ─── CONTRATTO CON MOTORE PYTHON ────────────────────────────────────────────
+// Replica logicamente domain/regime_composite.py:
+//   - Z-score rolling 252 bar
+//   - Sign convention: positive z = bullish (HY OAS / VIX inverted)
+//   - Composite weighted 40% HY OAS proxy + 40% breadth proxy + 20% VIX
+//   - 5-bucket: STRONG_BEAR (1) / BEAR / NEUTRAL / BULL / STRONG_BULL (5)
+//
+// CAVEAT TradingView:
+//   - HY OAS (FRED BAMLH0A0HYM2) NON disponibile direttamente. Proxy: HYG/IEF
+//     ratio (HY corporate / Treasury) inverted. Spread allargato → ratio scende
+//   - Breadth full S&P 500: TradingView ha symbol custom INDEX:S5TH (SPX above
+//     200ma), uso quello come proxy
+//   - VIX disponibile come VIX o VIX1D
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — Daily Regime Composite (B.3)",
+          overlay=false, max_labels_count=30, format=format.price, precision=3)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+zWindow = input.int(252, "Z-score rolling window (bar)", minval=20, maxval=520,
+                    group="Computation",
+                    tooltip="252 bar = 1y. Match Python default")
+
+wHyProxy = input.float(0.40, "Weight HY proxy", minval=0.0, maxval=1.0, step=0.05,
+                       group="Weights")
+wBreadth = input.float(0.40, "Weight breadth", minval=0.0, maxval=1.0, step=0.05,
+                       group="Weights")
+wVix     = input.float(0.20, "Weight VIX", minval=0.0, maxval=1.0, step=0.05,
+                       group="Weights")
+
+// Source ticker (configurabili)
+hyProxySymbol = input.symbol("AMEX:HYG", "HY proxy symbol", group="Sources",
+                              tooltip="HYG = iShares HY Corporate. Use HYG/IEF ratio in caller")
+ietfSymbol   = input.symbol("NASDAQ:IEF", "Treasury proxy", group="Sources")
+breadthSymbol = input.symbol("INDEX:S5TH", "Breadth symbol", group="Sources",
+                              tooltip="S5TH = % S&P > 200ma. Indice TradingView built-in")
+vixSymbol    = input.symbol("CBOE:VIX", "VIX symbol", group="Sources")
+
+// ─── FETCH SOURCES ──────────────────────────────────────────────────────────
+hyClose   = request.security(hyProxySymbol, "D", close, ignore_invalid_symbol=true)
+ietfClose = request.security(ietfSymbol, "D", close, ignore_invalid_symbol=true)
+breadth   = request.security(breadthSymbol, "D", close, ignore_invalid_symbol=true)
+vixClose  = request.security(vixSymbol, "D", close, ignore_invalid_symbol=true)
+
+// HY OAS proxy = HYG / IEF ratio. Spread allarga → HY price scende → ratio scende.
+// Quindi z-score di questo ratio: positive = stress in calo (bull). Equivalente
+// a z-score(HY OAS) inverted. Stesso sign convention come Python.
+hyProxy = nz(hyClose) / nz(ietfClose, 1.0)
+
+// ─── ROLLING Z-SCORE ────────────────────────────────────────────────────────
+zscore(src, len) =>
+    m = ta.sma(src, len)
+    s = ta.stdev(src, len)
+    s > 0 ? (src - m) / s : 0.0
+
+zHyProxy = zscore(hyProxy, zWindow)        // positive = HY ratio sopra media (bull)
+zBreadth = zscore(breadth, zWindow)         // positive = breadth alto (bull)
+zVixRaw  = zscore(vixClose, zWindow)
+zVixInv  = -zVixRaw                         // invert: low vol = bull
+
+// ─── COMPOSITE ──────────────────────────────────────────────────────────────
+totalW = wHyProxy + wBreadth + wVix
+composite = totalW > 0
+    ? (zHyProxy * wHyProxy + zBreadth * wBreadth + zVixInv * wVix) / totalW
+    : 0.0
+
+// ─── 5-BUCKET CLASSIFICATION ────────────────────────────────────────────────
+// Match Python classify_regime_z thresholds
+regimeCode = composite >  1.0 ? 5 :
+             composite >  0.3 ? 4 :
+             composite > -0.3 ? 3 :
+             composite > -1.0 ? 2 : 1
+
+regimeLabel = regimeCode == 5 ? "STRONG_BULL" :
+              regimeCode == 4 ? "BULL" :
+              regimeCode == 3 ? "NEUTRAL" :
+              regimeCode == 2 ? "BEAR" : "STRONG_BEAR"
+
+// ─── PLOT ───────────────────────────────────────────────────────────────────
+plot(composite, "Composite Z", color=color.new(color.blue, 0), linewidth=2)
+plot(zHyProxy, "z HY proxy", color=color.new(color.purple, 60), linewidth=1)
+plot(zBreadth, "z breadth", color=color.new(color.aqua, 60), linewidth=1)
+plot(zVixInv, "z VIX inv", color=color.new(color.orange, 60), linewidth=1)
+
+// Boundary lines
+hline(1.0, "STRONG_BULL", color=color.new(color.green, 50), linestyle=hline.style_dotted)
+hline(0.3, "BULL", color=color.new(color.green, 70), linestyle=hline.style_dotted)
+hline(-0.3, "BEAR", color=color.new(color.red, 70), linestyle=hline.style_dotted)
+hline(-1.0, "STRONG_BEAR", color=color.new(color.red, 50), linestyle=hline.style_dotted)
+hline(0.0, "Zero", color=color.new(color.gray, 80))
+
+// Background per regime
+bgcolor(regimeCode == 5 ? color.new(color.green, 88) :
+        regimeCode == 4 ? color.new(color.green, 92) :
+        regimeCode == 3 ? color.new(color.gray, 92) :
+        regimeCode == 2 ? color.new(color.red, 92) :
+                          color.new(color.red, 88))
+
+// Latest label
+if barstate.islast
+    label.new(bar_index, composite,
+              text=regimeLabel + " (" + str.tostring(composite, "#.##") + ")",
+              style=label.style_label_left,
+              color=regimeCode >= 4 ? color.green :
+                    regimeCode == 3 ? color.gray : color.red,
+              textcolor=color.white, size=size.normal)
+
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+prevCode = nz(regimeCode[1])
+alertcondition(regimeCode != prevCode and regimeCode <= 2,
+               title="Decay alert: BEAR regime entered",
+               message="Regime daily switched to BEAR/STRONG_BEAR")
+alertcondition(regimeCode != prevCode and regimeCode >= 4,
+               title="Bull alert: BULL regime entered",
+               message="Regime daily switched to BULL/STRONG_BULL")

@@ -16,8 +16,16 @@ cash reserve, earnings gate). Per ogni bar day t:
 - No portfolio constraints → max positions, size cap, MIN_CASH_RESERVE
 - No earnings gate → integrato (skip entry se earnings <5gg)
 
+**Survivorship bias** (Fase A.1 SIGNAL_ROADMAP):
+Il parametro opzionale ``universe_provider: Callable[[date], list[str]] | None``
+permette di filtrare i candidate ad ogni bar in base alla membership index
+point-in-time (vedi ``io.index_membership.build_universe_provider``). Senza
+provider l'engine usa l'universe statico passato — exposed al survivorship
+bias se l'universe contiene solo ticker oggi-vivi. Posizioni già aperte NON
+vengono force-uscite su rimozione dall'index: l'exit avviene tramite stop/
+target/time_stop come in produzione (delisting reali → stop hit naturale).
+
 **Known limitations** (documented, not hidden):
-- No survivorship bias correction: ticker delisted non nel set
 - Corporate actions: splits/dividends non applicati (impact minor su holding 2-8w)
 - Earnings gap: stop fillato a stop level, non al gap reale (sottostima loss)
 - Simulazione point-in-time: il regime classifier usa ``^GSPC`` corrente,
@@ -28,6 +36,7 @@ Tutti i test passano DataFrame fissi — zero rete.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -105,6 +114,29 @@ class BacktestConfig:
     cost_model: CostModel = field(default_factory=CostModel)
     strategy_tag: str = "momentum"       # tag for attribution
 
+    # Fase B.1 SIGNAL_ROADMAP — cross-sectional ranking
+    use_cross_sectional_rank: bool = False
+    """Se True, ``score_threshold`` è interpretato come **percentile rank**
+    (0-100), non score assoluto. Es. score_threshold=80 con
+    use_cross_sectional_rank=True = entry solo top quintile (P80+) dell'universo
+    in quel giorno. Razionale: edge momentum cross-sectional > absolute
+    (Jegadeesh-Titman 1993). Default False = behavior legacy (absolute)."""
+
+    # Fase B.4 SIGNAL_ROADMAP — quality filter (Asness QMJ 2013)
+    quality_scores: dict[str, float] | None = None
+    """Dict {ticker: quality_score [0,100]} precomputed via
+    ``market.yfinance_client.get_quality_metrics``. None = quality filter
+    disattivo. Caveat look-ahead: yfinance info è snapshot oggi → backtest
+    soggetto a look-ahead bias. Documentato in
+    docs/ABLATION_B4_QUALITY.md."""
+
+    quality_filter_pct: float | None = None
+    """Percentile threshold per quality filter cross-sectional. None = off,
+    67 = top tercile (T67+), 50 = top half, 80 = top quintile.
+    Applicato PRIMA dello score momentum: ticker sotto il percentile sono
+    skippati indipendentemente dal momentum score. Richiede ``quality_scores``
+    fornito."""
+
 
 # ---------------------------------------------------------------------------
 # Core simulation loop
@@ -118,6 +150,7 @@ def simulate_portfolio(
     config: BacktestConfig | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    universe_provider: Callable[[date], list[str]] | None = None,
 ) -> PortfolioState:
     """Simula il portfolio tra ``start_date`` e ``end_date``.
 
@@ -135,6 +168,13 @@ def simulate_portfolio(
             skip entry se earnings entro gate_days. Se None, no check.
         config: ``BacktestConfig`` — parametri simulazione.
         start_date, end_date: range. Default: tutto.
+        universe_provider: callable ``(date) -> list[str]`` per filtrare i
+            candidate entry ad ogni bar in base alla membership index
+            point-in-time. Se ``None`` (default) l'engine considera tutti i
+            ticker dell'``universe`` come eligible — espone a survivorship
+            bias se l'universe contiene solo ticker oggi-vivi. Vedi
+            ``io.index_membership.build_universe_provider``. Posizioni già
+            aperte non vengono force-uscite su rimozione dall'index.
 
     Returns: ``PortfolioState`` con equity_curve, closed_trades, open_positions.
     """
@@ -193,11 +233,52 @@ def simulate_portfolio(
         if regime_code is not None and regime_code < 3:
             continue
 
-        # Score tutti i candidate
-        candidates: list[tuple[str, float]] = []
+        # Membership gate (Fase A.1 SIGNAL_ROADMAP): filtra i candidate ai
+        # ticker eligible at-time-T se ``universe_provider`` è fornito.
+        # Altrimenti tutti i ticker dell'``universe`` sono considerati
+        # eligible (comportamento legacy, esposto a survivorship bias).
+        eligible_set: set[str] | None = None
+        if universe_provider is not None:
+            eligible_set = set(universe_provider(today))
+
+        # Quality gate (Fase B.4 SIGNAL_ROADMAP): cross-sectional top tercile
+        # filter via quality_scores precomputed. Caveat look-ahead documentato
+        # in docs/ABLATION_B4_QUALITY.md (yfinance info snapshot only).
+        # NOTA: ticker NOT IN quality_scores sono trattati come neutral (pass
+        # through) — no quality info ≠ low quality. Solo ticker presenti con
+        # score sotto percentile sono rifiutati.
+        quality_pass_set: set[str] | None = None
+        quality_known_set: set[str] | None = None
+        if (
+            config.quality_filter_pct is not None
+            and config.quality_scores is not None
+            and len(config.quality_scores) >= 2
+        ):
+            from propicks.domain.quality import is_above_quality_tercile
+            mask = is_above_quality_tercile(
+                config.quality_scores,
+                percentile=config.quality_filter_pct,
+            )
+            quality_pass_set = {t for t, ok in mask.items() if ok}
+            quality_known_set = set(config.quality_scores.keys())
+
+        # Score tutti i candidate (gate + scoring, no threshold filter qui)
+        scored: dict[str, float] = {}
         for ticker, df in universe.items():
             if ticker in state.open_positions:
                 continue  # già aperto, skip
+            # Membership gate point-in-time
+            if eligible_set is not None and ticker not in eligible_set:
+                continue
+            # Quality gate (Fase B.4): skip solo se ticker presente in
+            # quality_scores E sotto percentile. Ticker senza info = neutral.
+            if (
+                quality_pass_set is not None
+                and quality_known_set is not None
+                and ticker in quality_known_set
+                and ticker not in quality_pass_set
+            ):
+                continue
             # Earnings gate (Phase 8)
             if (
                 config.use_earnings_gate
@@ -220,10 +301,22 @@ def simulate_portfolio(
                 score = scoring_fn(ticker, hist_slice)
             except Exception:
                 continue
-
-            if score is None or score < config.score_threshold:
+            if score is None:
                 continue
-            candidates.append((ticker, score))
+            scored[ticker] = score
+
+        # Threshold filter — absolute o cross-sectional rank (Fase B.1)
+        if config.use_cross_sectional_rank and len(scored) >= 2:
+            from propicks.domain.scoring import rank_universe
+            ranks = rank_universe(scored)
+            candidates: list[tuple[str, float]] = [
+                (t, scored[t]) for t, r in ranks.items()
+                if r >= config.score_threshold
+            ]
+        else:
+            candidates = [
+                (t, s) for t, s in scored.items() if s >= config.score_threshold
+            ]
 
         # 4. Ordina per score desc, apri top-N che stanno nel budget
         candidates.sort(key=lambda x: -x[1])

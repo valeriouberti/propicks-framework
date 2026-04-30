@@ -29,6 +29,7 @@ una strategia che perde soldi in produzione. Questa guida ti insegna a
 11. [Common pitfalls](#11-common-pitfalls--cosa-non-fare)
 12. [Troubleshooting](#12-troubleshooting)
 13. [Limitations esplicite](#13-limitations--cosa-il-backtest-non-coglie)
+14. [**Fase A-D SIGNAL_ROADMAP — survivorship + DSR + cross-sectional**](#14-fase-a-d-signal_roadmap--survivorship--dsr--cross-sectional)
 
 ---
 
@@ -846,3 +847,159 @@ overfitting scoperto nel live = utile learning.
 
 **Versione guida**: post Phase 6. Copre legacy + portfolio v2.
 Ogni bug o ambiguità → issue su GitHub.
+
+---
+
+## 14. Fase A-D SIGNAL_ROADMAP — survivorship + DSR + cross-sectional
+
+Estensioni post-Phase 6 introdotte da [SIGNAL_ROADMAP](SIGNAL_ROADMAP.md).
+Tre filoni indipendenti:
+
+### 14.1 Survivorship-correct backtest (Fase A.1)
+
+**Problema**: `--discover-sp500` legge constituents *oggi* da Wikipedia →
+look-ahead. Backtest gonfia returns perché esclude ticker delisted (Lehman,
+Bear Stearns) e include ticker che *non erano* nell'index allora (TSLA fino
+a 2020-12).
+
+**Soluzione**: tabella `index_membership_history` con snapshot mensili
+1996-2026 (170k row, 1193 unique ticker mai-stati-S&P). Source: GitHub
+`fja05680/sp500` (free, MIT-equivalent).
+
+**Setup una tantum**:
+
+```bash
+python scripts/import_sp500_history.py
+# → 343 monthly snapshot, 170,764 row in index_membership_history
+```
+
+**Uso**:
+
+```bash
+propicks-backtest AAPL MSFT NVDA --portfolio --historical-membership sp500
+```
+
+Bias misurato su universe 10 ticker / 6y (vedi
+[SURVIVORSHIP_BIAS_ANALYSIS](SURVIVORSHIP_BIAS_ANALYSIS.md)):
+**+15.4% total return** sovrastimato nel backtest biased. TSLA = 75
+phantom trade evitati.
+
+**Limit**: solo SP500 disponibile. STOXX 600 / FTSE MIB / Nasdaq-100
+membership history pendenti (no source equivalent fja05680).
+
+### 14.2 DSR + PSR + CPCV (Fase A.2)
+
+**Problema**: Sharpe ratio empirico è stimatore rumoroso. Su sample
+finiti + non-normalità returns + multiple testing (threshold sweep), il
+Sharpe pubblicato over-states il vero edge.
+
+**Tre tecniche statistical rigor**:
+
+1. **Probabilistic Sharpe Ratio** (Bailey-Lopez 2012): probabilità che il
+   vero Sharpe > benchmark dato sample size + skew + kurtosis. Range
+   [0, 1]. PSR > 0.95 = 95% confidence.
+
+2. **Deflated Sharpe Ratio** (Bailey-Lopez 2014): PSR deflated by
+   `E[max SR | n_trials]`. Corregge per multiple testing (es. threshold
+   sweep su 9 valori → DSR severo).
+
+3. **Combinatorial Purged CV** (Lopez de Prado 2018, AFML cap.12):
+   genera `comb(N, k)` test path con purging + embargo. Riduce path
+   dependency dello stimatore Sharpe.
+
+**Uso via CLI**:
+
+```bash
+propicks-calibrate AAPL MSFT NVDA --thresholds "60:80:5" \
+    --use-cpcv --historical-membership sp500 --period 5y
+```
+
+Output: tabella per threshold con n_trades, Sharpe, PSR, DSR. Recommendation
+rule-based (vedi [THRESHOLD_CALIBRATION](THRESHOLD_CALIBRATION.md)).
+
+**API programmatica**:
+
+```python
+from propicks.domain.risk_stats import (
+    probabilistic_sharpe_ratio, deflated_sharpe_ratio, sharpe_with_confidence,
+)
+from propicks.backtest.cpcv import cpcv_split, cpcv_dates_split
+from propicks.backtest.calibration import calibrate_threshold
+```
+
+`compute_portfolio_metrics` ora ritorna anche `psr`, `dsr`,
+`sharpe_per_trade_ci_lower/upper`, `n_trials_for_dsr`.
+
+### 14.3 Cross-sectional rank percentile (Fase B.1)
+
+**Problema**: score absolute (`>= 60`) cattura "decent momentum"
+universalmente — non distingue regime. In BULL universe medio è 70 →
+score 60 è sotto-mediana. Edge momentum vero è cross-sectional (top
+quintile vs bottom, Jegadeesh-Titman 1993).
+
+**Uso**:
+
+```bash
+# threshold 80 cross-sectional = entry top quintile (P80+) dell'universe ogni giorno
+propicks-backtest AAPL MSFT NVDA --portfolio --cross-sectional --threshold 80
+```
+
+Edge misurato (universe 10 ticker, 5y):
+
+| Config | Sharpe ann |
+|--------|-----------|
+| Baseline absolute thr=60 | 0.378 |
+| B.1 P80 (top quintile) | 0.616 |
+| **B.1 P90 (top decile)** | **0.874** |
+
+Vedi [ABLATION_B1_CROSS_SECTIONAL](ABLATION_B1_CROSS_SECTIONAL.md).
+
+**Caveat scaling**: B.1 non scala bene su universe broader. Top 30 → P80
+ottimo. Top 50+ → percentile auto-tuned via
+`auto_percentile_for_universe()` (Fase C.0). Top decile P90 estremo
+rischia "no trade" su universe < 10.
+
+### 14.4 Workflow consigliato post-Fase A
+
+```bash
+# 1. Setup membership (una tantum, ~30s)
+python scripts/import_sp500_history.py
+
+# 2. Baseline post-fix
+propicks-backtest --portfolio --historical-membership sp500 \
+    AAPL MSFT NVDA GOOGL AMZN
+
+# 3. Calibration threshold via DSR
+propicks-calibrate --discover-sp500 --top 30 \
+    --thresholds "60:80:5" --use-cpcv \
+    --historical-membership sp500 --period 5y
+
+# 4. Backtest con threshold ottimo + cross-sectional
+propicks-backtest --portfolio \
+    --historical-membership sp500 \
+    --cross-sectional --threshold 75 \
+    AAPL MSFT NVDA GOOGL AMZN
+
+# 5. Re-baseline orchestrato (v1 vs v2 JSON archiviato)
+python scripts/baseline_backtest.py --top 50 --period 5y
+```
+
+### 14.5 Decision rule + acceptance gate
+
+SIGNAL_ROADMAP §5 B.6 decision rule:
+> Mantieni feature solo se +0.10 Sharpe AND DSR p < 0.10 vs baseline_v2.
+
+Acceptance gate end-Fase-A SIGNAL_ROADMAP §9:
+> Sharpe gross > 0.4 strategia best, DSR p < 0.10.
+
+Vedi [SIGNAL_ROADMAP](SIGNAL_ROADMAP.md) per status step-by-step + numeri
+findings cumulativi.
+
+### 14.6 Cosa NON è cambiato
+
+- TC + slippage realistic ancora out-of-scope (`--tc-bps` semplificato)
+- Live broker / execution layer fuori scope
+- yfinance fundamentals (B.2 earnings, B.4 quality) **snapshot only** →
+  caveat look-ahead bias permanente per backtest historical
+- Default `MIN_SCORE_TECH=60` non cambiato — promotion manuale post
+  re-validation multi-period

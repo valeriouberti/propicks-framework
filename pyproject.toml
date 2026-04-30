@@ -57,6 +57,7 @@ propicks-cache     = "propicks.cli.cache:main"
 propicks-scheduler = "propicks.cli.scheduler:main"
 propicks-bot       = "propicks.cli.bot:main"
 propicks-calendar  = "propicks.cli.calendar:main"
+propicks-calibrate = "propicks.cli.calibrate:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

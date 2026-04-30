@@ -221,7 +221,23 @@ CREATE TABLE IF NOT EXISTS market_ticker_meta (
   fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   -- Phase 8: earnings date cache (TTL separato, refresh settimanale)
   next_earnings_date DATE,
-  earnings_fetched_at TIMESTAMP
+  earnings_fetched_at TIMESTAMP,
+  -- Fase B.2 SIGNAL_ROADMAP: earnings revision/surprise metrics. TTL 7gg
+  -- (revisioni cambiano lente, surprise solo post-earnings call).
+  -- Source: yfinance (earnings_history + earnings_estimate + eps_revisions)
+  earnings_avg_surprise_4q REAL,        -- mean surprise % ultimi 4 quarter
+  earnings_surprise_trend REAL,          -- surprise[-1] − mean(surprise[-4:-1])
+  earnings_growth_consensus REAL,        -- forward y/y growth (current snapshot)
+  earnings_net_revisions_30d INTEGER,    -- upLast30 − downLast30 (current)
+  earnings_n_analysts INTEGER,           -- # analyst covering
+  earnings_revision_fetched_at TIMESTAMP,
+  -- Fase B.4 SIGNAL_ROADMAP: quality metrics (Asness QMJ). TTL 90gg
+  -- (fundamentals slow-moving). Source: yfinance ``info`` snapshot.
+  quality_roa REAL,                     -- returnOnAssets (frazione)
+  quality_gross_margin REAL,             -- grossMargins (frazione)
+  quality_debt_equity REAL,              -- debtToEquity (yfinance: %)
+  quality_score REAL,                    -- composite [0,100] pre-computed
+  quality_fetched_at TIMESTAMP
 );
 -- NB: idx_meta_next_earnings viene creato in ``db._apply_migrations`` dopo che
 -- la colonna ``next_earnings_date`` esiste anche sui DB esistenti pre-Phase 8.
@@ -241,6 +257,57 @@ CREATE TABLE IF NOT EXISTS index_constituents (
   PRIMARY KEY (index_name, ticker)
 );
 CREATE INDEX IF NOT EXISTS idx_constituents_index ON index_constituents(index_name);
+
+
+-- FRED series daily cache (Fase B.3 SIGNAL_ROADMAP) — macro indicators
+-- (HY OAS, VIX, yield curve). Source: fred.stlouisfed.org/graph/fredgraph.csv
+-- (CSV public endpoint, no auth). PK (series_id, date) per supportare
+-- multipli serie nello stesso DB.
+CREATE TABLE IF NOT EXISTS fred_series_daily (
+  series_id TEXT NOT NULL,           -- es. 'BAMLH0A0HYM2', 'VIXCLS', 'T10Y2Y'
+  date DATE NOT NULL,
+  value REAL,                         -- può essere NULL (festivi/dati mancanti)
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (series_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_fred_series ON fred_series_daily(series_id);
+
+
+-- Index membership history (Fase A.1 SIGNAL_ROADMAP) — snapshot point-in-time
+-- dei membri di un indice. Risolve il survivorship bias: con questi dati il
+-- backtest può chiedere "chi era nel S&P 500 il 2015-03-31?" invece di usare
+-- la lista odierna (look-ahead).
+--
+-- Granularità: snapshot mensile (sufficiente — index cambia ~5-10 nomi/anno).
+-- Storage cost: ~500 ticker × 12 month × 30 anni ≈ 180k row → trivial.
+--
+-- Source: GitHub `fja05680/sp500` (CSV mensile 1996+) per S&P 500 e Nasdaq-100.
+-- Per FTSE MIB / STOXX 600 ricostruzione manuale via iShares ETF holdings
+-- snapshot annuali (rinviato a Fase A.1 step 2).
+--
+-- Query pattern:
+--   SELECT ticker FROM index_membership_history
+--   WHERE index_name=? AND snapshot_date = (
+--     SELECT MAX(snapshot_date) FROM index_membership_history
+--     WHERE index_name=? AND snapshot_date <= ?
+--   )
+-- → ritorna la lista del MOST RECENT snapshot ≤ data richiesta.
+CREATE TABLE IF NOT EXISTS index_membership_history (
+  index_name TEXT NOT NULL,           -- 'sp500' | 'nasdaq100' | 'ftsemib' | 'stoxx600'
+  snapshot_date DATE NOT NULL,        -- data dello snapshot (es. '2015-03-01')
+  ticker TEXT NOT NULL,               -- ticker normalizzato per yfinance
+  company_name TEXT,
+  sector TEXT,
+  source TEXT,                        -- 'fja05680' | 'wikipedia' | 'ishares' | 'manual'
+  imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (index_name, snapshot_date, ticker)
+);
+-- Lookup principale: dato (index, date) trova snapshot più recente ≤ date.
+CREATE INDEX IF NOT EXISTS idx_membership_history_lookup
+  ON index_membership_history(index_name, snapshot_date);
+-- Query reverse: traccia presenza di un ticker nel tempo (delisting / re-add).
+CREATE INDEX IF NOT EXISTS idx_membership_history_ticker
+  ON index_membership_history(index_name, ticker, snapshot_date);
 
 
 -- Daily AI budget counter — 1 riga per giorno.

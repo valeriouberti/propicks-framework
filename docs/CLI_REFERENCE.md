@@ -22,6 +22,7 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 | `propicks-journal` | [Journal trades](#propicks-journal) |
 | `propicks-report` | [Markdown reports](#propicks-report) |
 | `propicks-backtest` | [Backtest engine](#propicks-backtest) |
+| `propicks-calibrate` | [Threshold calibration DSR + CPCV](#propicks-calibrate) |
 | `propicks-watchlist` | [Watchlist](#propicks-watchlist) |
 | `propicks-calendar` | [Earnings & macro](#propicks-calendar) |
 | `propicks-cache` | [Market data cache](#propicks-cache) |
@@ -224,6 +225,8 @@ propicks-backtest <TICKER> [TICKER ...] [opzioni]
 | `--tc-bps N` | 0 | Transaction cost basis points |
 | `--monte-carlo N` | 0 | N simulazioni Monte Carlo (>0 = on) |
 | `--oos-split 0.70` | off | Walk-forward train/test split |
+| `--historical-membership INDEX` | off | **Fase A.1**: filter ticker eligible at-time-T via membership history (es. `sp500`). Risolve survivorship bias. Solo modalità `--portfolio` |
+| `--cross-sectional` | off | **Fase B.1**: interpreta `--threshold` come **percentile rank** (0-100) cross-sectional invece di score assoluto. Es. `--threshold 80 --cross-sectional` = entry top quintile (P80+) |
 
 **Esempi**:
 
@@ -231,7 +234,75 @@ propicks-backtest <TICKER> [TICKER ...] [opzioni]
 propicks-backtest AAPL --period 5y --threshold 65
 propicks-backtest AAPL MSFT NVDA --portfolio --tc-bps 10 --monte-carlo 500
 propicks-backtest AAPL --portfolio --oos-split 0.70 --monte-carlo 1000
+# Fase A.1 — survivorship-correct (richiede import sp500 history una volta)
+propicks-backtest AAPL MSFT NVDA --portfolio --historical-membership sp500
+# Fase B.1 — cross-sectional rank top quintile
+propicks-backtest AAPL MSFT NVDA --portfolio --cross-sectional --threshold 80
+# Combinato A.1 + B.1
+propicks-backtest --portfolio --historical-membership sp500 \
+    --cross-sectional --threshold 80 AAPL MSFT NVDA GOOGL AMZN
 ```
+
+**Setup membership** (una tantum):
+
+```bash
+python scripts/import_sp500_history.py
+# → 343 monthly snapshot 1996-2026 (170k row in index_membership_history)
+```
+
+---
+
+## propicks-calibrate
+
+**Fase A.2** SIGNAL_ROADMAP. Threshold sweep + Probabilistic Sharpe Ratio (PSR)
++ Deflated Sharpe Ratio (DSR, Bailey-Lopez 2014) + Combinatorial Purged CV
+(Lopez de Prado 2018). Output: tabella per threshold + recommendation
+rule-based. Vedi [THRESHOLD_CALIBRATION](THRESHOLD_CALIBRATION.md).
+
+```bash
+propicks-calibrate <TICKER ...> [opzioni]
+propicks-calibrate --discover-sp500 --top N [opzioni]
+```
+
+| Opzione | Default | Effetto |
+|---------|---------|---------|
+| `--discover-sp500` | off | Universe S&P 500 corrente |
+| `--top N` | 20 | Limita universe a top N |
+| `--thresholds SPEC` | `40:80:5` | Range (`start:end:step`) o lista (`60,65,70`) |
+| `--period {1y..10y}` | `5y` | yfinance fetch period |
+| `--strategy {momentum}` | `momentum` | (contrarian/etf in roadmap) |
+| `--use-cpcv` | off | Combinatorial Purged CV (~10x slower) |
+| `--cpcv-groups N` | 6 | CPCV partitions |
+| `--cpcv-test-groups N` | 2 | held-out per fold (C(6,2)=15 path) |
+| `--cpcv-embargo N` | 5 | embargo days |
+| `--historical-membership INDEX` | off | Fase A.1 survivorship filter |
+| `--start YYYY-MM-DD` | none | filter date inizio |
+| `--end YYYY-MM-DD` | none | filter date fine |
+| `--min-trades N` | 30 | Minimo trade per recommendation |
+| `--target-dsr 0-1` | 0.95 | DSR threshold per recommendation tier 1 |
+
+**Esempi**:
+
+```bash
+# Sweep singolo
+propicks-calibrate AAPL MSFT NVDA --thresholds "60:80:5" --period 5y
+
+# Universe S&P top 50 + CPCV + survivorship
+propicks-calibrate --discover-sp500 --top 50 \
+    --thresholds "55:80:5" --use-cpcv \
+    --historical-membership sp500 --period 5y
+```
+
+**Output**: tabella con N trades / Sharpe ann / Win% / Tot ret% / PSR / DSR
+per threshold. Recommendation marcata con ★. Decision rule:
+
+- Tier 1: max DSR tra threshold con DSR ≥ 0.95 e n_trades ≥ min_trades
+- Tier 2: max DSR sopra min_trades anche se DSR < target
+- Tier 3: max Sharpe (caveat: trade insufficienti)
+
+**Note**: il CLI è informativo — NON modifica `config.MIN_SCORE_TECH`
+automaticamente. Decisione promotion default = manuale post-validation
+multi-period.
 
 ---
 
