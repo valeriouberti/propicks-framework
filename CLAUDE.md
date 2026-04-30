@@ -64,6 +64,7 @@ journaling → review.
 | [`Trading_System_Playbook.md`](docs/Trading_System_Playbook.md) | Workflow operativo + prompt Perplexity/Claude |
 | [`Weekly_Operating_Framework.md`](docs/Weekly_Operating_Framework.md) | Cadenza weekly (Sab review, Dom plan, Lun-Ven exec) |
 | [`USER_GUIDE.md`](docs/USER_GUIDE.md) | Guida utente trader (quick start) |
+| [`OPERATIONAL_WORKFLOWS.md`](docs/OPERATIONAL_WORKFLOWS.md) | **Workflow day-by-day step-by-step** — 4 use case (Pro Picks AI / momentum discover / contrarian / ETF). Dashboard click + TradingView visual check. Linguaggio semplice |
 | [`NEXT_STEPS.md`](docs/NEXT_STEPS.md) | Roadmap |
 
 ### Manuale & Reference (wiki)

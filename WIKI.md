@@ -90,6 +90,7 @@ Ogni fase ha decision gate + caveat espliciti.
 | [ARCHITECTURE_OVERVIEW](docs/ARCHITECTURE_OVERVIEW.md) | Layer separation, data flow, dependency graph |
 | [Trading_System_Playbook](docs/Trading_System_Playbook.md) | Workflow narrativo end-to-end + Perplexity prompts |
 | [Weekly_Operating_Framework](docs/Weekly_Operating_Framework.md) | Cadenza weekly (Sab review, Dom plan, Lun-Ven exec) |
+| [**OPERATIONAL_WORKFLOWS**](docs/OPERATIONAL_WORKFLOWS.md) | **Workflow operativi day-by-day step-by-step**. 4 use case: Pro Picks AI / momentum discover / contrarian / ETF. Dashboard click + TradingView visual check. **Per principianti** |
 | [NEXT_STEPS](docs/NEXT_STEPS.md) | Roadmap fasi |
 
 ---
