@@ -448,19 +448,18 @@ mi interessa migliorare."""
 
 _PERPLEXITY_HEADER = """# MODEL GUIDANCE — Perplexity multi-model
 
-Stai operando in Perplexity con web search built-in sempre attiva. Usa la
-search liberamente per produrre dati verificabili (spot prices, earnings
-date, recent news, analyst notes, peer performance, fund flows). Cita le
-fonti.
+You are running on Perplexity with built-in web search always active. Use
+search freely to produce verifiable data (spot prices, earnings dates,
+recent news, analyst notes, peer performance, fund flows). Cite sources.
 
-Adattati al modello che sta rispondendo:
+Adapt to the model handling this request:
 
-- **Sonar / Sonar Pro / Sonar Reasoning**: search live + citazioni. Schema
-  JSON enforce-friendly → rispondi SOLO col JSON, una sola response.
-- **Claude / GPT / Gemini via Perplexity Pro**: persona "senior PM" del
-  system prompt qui sotto. Schema JSON enforce-friendly.
-- **Modelli senza JSON mode strict**: se non riesci a produrre JSON valido,
-  usa il fallback `---JSON---` separator descritto in "OUTPUT SCHEMA".
+- **Sonar / Sonar Pro / Sonar Reasoning**: live search + citations. Schema
+  is JSON-enforce-friendly → reply with JSON only, single response.
+- **Claude / GPT / Gemini via Perplexity Pro**: assume the "senior PM"
+  persona defined in the system prompt below. Schema enforce-friendly.
+- **Models without strict JSON mode**: if you cannot produce valid JSON,
+  use the `---JSON---` separator fallback described in "OUTPUT SCHEMA".
 
 ---
 
@@ -468,28 +467,28 @@ Adattati al modello che sta rispondendo:
 
 _LLM_GENERIC_HEADER = """# MODEL GUIDANCE — generic LLM (Claude.ai / ChatGPT / Gemini direct)
 
-Stai ricevendo questo prompt come fallback dell'integrazione SDK Anthropic
-quando l'API Claude non è raggiungibile (chiave esaurita, budget giornaliero
-saturo, rete down, region restriction). Il system prompt qui sotto è
-**byte-equivalente** a quello inviato dall'integrazione → su Claude.ai e
-sull'SDK Anthropic funziona pari pari, segui le istruzioni come scritte.
+You are receiving this prompt as a fallback for the Anthropic SDK
+integration when the Claude API is unreachable (key exhausted, daily
+budget cap hit, network down, region restriction). The system prompt
+below is **byte-equivalent** to what the integration sends → on Claude.ai
+and the Anthropic SDK it works as-is, follow the instructions verbatim.
 
-Adattati al tuo ambiente:
+Adapt to your environment:
 
-- **Claude.ai (web app) / console.anthropic.com / Anthropic SDK diretto**:
-  segui il system prompt integralmente. Se hai accesso al tool `web_search`
-  (Workbench beta o configurato nel SDK), abilitalo come da sezione "# Web
-  search usage" — budget 2-4 ricerche per ticker, max 5. Senza web search
-  disponibile, scrivi "unknown — search unavailable" nei campi che
-  richiedono dati real-time (spot prices, earnings date, recent news).
-- **ChatGPT (gpt-5, gpt-4o, o-series) con web browsing/search abilitato**:
-  cerca online quando il system prompt te lo richiede esplicitamente.
-  Senza browsing → dichiara esplicitamente il gap nel campo rilevante.
-- **Gemini (2.5 Pro, 2.5 Flash) con grounding Google Search**: stesso
-  comportamento — usa la search se disponibile, altrimenti dichiara il gap.
+- **Claude.ai (web app) / console.anthropic.com / Anthropic SDK direct**:
+  follow the system prompt verbatim. If the `web_search` tool is
+  available (Workbench beta or configured in the SDK), enable it per the
+  "# Web search usage" section — budget 2-4 queries per ticker, max 5.
+  Without web search, write "unknown — search unavailable" in any field
+  requiring real-time data (spot prices, earnings dates, recent news).
+- **ChatGPT (gpt-5, gpt-4o, o-series) with web browsing/search enabled**:
+  search online whenever the system prompt explicitly requires it.
+  Without browsing → declare the gap explicitly in the relevant field.
+- **Gemini (2.5 Pro, 2.5 Flash) with Google Search grounding**: same
+  behavior — use search if available, otherwise declare the gap.
 
-Lo schema JSON finale è enforce-friendly su tutti i modelli citati.
-Rispondi **SOLO** con un oggetto JSON valido, nessun testo prima o dopo.
+The final JSON schema is enforce-friendly across all listed models.
+Reply with a valid JSON object **ONLY** — no text before or after.
 
 ---
 
@@ -501,10 +500,10 @@ _SCHEMA_INSTRUCTION_PERPLEXITY = """
 
 # OUTPUT SCHEMA
 
-Rispondi con un oggetto JSON valido che rispetti questo schema. **Preferito**:
-solo il JSON, nessun testo prima o dopo. **Fallback** (se il tuo modello non
-supporta JSON mode strict): prosa breve di analisi (max 200 parole) +
-separator `---JSON---` + JSON valido sotto.
+Reply with a valid JSON object matching this schema. **Preferred**: JSON
+only, no text before or after. **Fallback** (if your model lacks strict
+JSON mode): brief prose analysis (max 200 words) + `---JSON---` separator
++ valid JSON below.
 
 ```json
 {schema}
@@ -517,10 +516,9 @@ _SCHEMA_INSTRUCTION_STRICT = """
 
 # OUTPUT SCHEMA
 
-Rispondi esclusivamente con un oggetto JSON valido che rispetti QUESTO schema.
-NESSUN testo prima o dopo, nessun markdown wrapping, nessun preambolo. Lo
-schema è enforce-friendly su tutti i modelli moderni (Claude 3.5+, GPT-4+,
-Gemini 1.5+):
+Reply ONLY with a valid JSON object matching THIS schema. NO text before
+or after, no markdown wrapping, no preamble. The schema is enforce-friendly
+across modern models (Claude 3.5+, GPT-4+, Gemini 1.5+):
 
 ```json
 {schema}
@@ -848,14 +846,14 @@ is more useful than a synthesized generic opinion. No disclaimers, no
 
 _SONAR_HEADER = """# MODEL GUIDANCE — Sonar-native (Perplexity)
 
-Stai operando in Sonar / Sonar Pro / Sonar Reasoning con web search built-in
-sempre attiva. Linee guida:
+You are running on Sonar / Sonar Pro / Sonar Reasoning with built-in web
+search always active. Guidelines:
 
-- Cita ogni fact con [source.com, YYYY-MM-DD] inline o come footnote.
-- Se un dato non è recuperabile via search, scrivi ``unknown — not found``.
-  NON inferire, NON estrapolare dal training.
-- Output format: prosa breve di analisi (max 200 parole) + separator
-  ``---JSON---`` su riga propria + JSON valido sotto. Lo schema è in cima.
+- Cite every fact as [source.com, YYYY-MM-DD] inline or as a footnote.
+- If a data point is not retrievable via search, write
+  ``unknown — not found``. Do NOT infer, do NOT extrapolate from training.
+- Output format: brief prose analysis (max 200 words) + a ``---JSON---``
+  separator on its own line + valid JSON below. The schema is at the top.
 
 ---
 
@@ -1043,9 +1041,9 @@ def _sonar_schema_block(schema: dict) -> str:
         "```json\n"
         + json.dumps(schema, indent=2, ensure_ascii=False)
         + "\n```\n\n"
-        "Output format: prosa breve di analisi (max 200 parole) + separator\n"
-        "``---JSON---`` su riga propria + JSON valido sotto. Lo schema sopra\n"
-        "è la specifica esatta dei campi richiesti.\n\n"
+        "Output format: brief prose analysis (max 200 words) + a\n"
+        "``---JSON---`` separator on its own line + valid JSON below. The\n"
+        "schema above is the exact field specification.\n\n"
         "---\n\n"
     )
 
@@ -1135,18 +1133,19 @@ def sonar_etf_validate_full(
     if alt_pool:
         alt_constraint = (
             "\n\n# ALTERNATIVE_SECTOR — constrained list\n\n"
-            "Per il campo ``alternative_sector`` nello schema, scegli "
-            "ESCLUSIVAMENTE da questo elenco (o null):\n"
+            "For the ``alternative_sector`` field in the schema, pick "
+            "EXCLUSIVELY from this list (or null):\n"
             + "\n".join(
                 f"- {r['ticker']} ({r.get('sector_key', '?')})" for r in alt_pool
             )
-            + "\n\nNON inventare ticker. Se nessuno merita l'upgrade, metti null.\n"
+            + "\n\nDo NOT invent tickers. If none deserves an upgrade, "
+            "set the field to null.\n"
         )
     else:
         alt_constraint = (
             "\n\n# ALTERNATIVE_SECTOR\n\n"
-            "Universe contiene solo la top-3 mostrata sopra. "
-            "Imposta ``alternative_sector`` = null.\n"
+            "Universe contains only the top-3 shown above. "
+            "Set ``alternative_sector`` = null.\n"
         )
 
     return (
