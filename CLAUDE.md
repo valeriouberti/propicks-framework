@@ -31,7 +31,7 @@ journaling → review.
 
 | Tema | MD |
 |------|-----|
-| Backtest (single + portfolio + walk-forward + Monte Carlo) | [`BACKTEST_GUIDE.md`](docs/BACKTEST_GUIDE.md) |
+| Backtest (single + portfolio + walk-forward + Monte Carlo + DSR) | [`BACKTEST_GUIDE.md`](docs/BACKTEST_GUIDE.md) |
 | Risk Framework v2 (Kelly + Vol target + VaR + Corr) | [`RISK_FRAMEWORK.md`](docs/RISK_FRAMEWORK.md) |
 | P&L Attribution + Phase 7 Gate + Weekly Report | [`PNL_ATTRIBUTION.md`](docs/PNL_ATTRIBUTION.md) |
 | Catalyst Calendar (earnings + macro events) | [`CALENDAR.md`](docs/CALENDAR.md) |
@@ -39,6 +39,23 @@ journaling → review.
 | Telegram bot (push + comandi) | [`TELEGRAM_BOT.md`](docs/TELEGRAM_BOT.md) |
 | Storage (SQLite + market data cache + index constituents) | [`STORAGE.md`](docs/STORAGE.md) |
 | Watchlist + Trade management + Esposizione + Sync | [`WATCHLIST_AND_TRADE_MGMT.md`](docs/WATCHLIST_AND_TRADE_MGMT.md) |
+
+### Signal validation & evolution (Fase A-D SIGNAL_ROADMAP)
+
+| Tema | MD | Scope |
+|------|-----|-------|
+| **Master roadmap signal** | [`SIGNAL_ROADMAP.md`](docs/SIGNAL_ROADMAP.md) | Tracking Fase A-E, decision gate, findings cumulativi |
+| Survivorship bias quantification | [`SURVIVORSHIP_BIAS_ANALYSIS.md`](docs/SURVIVORSHIP_BIAS_ANALYSIS.md) | Fase A.1 — point-in-time membership SP500 |
+| Threshold calibration (DSR + CPCV) | [`THRESHOLD_CALIBRATION.md`](docs/THRESHOLD_CALIBRATION.md) | Fase A.2 — Bailey-Lopez DSR + Lopez de Prado CPCV |
+| Baseline v1 vs v2 | [`BASELINE_COMPARISON.md`](docs/BASELINE_COMPARISON.md) | Fase A.3 — re-baseline post survivorship |
+| Cross-sectional rank ablation | [`ABLATION_B1_CROSS_SECTIONAL.md`](docs/ABLATION_B1_CROSS_SECTIONAL.md) | Fase B.1 — Jegadeesh-Titman 1993 |
+| Earnings revision overlay | [`ABLATION_B2_EARNINGS_REVISION.md`](docs/ABLATION_B2_EARNINGS_REVISION.md) | Fase B.2 — Chan-Jegadeesh-Lakonishok (caveat look-ahead) |
+| Regime daily composite | [`REGIME_COMPOSITE.md`](docs/REGIME_COMPOSITE.md) | Fase B.3 — HY OAS + breadth + VIX z-score |
+| Quality filter (QMJ) | [`ABLATION_B4_QUALITY.md`](docs/ABLATION_B4_QUALITY.md) | Fase B.4 — Asness-Frazzini-Pedersen 2013 (caveat look-ahead) |
+| Cross-asset macro overlay | [`MACRO_OVERLAY.md`](docs/MACRO_OVERLAY.md) | Fase B.5 — sensitivity matrix sector × 5 features |
+| Cumulative ablation Fase B | [`ABLATION_B6_CUMULATIVE.md`](docs/ABLATION_B6_CUMULATIVE.md) | Fase B.6 — DSR multi-trial decision rule |
+| Cumulative ablation Fase C | [`ABLATION_C_CUMULATIVE.md`](docs/ABLATION_C_CUMULATIVE.md) | Fase C — universe-aware percentile + OBV + multi-lookback |
+| Decay monitor framework | [`DECAY_MONITOR.md`](docs/DECAY_MONITOR.md) | Fase D.4 — CUSUM + SPRT + rolling Sharpe |
 
 ### Workflow operativo
 
@@ -81,14 +98,22 @@ propicks-ai-framework/
 ├── src/propicks/
 │   ├── config.py                 # Parametri operativi (capitale, regole, pesi, regime, contract Pine)
 │   ├── domain/                   # Puro: nessun I/O, nessuna rete
-│   │   ├── indicators.py         # EMA, RSI, ATR, ADX, MACD, pct_change
-│   │   ├── scoring.py            # Momentum: 6 sub-score + analyze_ticker
+│   │   ├── indicators.py         # EMA, RSI, ATR, ADX, MACD, pct_change, OBV, A/D, multi-lookback (C.4/C.6)
+│   │   ├── scoring.py            # Momentum: 6 sub-score + analyze_ticker + rank_universe (B.1) + auto_percentile (C.0) + combine_with_earnings_revision (B.2)
 │   │   ├── contrarian_scoring.py # Contrarian: 4 sub-score + analyze_contra_ticker
 │   │   ├── contrarian_discovery.py # 3-stage pipeline su universi ampi
-│   │   ├── etf_scoring.py        # ETF: 4 sub-score + rank_universe + alloc
+│   │   ├── etf_scoring.py        # ETF: 4 sub-score + rank_universe + alloc + suggest_defensive_allocation (C.7)
 │   │   ├── etf_universe.py       # Query helpers SECTOR_ETFS_US/EU/WORLD
 │   │   ├── stock_rs.py           # Peer RS stock vs sector ETF (US-only)
 │   │   ├── regime.py             # Classifier macro weekly (5-bucket, mirror Pine)
+│   │   ├── regime_composite.py   # Fase B.3: regime daily z-score (HY OAS + breadth + VIX)
+│   │   ├── breadth.py            # Fase B.3: % above MA200 cross-sectional
+│   │   ├── macro_overlay.py      # Fase B.5: sensitivity matrix sector × 5 macro features
+│   │   ├── quality.py            # Fase B.4: Asness QMJ (ROA + GM + D/E)
+│   │   ├── earnings_revision.py  # Fase B.2: Chan-Jegadeesh-Lakonishok (avg surprise + revisions)
+│   │   ├── risk_stats.py         # Fase A.2: PSR + DSR (Bailey-Lopez 2012/2014) + Sharpe CI
+│   │   ├── calibration_stats.py  # Fase D.1: Brier + ECE + reliability + AI add-value
+│   │   ├── decay_monitor.py      # Fase D.4: rolling Sharpe + CUSUM (Page 1954) + SPRT (Wald 1945)
 │   │   ├── attribution.py        # Phase 9: decompose trade (α/β/sector/timing)
 │   │   ├── calendar.py           # Phase 8: earnings hard gate + macro events
 │   │   ├── sizing.py             # calculate_position_size + bucket caps
@@ -99,9 +124,15 @@ propicks-ai-framework/
 │   │   ├── validation.py
 │   │   └── verdict.py
 │   ├── backtest/                 # Walk-forward + portfolio engine + costs + walkforward
+│   │   ├── portfolio_engine.py   # +universe_provider (A.1), use_cross_sectional_rank (B.1), quality_scores+filter_pct (B.4)
+│   │   ├── cpcv.py               # Fase A.2: Combinatorial Purged CV (Lopez de Prado 2018)
+│   │   ├── calibration.py        # Fase A.2: threshold sweep + DSR + recommendation
+│   │   └── metrics_v2.py         # +psr +dsr +sharpe_per_trade_ci (Fase A.3)
 │   ├── io/                       # SQLite source of truth (portfolio/journal/watchlist/AI/sync)
-│   ├── market/yfinance_client.py # Unico modulo che parla con yfinance
+│   │   └── index_membership.py   # Fase A.1: point-in-time membership history (170k row 1996-2026)
+│   ├── market/yfinance_client.py # Unico modulo yfinance + get_quality_metrics (B.4) + get_earnings_revision_metrics (B.2)
 │   ├── market/index_constituents.py # Wikipedia fetch (S&P 500, FTSE MIB, STOXX 600)
+│   ├── market/fred_client.py     # Fase B.3+B.5: FRED CSV cached (HY OAS, VIX, T10Y2Y, USD)
 │   ├── ai/                       # Adapter Anthropic (claude_client + prompts + validators)
 │   ├── reports/                  # Markdown generators (weekly/monthly/attribution)
 │   ├── cli/                      # Thin argparse wrappers (entry points)
@@ -109,6 +140,19 @@ propicks-ai-framework/
 │   ├── notifications/            # Phase 4: Telegram dispatcher + bot
 │   └── dashboard/                # UI Streamlit multi-page (parallela alla CLI)
 ├── tradingview/                  # Pine script (contract con config.py)
+├── scripts/                      # Fase A-D one-shot tools (import membership, ablation runners, smoke tests)
+│   ├── import_sp500_history.py   # Fase A.1: import fja05680/sp500 monthly snapshots
+│   ├── baseline_backtest.py      # Fase A.3: orchestrator v1 vs v2
+│   ├── quantify_survivorship_bias.py  # Fase A.1: smoke test bias
+│   ├── ablation_b1_cross_sectional.py
+│   ├── ablation_b2_earnings_revision.py
+│   ├── ablation_b4_quality.py
+│   ├── ablation_b6_cumulative.py
+│   ├── ablation_c_cumulative.py
+│   ├── test_regime_daily.py
+│   ├── test_macro_overlay.py
+│   ├── test_decay_monitor.py
+│   └── analyze_ai_verdicts.py    # Fase D.1: retrospective AI calibration
 ├── docs/                         # Documentazione di dettaglio (vedi index sopra)
 ├── tests/unit/                   # Test puri su domain/ (no I/O, no rete)
 ├── data/propicks.db              # SQLite source of truth (gitignored)
@@ -234,6 +278,15 @@ propicks-report weekly|monthly|attribution      # attribution = Phase 9 (vedi PN
 propicks-backtest AAPL [MSFT NVDA] [--period 3y] [--threshold 60]
 propicks-backtest AAPL --portfolio --tc-bps 10 --monte-carlo 500
 propicks-backtest AAPL --portfolio --oos-split 0.70 --monte-carlo 1000
+# Fase A.1 SIGNAL_ROADMAP — survivorship-corrected universe point-in-time
+propicks-backtest AAPL MSFT NVDA --portfolio --historical-membership sp500
+# Fase B.1 — cross-sectional rank percentile (threshold = P-rank)
+propicks-backtest AAPL MSFT NVDA --portfolio --cross-sectional --threshold 80
+
+# Threshold calibration con DSR (Fase A.2 — Bailey-Lopez 2014)
+propicks-calibrate AAPL MSFT NVDA --thresholds "60:80:5" --use-cpcv \
+    --historical-membership sp500 --period 5y
+propicks-calibrate --discover-sp500 --top 50 --thresholds "55:80:5"
 
 # Watchlist
 propicks-watchlist add AAPL --target X --note "..."

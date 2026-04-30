@@ -10,13 +10,14 @@ copre: timing, alert push, scoring intra-day.
 
 ---
 
-## I 4 script
+## I 5 script
 
 | Script | Timeframe | Replica del Python | Scopo |
 |--------|-----------|--------------------|-------|
 | [weekly_regime_engine](#weekly_regime_engine) | Weekly | `domain/regime.py` | Classificazione macro 5-bucket (regime gate) |
-| [daily_signal_engine](#daily_signal_engine) | Daily | `domain/scoring.py` | Scoring momentum stock + alert breakout/pullback |
-| [etf_rotation_engine](#etf_rotation_engine) | Weekly (preferito) | `domain/etf_scoring.py` | Sector ETF rotation (RS + regime fit) |
+| [daily_signal_engine](#daily_signal_engine) | Daily | `domain/scoring.py` (+ C.6 multi-lookback toggle) | Scoring momentum stock + alert breakout/pullback |
+| [daily_regime_composite](#daily_regime_composite) | Daily | `domain/regime_composite.py` (Fase B.3) | Z-score composite leading turning point — HY proxy + breadth + VIX |
+| [etf_rotation_engine](#etf_rotation_engine) | Weekly (preferito) | `domain/etf_scoring.py` | Sector ETF rotation (RS + regime fit) — note B.5/C.7 informational |
 | [contrarian_signal_engine](#contrarian_signal_engine) | Daily | `domain/contrarian_scoring.py` | Quality-filtered mean reversion |
 
 ---
@@ -118,6 +119,62 @@ BEAR / STRONG_BEAR) — mirror esatto di `domain/regime.py`.
 - `RSI DIVERGENZA BULLISH`
 - `STOP LOSS HIT` / `TARGET HIT` (richiede position fields configurati)
 - `SCORE UPGRADE A` (composite cross sopra 75)
+
+**Fase C.6 — Multi-lookback momentum toggle** (opt-in):
+
+Input `useMultiLookback` (default OFF) sostituisce il `scoreTrend` classico
+con ensemble 1m+3m+6m+12m skip-recent-21 (Jegadeesh-Titman skip-1 month).
+Replica `domain/indicators.compute_multi_lookback_momentum` +
+`domain/scoring.score_multi_lookback_momentum`. Pure mathematical, NO
+look-ahead bias. Per ablation backtest vedi
+[`docs/ABLATION_C_CUMULATIVE.md`](ABLATION_C_CUMULATIVE.md).
+
+---
+
+## daily_regime_composite
+
+**Scopo** (Fase B.3 SIGNAL_ROADMAP): visualizza regime daily composite z-score
+per anticipare turning point del weekly regime classifier. Lead time atteso
+1-3 settimane su eventi storici (COVID 2020-03, top 2022-01, CPI bottom
+2022-10).
+
+**Quando usarlo**: pannello separato (NON overlay), in concomitanza con
+`weekly_regime_engine` e `daily_signal_engine`. Daily composite anticipa,
+weekly conferma — combinazione riduce drawdown sui regime change.
+
+**Source data** (TradingView, no FRED diretta):
+- `HYG / IEF` ratio = HY OAS proxy (spread allarga → ratio scende →
+  z-score negativo)
+- `INDEX:S5TH` = % S&P > 200ma (breadth built-in TradingView)
+- `CBOE:VIX` = VIX
+
+**Composite**: z-score rolling 252d, weighted 40% HY proxy + 40% breadth +
+20% VIX. Sign convention: positive = bullish.
+
+**5-bucket classification** (mirror Python):
+
+| Composite z | Code | Label |
+|-------------|------|-------|
+| > +1.0 | 5 | STRONG_BULL |
+| (+0.3, +1.0] | 4 | BULL |
+| [-0.3, +0.3] | 3 | NEUTRAL |
+| [-1.0, -0.3) | 2 | BEAR |
+| < -1.0 | 1 | STRONG_BEAR |
+
+**Caveat TradingView**:
+- HY OAS reale (FRED `BAMLH0A0HYM2`) NON disponibile direttamente; HYG/IEF
+  ratio è proxy ragionevole ma non identico
+- Numeri Pine NON sono identici al Python (proxy ≠ real series). Per
+  decisione operativa, considera entrambi
+- Breadth full S&P 500 vs proxy top 30 (Python smoke usa top 30 fast):
+  `INDEX:S5TH` è full universe, più rappresentativo
+
+**Alerts**:
+- `Decay alert: BEAR regime entered`
+- `Bull alert: BULL regime entered`
+
+Vedi [`docs/REGIME_COMPOSITE.md`](REGIME_COMPOSITE.md) per metodologia
+completa.
 
 ---
 

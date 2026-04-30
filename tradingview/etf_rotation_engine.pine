@@ -35,6 +35,21 @@
 //   ETF_STOP_LOSS_PCT=0.05, REGIME_FAVORED_SECTORS, CONTRA_REGIME_FIT.
 // Cap regime: STRONG_BEAR non-favored→0, BEAR non-favored→50,
 // NEUTRAL non-favored→65 (soft cap, vedi apply_regime_cap).
+//
+// ─── FASE B.5 + C.7 SIGNAL_ROADMAP (informational) ─────────────────────────
+// Cross-asset macro overlay (B.5) e defensive switch (C.7) NON sono replicati
+// in Pine (TradingView limit: no FRED API, no multi-asset Z-score on-chart).
+//
+// **Macro overlay (B.5)**: in Python ETF rotation usa sensitivity matrix
+// 11 sector × 5 macro features (yield slope, USD, HY OAS, Cu/Au, Oil/Au).
+// Per inspection real-time usa il pannello dedicato `daily_regime_composite.pine`
+// che mostra HY OAS proxy + breadth + VIX combined.
+//
+// **Defensive switch (C.7)**: in Python suggest_allocation con
+// enable_defensive_switch=True alloca a IEF + GLD + XLU + XLP in STRONG_BEAR
+// invece di flat. In Pine: se vedi composite < 30 sull'ETF e regime daily
+// (vedi `daily_regime_composite.pine`) è STRONG_BEAR, considera switch a
+// basket defensive. Vedi docs/ABLATION_C_CUMULATIVE.md.
 // ============================================================================
 
 //@version=6

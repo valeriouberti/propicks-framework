@@ -91,6 +91,28 @@ with st.form("bt_portfolio_form", border=True):
         help="Bootstrap su trade sequence → CI 95%% Sharpe/WinRate/MaxDD. 500-1000 raccomandato.",
     )
 
+    st.divider()
+    st.markdown("**Fase A-B SIGNAL_ROADMAP** _(opt-in)_")
+    col11, col12 = st.columns(2)
+    use_membership = col11.checkbox(
+        "🛡️ Survivorship-correct (Fase A.1)",
+        value=False,
+        help=(
+            "Filtra ticker eligible at-time-T via index_membership_history. "
+            "Risolve survivorship bias. Richiede import preventivo: "
+            "`python scripts/import_sp500_history.py`"
+        ),
+    )
+    use_xs_rank = col12.checkbox(
+        "🎯 Cross-sectional rank (Fase B.1)",
+        value=False,
+        help=(
+            "Threshold = percentile rank (0-100) invece di score assoluto. "
+            "Es. threshold 80 = entry top quintile (P80+) ogni giorno. "
+            "Edge documentato Jegadeesh-Titman 1993."
+        ),
+    )
+
     submitted = st.form_submit_button("▶️ Esegui backtest", type="primary")
 
 
@@ -196,7 +218,30 @@ config = BacktestConfig(
     cost_model=cost_model,
     strategy_tag="momentum",
     use_earnings_gate=False,
+    use_cross_sectional_rank=use_xs_rank,
 )
+
+# Fase A.1 SIGNAL_ROADMAP — survivorship correction
+universe_provider = None
+if use_membership:
+    from propicks.io.index_membership import (
+        build_universe_provider,
+        count_membership_rows,
+        get_membership_date_range,
+    )
+    n_rows = count_membership_rows("sp500")
+    rng = get_membership_date_range("sp500")
+    if n_rows == 0 or rng is None:
+        st.error(
+            "❌ Membership history non importata. "
+            "Esegui prima: `python scripts/import_sp500_history.py`"
+        )
+        st.stop()
+    st.caption(
+        f"🛡️ Membership filter sp500 attivo — {n_rows:,} row, "
+        f"range {rng[0]} → {rng[1]}"
+    )
+    universe_provider = build_universe_provider("sp500")
 
 # ---------------------------------------------------------------------------
 # Walk-forward mode
@@ -208,6 +253,7 @@ if oos_split > 0:
             scoring_fn=_scoring_fn,
             split_ratio=oos_split,
             config=config,
+            universe_provider=universe_provider,
         )
 
     st.subheader("📊 Walk-forward OOS results")
@@ -262,6 +308,7 @@ with st.spinner(f"Simulating {len(universe)} ticker × {period}…"):
         universe=universe,
         scoring_fn=_scoring_fn,
         config=config,
+        universe_provider=universe_provider,
     )
     metrics = compute_portfolio_metrics(state)
 

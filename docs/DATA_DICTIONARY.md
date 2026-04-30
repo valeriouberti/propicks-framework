@@ -20,10 +20,11 @@ timelines) vedi [STORAGE](STORAGE.md). Per il file SQL canonico vedi
 | **Riferimenti** | `watchlist` |
 | **Timelines** | `regime_history`, `portfolio_snapshots` |
 | **Market cache** | `market_ohlcv_daily`, `market_ohlcv_weekly`, `market_ticker_meta`, `index_constituents` |
+| **Signal validation (Fase A-D)** | `index_membership_history` (A.1), `fred_series_daily` (B.3/B.5) |
 | **Operations** | `daily_budget`, `scheduler_runs`, `alerts` |
 | **Versioning** | `schema_version` |
 
-13 tabelle totali.
+15 tabelle totali (13 base + 2 aggiunte Fase A-D SIGNAL_ROADMAP).
 
 ---
 
@@ -201,19 +202,37 @@ Stessa struttura di `market_ohlcv_daily` ma con `week_start` invece di `date`.
 TTL 7gg.
 
 ### `market_ticker_meta`
-Sector GICS, beta, name, earnings date. PK `ticker`. TTL 7gg.
+Sector GICS, beta, name, earnings date. PK `ticker`. TTL 7gg base.
+**Esteso Fase B.2 + B.4**: earnings revision metrics + quality metrics.
 
-| Colonna | Tipo | Note |
-|---------|------|------|
-| `ticker` | TEXT PK | |
-| `sector` | TEXT | GICS Yahoo-style |
-| `beta` | REAL | vs SPX 5y monthly |
-| `name` | TEXT | Fallback display name |
-| `fetched_at` | TIMESTAMP | TTL meta 7gg |
-| `next_earnings_date` | DATE | Phase 8 |
-| `earnings_fetched_at` | TIMESTAMP | TTL earnings 7gg separato |
+| Colonna | Tipo | Note | Fase |
+|---------|------|------|------|
+| `ticker` | TEXT PK | | base |
+| `sector` | TEXT | GICS Yahoo-style | base |
+| `beta` | REAL | vs SPX 5y monthly | base |
+| `name` | TEXT | Fallback display name | base |
+| `fetched_at` | TIMESTAMP | TTL meta 7gg | base |
+| `next_earnings_date` | DATE | | Phase 8 |
+| `earnings_fetched_at` | TIMESTAMP | TTL earnings 7gg | Phase 8 |
+| `earnings_avg_surprise_4q` | REAL | mean surprise % ultimi 4q | **B.2** |
+| `earnings_surprise_trend` | REAL | surprise[-1] − mean(surprise[-4:-1]) | **B.2** |
+| `earnings_growth_consensus` | REAL | forward y/y growth (current snapshot) | **B.2** |
+| `earnings_net_revisions_30d` | INTEGER | upLast30 − downLast30 | **B.2** |
+| `earnings_n_analysts` | INTEGER | # analyst covering | **B.2** |
+| `earnings_revision_fetched_at` | TIMESTAMP | TTL 7gg | **B.2** |
+| `quality_roa` | REAL | returnOnAssets (frazione) | **B.4** |
+| `quality_gross_margin` | REAL | grossMargins (frazione) | **B.4** |
+| `quality_debt_equity` | REAL | debtToEquity (yfinance: %) | **B.4** |
+| `quality_score` | REAL | composite [0,100] pre-computed | **B.4** |
+| `quality_fetched_at` | TIMESTAMP | TTL 90gg (fundamentals slow) | **B.4** |
 
 **Index**: `idx_meta_next_earnings` (creato da migration).
+
+**Caveat look-ahead**: campi `earnings_*` e `quality_*` sono **snapshot
+oggi** (yfinance non espone point-in-time historical). Backtest historical
+soggetto a look-ahead bias se usati come filter — vedi
+[ABLATION_B2_EARNINGS_REVISION](ABLATION_B2_EARNINGS_REVISION.md) e
+[ABLATION_B4_QUALITY](ABLATION_B4_QUALITY.md).
 
 ### `index_constituents`
 Membri di un index. PK `(index_name, ticker)` per supportare più indici.
@@ -227,6 +246,67 @@ Membri di un index. PK `(index_name, ticker)` per supportare più indici.
 | `fetched_at` | TIMESTAMP |
 
 **Index**: `idx_constituents_index`. **TTL**: 7gg.
+
+### `index_membership_history` (Fase A.1 SIGNAL_ROADMAP)
+
+Snapshot point-in-time dei membri di un indice. Risolve survivorship bias:
+con questi dati il backtest può chiedere "chi era nel S&P 500 il 2015-03-31?"
+invece di usare la lista odierna.
+
+Source: GitHub `fja05680/sp500` (CSV mensile 1996+) per S&P 500 / Nasdaq-100.
+STOXX 600 / FTSE MIB pendenti (no source equivalent free).
+
+| Colonna | Tipo | Note |
+|---------|------|------|
+| `index_name` | TEXT NOT NULL | `'sp500'` (Nasdaq-100/FTSEMIB/STOXX600 pendenti) |
+| `snapshot_date` | DATE NOT NULL | Granularità mensile (primo trading day) |
+| `ticker` | TEXT NOT NULL | normalized yfinance format |
+| `company_name` | TEXT | optional |
+| `sector` | TEXT | optional |
+| `source` | TEXT | `'fja05680'` / `'wikipedia'` / `'ishares'` / `'manual'` |
+| `imported_at` | TIMESTAMP | last import |
+
+**PK**: `(index_name, snapshot_date, ticker)`.
+**Indexes**: `idx_membership_history_lookup` (index_name, snapshot_date)
+per query point-in-time, `idx_membership_history_ticker` (index_name,
+ticker, snapshot_date) per traccia presenza ticker nel tempo.
+
+**Setup**: `python scripts/import_sp500_history.py` → 343 monthly snapshot
+1996-01 → 2026-01, **170,764 row totali, 1193 unique ticker mai-stati-S&P**
+(vs 503 oggi → 690 delisted/rinominati).
+
+**Query pattern point-in-time**:
+
+```sql
+SELECT ticker FROM index_membership_history
+WHERE index_name='sp500' AND snapshot_date = (
+  SELECT MAX(snapshot_date) FROM index_membership_history
+  WHERE index_name='sp500' AND snapshot_date <= '2015-03-31'
+);
+-- ritorna lista ticker S&P 500 al 2015-03-31 (most recent snapshot ≤ data)
+```
+
+API: `propicks.io.index_membership.get_constituents_at(date, "sp500")`.
+
+### `fred_series_daily` (Fase B.3 + B.5 SIGNAL_ROADMAP)
+
+Cache daily di serie FRED (St. Louis Fed). Source: `fredgraph.csv` public
+endpoint, no auth richiesta.
+
+| Colonna | Tipo | Note |
+|---------|------|------|
+| `series_id` | TEXT NOT NULL | `'BAMLH0A0HYM2'` (HY OAS), `'VIXCLS'`, `'T10Y2Y'`, `'DTWEXBGS'` |
+| `date` | DATE NOT NULL | trading day calendar |
+| `value` | REAL | NULL su festivi/dati mancanti |
+| `fetched_at` | TIMESTAMP | TTL 24h |
+
+**PK**: `(series_id, date)`. **Index**: `idx_fred_series` (series_id).
+
+API: `propicks.market.fred_client.fetch_fred_series(series_id, start, end)`.
+
+Serie usate:
+- **B.3 regime daily composite**: `BAMLH0A0HYM2` (HY OAS), `VIXCLS` (VIX)
+- **B.5 macro overlay rotation**: `T10Y2Y` (yield slope), `DTWEXBGS` (USD broad)
 
 ---
 

@@ -244,7 +244,11 @@ def simulate_portfolio(
         # Quality gate (Fase B.4 SIGNAL_ROADMAP): cross-sectional top tercile
         # filter via quality_scores precomputed. Caveat look-ahead documentato
         # in docs/ABLATION_B4_QUALITY.md (yfinance info snapshot only).
+        # NOTA: ticker NOT IN quality_scores sono trattati come neutral (pass
+        # through) — no quality info ≠ low quality. Solo ticker presenti con
+        # score sotto percentile sono rifiutati.
         quality_pass_set: set[str] | None = None
+        quality_known_set: set[str] | None = None
         if (
             config.quality_filter_pct is not None
             and config.quality_scores is not None
@@ -256,6 +260,7 @@ def simulate_portfolio(
                 percentile=config.quality_filter_pct,
             )
             quality_pass_set = {t for t, ok in mask.items() if ok}
+            quality_known_set = set(config.quality_scores.keys())
 
         # Score tutti i candidate (gate + scoring, no threshold filter qui)
         scored: dict[str, float] = {}
@@ -265,8 +270,14 @@ def simulate_portfolio(
             # Membership gate point-in-time
             if eligible_set is not None and ticker not in eligible_set:
                 continue
-            # Quality gate (Fase B.4)
-            if quality_pass_set is not None and ticker not in quality_pass_set:
+            # Quality gate (Fase B.4): skip solo se ticker presente in
+            # quality_scores E sotto percentile. Ticker senza info = neutral.
+            if (
+                quality_pass_set is not None
+                and quality_known_set is not None
+                and ticker in quality_known_set
+                and ticker not in quality_pass_set
+            ):
                 continue
             # Earnings gate (Phase 8)
             if (

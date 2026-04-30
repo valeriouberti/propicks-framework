@@ -53,7 +53,7 @@ sono il layer real-time che yfinance (EOD) non copre.
 
 | Doc | Scope |
 |-----|-------|
-| [BACKTEST_GUIDE](docs/BACKTEST_GUIDE.md) | Walk-forward + portfolio + Monte Carlo |
+| [BACKTEST_GUIDE](docs/BACKTEST_GUIDE.md) | Walk-forward + portfolio + Monte Carlo + DSR |
 | [RISK_FRAMEWORK](docs/RISK_FRAMEWORK.md) | Kelly + vol target + VaR + correlation |
 | [PNL_ATTRIBUTION](docs/PNL_ATTRIBUTION.md) | α/β/sector/timing decomposition + Phase 7 gate |
 | [CALENDAR](docs/CALENDAR.md) | Earnings hard gate + macro events |
@@ -62,6 +62,26 @@ sono il layer real-time che yfinance (EOD) non copre.
 | [STORAGE](docs/STORAGE.md) | SQLite source of truth + cache |
 | [WATCHLIST_AND_TRADE_MGMT](docs/WATCHLIST_AND_TRADE_MGMT.md) | Watchlist, trailing/time stop, exposure |
 | [DATA_DICTIONARY](docs/DATA_DICTIONARY.md) | Schema SQLite — ogni tabella e colonna |
+
+### Signal evolution (Fase A-D SIGNAL_ROADMAP)
+
+Validation rigorosa + alpha core feature documentati passo per passo.
+Ogni fase ha decision gate + caveat espliciti.
+
+| Doc | Scope |
+|-----|-------|
+| [**SIGNAL_ROADMAP**](docs/SIGNAL_ROADMAP.md) | **Master tracker Fase A-E** — gate, findings, decision rule, status step-by-step |
+| [SURVIVORSHIP_BIAS_ANALYSIS](docs/SURVIVORSHIP_BIAS_ANALYSIS.md) | Fase A.1: bias quantificato (+15.4% return) + 170k row membership SP500 1996-2026 |
+| [THRESHOLD_CALIBRATION](docs/THRESHOLD_CALIBRATION.md) | Fase A.2: Bailey-Lopez DSR + Lopez de Prado CPCV + threshold sweep |
+| [BASELINE_COMPARISON](docs/BASELINE_COMPARISON.md) | Fase A.3: v1 (biased) vs v2 (unbiased) numbers archiviati JSON |
+| [ABLATION_B1_CROSS_SECTIONAL](docs/ABLATION_B1_CROSS_SECTIONAL.md) | Fase B.1: Jegadeesh-Titman (+0.50 Sharpe top 30) |
+| [ABLATION_B2_EARNINGS_REVISION](docs/ABLATION_B2_EARNINGS_REVISION.md) | Fase B.2: Chan-J-L (caveat look-ahead — live-only) |
+| [REGIME_COMPOSITE](docs/REGIME_COMPOSITE.md) | Fase B.3: HY OAS + breadth + VIX (lead 1-3 settimane) |
+| [ABLATION_B4_QUALITY](docs/ABLATION_B4_QUALITY.md) | Fase B.4: Asness QMJ (caveat look-ahead) |
+| [MACRO_OVERLAY](docs/MACRO_OVERLAY.md) | Fase B.5: sector × 5 macro features sensitivity matrix |
+| [ABLATION_B6_CUMULATIVE](docs/ABLATION_B6_CUMULATIVE.md) | Fase B.6: ablation B.1+B.2+B.4 + DSR multi-trial |
+| [ABLATION_C_CUMULATIVE](docs/ABLATION_C_CUMULATIVE.md) | Fase C: universe-aware percentile + OBV + multi-lookback |
+| [DECAY_MONITOR](docs/DECAY_MONITOR.md) | Fase D.4: CUSUM + SPRT + rolling Sharpe early-warning |
 
 ### Architettura & Workflow
 
@@ -112,6 +132,9 @@ Per setup completo (Docker, scheduler daemon, bot Telegram) vedi
 | Reporting | `propicks-report weekly/monthly/attribution` | `5_Reports.py` | — |
 | Backtest single | `propicks-backtest --period 3y` | `6_Backtest.py` | — |
 | Backtest portfolio | `propicks-backtest --portfolio --monte-carlo` | `11_Backtest_Portfolio.py` | — |
+| Backtest survivorship-correct | `propicks-backtest --portfolio --historical-membership sp500` | *(non ancora wired)* | — |
+| Backtest cross-sectional rank | `propicks-backtest --portfolio --cross-sectional --threshold 80` | *(non ancora wired)* | — |
+| Threshold calibration (DSR) | `propicks-calibrate --thresholds "60:80:5" --use-cpcv` | *(non ancora wired)* | — |
 | Watchlist | `propicks-watchlist add/list/status` | `7_Watchlist.py` | — |
 | Calendar | `propicks-calendar earnings/macro/check` | `9_Calendar.py` | — |
 | Scheduler | `propicks-scheduler run/job/alerts` | `10_Scheduler.py` | — |
