@@ -86,6 +86,28 @@ with tab_manual:
         force_ai = force_ai_m
         submitted = True
 
+        # Compute results inline + persist in session_state. Subsequent
+        # reruns (radio prompt selector, watchlist add button) restore from
+        # state instead of re-fetching. cached_analyze is @st.cache_data so
+        # initial fetch is amortized across the session.
+        with st.spinner(f"Scanning {len(tickers)} ticker…"):
+            _results_compute: list[dict] = []
+            for _t in tickers:
+                _r = cached_analyze(_t, strategy_val)
+                if _r is not None:
+                    _results_compute.append(_r)
+        if not _results_compute:
+            st.error(
+                "Nessun ticker analizzabile. Verifica i simboli o la connessione di rete."
+            )
+            st.stop()
+        st.session_state["momentum_results"] = _results_compute
+        st.session_state["momentum_strategy_val"] = strategy_val
+        st.session_state["momentum_validate_ai"] = validate_ai_m
+        st.session_state["momentum_force_ai"] = force_ai_m
+        st.session_state["momentum_branch"] = "manual"
+        st.session_state["momentum_first_render"] = True
+
 
 with tab_discovery:
     st.markdown(
@@ -176,6 +198,75 @@ with tab_discovery:
         force_ai = force_ai_d
         submitted = True
 
+        # Compute discovery results inline + persist. Without this, every
+        # post-submit rerun retriggers the full pipeline (5-10 min cold).
+        from propicks.domain.momentum_discovery import discover_momentum_candidates
+        from propicks.market.index_constituents import get_index_universe, index_label
+
+        _label = index_label(discover_universe)
+        try:
+            with st.spinner(f"Loading {_label} universe…"):
+                _universe = get_index_universe(
+                    discover_universe, force_refresh=discover_refresh
+                )
+        except Exception as exc:
+            st.error(f"Impossibile caricare l'universo {_label}: {exc}")
+            st.stop()
+
+        st.caption(
+            f"Universe **{_label}**: {len(_universe)} ticker. "
+            f"Stage 1 prefilter (RSI ≥ {discover_rsi_min}, "
+            f"dist_from_high ≤ {discover_max_dist})…"
+        )
+
+        _progress = st.progress(0.0, text="Discovery in corso…")
+
+        def _ui_progress_disc(stage: str, current: int, total: int, ticker: str) -> None:
+            if total <= 0:
+                return
+            pct = (
+                0.70 * (current / total)
+                if stage == "prefilter"
+                else 0.70 + 0.30 * (current / total)
+            )
+            _progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
+
+        with st.spinner(f"Running discovery pipeline su {_label}…"):
+            _out = discover_momentum_candidates(
+                _universe,
+                top_n=discover_top_n,
+                rsi_min=discover_rsi_min,
+                max_dist_from_high=discover_max_dist,
+                min_score=discover_min_score,
+                strategy=strategy_val,
+                prefilter_cap=discover_prefilter_cap,
+                progress_callback=_ui_progress_disc,
+            )
+        _progress.empty()
+
+        if not _out["candidates"]:
+            st.warning(
+                "**Nessun candidato qualificato dopo full scoring.** "
+                "Possibili cause: regime macro BEAR/STRONG_BEAR (gate weekly skippa "
+                "i long), oppure soglie prefilter troppo strict per il momento di "
+                "mercato. Prova a rilassare RSI min, allargare max dist 52w-high, "
+                "o abbassare min score a 45 per vedere classe C."
+            )
+            st.stop()
+
+        st.session_state["momentum_results"] = _out["candidates"]
+        st.session_state["momentum_discover_summary"] = {
+            "label": _label,
+            "universe_size": _out["universe_size"],
+            "prefilter_pass": _out["prefilter_pass"],
+            "scored": _out["scored"],
+        }
+        st.session_state["momentum_strategy_val"] = strategy_val
+        st.session_state["momentum_validate_ai"] = validate_ai_d
+        st.session_state["momentum_force_ai"] = force_ai_d
+        st.session_state["momentum_branch"] = "discovery"
+        st.session_state["momentum_first_render"] = True
+
 
 # Persistenza submit-flag in session_state: senza, ogni widget post-submit
 # (es. il radio "Target LLM" nei prompt expander, o il bottone watchlist)
@@ -188,84 +279,30 @@ if not st.session_state.get("momentum_active"):
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Batch scan — manual vs discovery branch
+# Restore from session_state. Computation happened inside the submit blocks
+# above; subsequent reruns triggered by post-submit widgets (radio prompt
+# selector, watchlist add) reuse the cached state instead of re-fetching.
 # ---------------------------------------------------------------------------
-results: list[dict] = []
+results: list[dict] = list(st.session_state.get("momentum_results") or [])
+strategy_val = st.session_state.get("momentum_strategy_val")
+validate_ai = st.session_state.get("momentum_validate_ai", False)
+force_ai = st.session_state.get("momentum_force_ai", False)
+branch = st.session_state.get("momentum_branch", "manual")
 
-if discover_universe is not None:
-    from propicks.domain.momentum_discovery import discover_momentum_candidates
-    from propicks.market.index_constituents import get_index_universe, index_label
+if not results:
+    st.session_state.pop("momentum_active", None)
+    st.warning("Stato sessione invalido — esegui di nuovo.")
+    st.stop()
 
-    label = index_label(discover_universe)
-    try:
-        with st.spinner(f"Loading {label} universe…"):
-            universe = get_index_universe(
-                discover_universe, force_refresh=discover_refresh
-            )
-    except Exception as exc:
-        st.error(f"Impossibile caricare l'universo {label}: {exc}")
-        st.stop()
-
-    st.caption(
-        f"Universe **{label}**: {len(universe)} ticker. "
-        f"Stage 1 prefilter (RSI ≥ {discover_rsi_min}, "
-        f"dist_from_high ≤ {discover_max_dist})…"
-    )
-
-    progress = st.progress(0.0, text="Discovery in corso…")
-
-    def _ui_progress(stage: str, current: int, total: int, ticker: str) -> None:
-        if total <= 0:
-            return
-        # Stage 1 occupa 0-70%, stage 2 70-100% (full scoring più lento)
-        if stage == "prefilter":
-            pct = 0.70 * (current / total)
-        else:
-            pct = 0.70 + 0.30 * (current / total)
-        progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
-
-    with st.spinner(f"Running discovery pipeline su {label}…"):
-        out = discover_momentum_candidates(
-            universe,
-            top_n=discover_top_n,
-            rsi_min=discover_rsi_min,
-            max_dist_from_high=discover_max_dist,
-            min_score=discover_min_score,
-            strategy=strategy_val,
-            prefilter_cap=discover_prefilter_cap,
-            progress_callback=_ui_progress,
-        )
-    progress.empty()
-
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("Universe", out["universe_size"])
-    summary_cols[1].metric("Prefilter pass", out["prefilter_pass"])
-    summary_cols[2].metric("Scored", out["scored"])
-    summary_cols[3].metric("Returned (top N)", len(out["candidates"]))
-
-    results = out["candidates"]
-
-    if not results:
-        st.warning(
-            "**Nessun candidato qualificato dopo full scoring.** "
-            "Possibili cause: regime macro BEAR/STRONG_BEAR (gate weekly skippa "
-            "i long), oppure soglie prefilter troppo strict per il momento di "
-            "mercato. Prova a rilassare RSI min, allargare max dist 52w-high, "
-            "o abbassare min score a 45 per vedere classe C."
-        )
-        st.stop()
-else:
-    with st.spinner(f"Scanning {len(tickers)} ticker…"):
-        for t in tickers:
-            r = cached_analyze(t, strategy_val)
-            if r is not None:
-                results.append(r)
-
-    if not results:
-        st.error(
-            "Nessun ticker analizzabile. Verifica i simboli o la connessione di rete."
-        )
-        st.stop()
+# Discovery summary metrics (only for discovery branch)
+if branch == "discovery":
+    _summary = st.session_state.get("momentum_discover_summary") or {}
+    if _summary:
+        _summary_cols = st.columns(4)
+        _summary_cols[0].metric("Universe", _summary["universe_size"])
+        _summary_cols[1].metric("Prefilter pass", _summary["prefilter_pass"])
+        _summary_cols[2].metric("Scored", _summary["scored"])
+        _summary_cols[3].metric("Returned (top N)", len(results))
 
 # ---------------------------------------------------------------------------
 # Auto-add classe A+B alla watchlist (coerente col CLI propicks-momentum)
@@ -275,7 +312,10 @@ else:
 actionable = [
     r for r in results if r.get("classification", "").startswith(("A", "B"))
 ]
-if actionable:
+# Guard ``momentum_first_render``: side-effect (watchlist DB write + toast)
+# only on the first render after submit, not on every subsequent rerun
+# (radio click etc.).
+if actionable and st.session_state.pop("momentum_first_render", False):
     from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
 
     wl = load_watchlist()

@@ -108,6 +108,29 @@ with tab_manual:
         force_ai = force_ai_m
         submitted = True
 
+        # Compute results immediately and persist in session_state so that
+        # subsequent reruns (caused by widgets post-submit, e.g. the radio
+        # in the prompt selector or the watchlist add button) can reuse the
+        # data without re-fetching. cached_analyze_contra is already
+        # @st.cache_data so this fetch is cheap on cache hit.
+        with st.spinner("Fetching VIX…"):
+            _vix_compute = cached_vix()
+        with st.spinner(f"Scanning {len(tickers)} ticker (contrarian)…"):
+            _results_compute: list[dict] = []
+            for _t in tickers:
+                _r = cached_analyze_contra(_t, _vix_compute)
+                if _r is not None:
+                    _results_compute.append(_r)
+        if not _results_compute:
+            st.error("Nessun ticker analizzabile. Verifica i simboli o la connessione.")
+            st.stop()
+        st.session_state["contra_results"] = _results_compute
+        st.session_state["contra_vix"] = _vix_compute
+        st.session_state["contra_branch"] = "manual"
+        st.session_state["contra_validate_ai"] = validate_ai_m
+        st.session_state["contra_force_ai"] = force_ai_m
+        st.session_state["contra_first_render"] = True
+
 
 with tab_discovery:
     st.markdown(
@@ -174,6 +197,77 @@ with tab_discovery:
         force_ai = force_ai_d
         submitted = True
 
+        # Compute discovery results immediately and persist in session_state.
+        # Discovery pipeline can take 5-10 min on cold cache → without this
+        # persistence, every post-submit rerun (radio click, watchlist add)
+        # would retrigger the full pipeline.
+        from propicks.domain.contrarian_discovery import discover_contra_candidates
+        from propicks.market.index_constituents import get_index_universe, index_label
+
+        with st.spinner("Fetching VIX…"):
+            _vix_compute = cached_vix()
+        _label = index_label(discover_universe)
+        try:
+            with st.spinner(f"Loading {_label} universe…"):
+                _universe = get_index_universe(
+                    discover_universe, force_refresh=discover_refresh
+                )
+        except Exception as exc:
+            st.error(f"Impossibile caricare l'universo {_label}: {exc}")
+            st.stop()
+
+        st.caption(
+            f"Universe **{_label}**: {len(_universe)} ticker. "
+            f"Stage 1 prefilter (RSI ≤ {discover_rsi_max}, "
+            f"distance ≥ {discover_atr_min}× ATR)…"
+        )
+        _progress = st.progress(0.0, text="Discovery in corso…")
+
+        def _ui_progress_disc(stage: str, current: int, total: int, ticker: str) -> None:
+            if total <= 0:
+                return
+            pct = (
+                0.70 * (current / total)
+                if stage == "prefilter"
+                else 0.70 + 0.30 * (current / total)
+            )
+            _progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
+
+        with st.spinner(f"Running discovery pipeline su {_label}…"):
+            _out = discover_contra_candidates(
+                _universe,
+                top_n=discover_top_n,
+                rsi_max=discover_rsi_max,
+                atr_distance_min=discover_atr_min,
+                min_score=discover_min_score,
+                vix=_vix_compute,
+                progress_callback=_ui_progress_disc,
+            )
+        _progress.empty()
+
+        if not _out["candidates"]:
+            st.warning(
+                "**Nessun candidato qualificato dopo full scoring.** "
+                "Possibili cause: regime macro contrarian non favorevole "
+                "(STRONG_BULL/STRONG_BEAR azzerano il composite via hard gate), "
+                "oppure soglie prefilter troppo strict per il momento di mercato. "
+                "Prova a rilassare RSI max o distance ATR min."
+            )
+            st.stop()
+
+        st.session_state["contra_results"] = _out["candidates"]
+        st.session_state["contra_vix"] = _vix_compute
+        st.session_state["contra_discover_summary"] = {
+            "label": _label,
+            "universe_size": _out["universe_size"],
+            "prefilter_pass": _out["prefilter_pass"],
+            "scored": _out["scored"],
+        }
+        st.session_state["contra_branch"] = "discovery"
+        st.session_state["contra_validate_ai"] = validate_ai_d
+        st.session_state["contra_force_ai"] = force_ai_d
+        st.session_state["contra_first_render"] = True
+
 
 # Persistenza submit-flag in session_state: senza, ogni widget post-submit
 # (es. il radio "Target LLM" nei prompt expander) causa un Streamlit rerun
@@ -186,104 +280,58 @@ if not st.session_state.get("contra_active"):
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Fetch VIX una volta, propaga a tutti i ticker (contesto di mercato condiviso)
+# Restore from session_state (results were computed inside the submit blocks
+# above and persisted there). Subsequent reruns triggered by post-submit
+# widgets (radio prompt selector, watchlist button) read from session_state
+# instead of re-running the discovery pipeline (5-10 min cold) or the
+# yfinance fetch loop.
 # ---------------------------------------------------------------------------
-with st.spinner("Fetching VIX…"):
-    vix = cached_vix()
+results: list[dict] = list(st.session_state.get("contra_results") or [])
+vix = st.session_state.get("contra_vix")
+validate_ai = st.session_state.get("contra_validate_ai", False)
+force_ai = st.session_state.get("contra_force_ai", False)
+branch = st.session_state.get("contra_branch", "manual")
+
+if not results:
+    # Defensive: contra_active is set but results missing. Reset and retry.
+    st.session_state.pop("contra_active", None)
+    st.warning("Stato sessione invalido — esegui di nuovo.")
+    st.stop()
 
 if vix is None:
     st.warning(
         "VIX non disponibile — market context sub-score userà fallback neutrale."
     )
 else:
-    vix_label = "euforia (edge collassa)" if vix <= 14 else "paura (edge)" if vix >= 25 else "neutrale"
+    vix_label = (
+        "euforia (edge collassa)"
+        if vix <= 14
+        else "paura (edge)"
+        if vix >= 25
+        else "neutrale"
+    )
     st.caption(f"VIX corrente: **{vix:.2f}** — {vix_label}")
 
-# ---------------------------------------------------------------------------
-# Batch scan — manual vs discovery branch
-# ---------------------------------------------------------------------------
-results: list[dict] = []
-
-if discover_universe is not None:
-    from propicks.domain.contrarian_discovery import discover_contra_candidates
-    from propicks.market.index_constituents import get_index_universe, index_label
-
-    label = index_label(discover_universe)
-    try:
-        with st.spinner(f"Loading {label} universe…"):
-            universe = get_index_universe(
-                discover_universe, force_refresh=discover_refresh
-            )
-    except Exception as exc:
-        st.error(f"Impossibile caricare l'universo {label}: {exc}")
-        st.stop()
-
-    st.caption(
-        f"Universe **{label}**: {len(universe)} ticker. "
-        f"Stage 1 prefilter (RSI ≤ {discover_rsi_max}, "
-        f"distance ≥ {discover_atr_min}× ATR)…"
-    )
-
-    progress = st.progress(0.0, text="Discovery in corso…")
-
-    def _ui_progress(stage: str, current: int, total: int, ticker: str) -> None:
-        # Stage 1 conta da 0 a total, stage 2 idem. Usiamo stage come prefisso.
-        if total <= 0:
-            return
-        # Stage 1 occupa 0-70%, stage 2 70-100% (full scoring più lento ma fewer ticker)
-        if stage == "prefilter":
-            pct = 0.70 * (current / total)
-        else:
-            pct = 0.70 + 0.30 * (current / total)
-        progress.progress(min(pct, 1.0), text=f"[{stage}] {current}/{total} · {ticker}")
-
-    with st.spinner(f"Running discovery pipeline su {label}…"):
-        out = discover_contra_candidates(
-            universe,
-            top_n=discover_top_n,
-            rsi_max=discover_rsi_max,
-            atr_distance_min=discover_atr_min,
-            min_score=discover_min_score,
-            vix=vix,
-            progress_callback=_ui_progress,
-        )
-    progress.empty()
-
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("Universe", out["universe_size"])
-    summary_cols[1].metric("Prefilter pass", out["prefilter_pass"])
-    summary_cols[2].metric("Scored", out["scored"])
-    summary_cols[3].metric("Returned (top N)", len(out["candidates"]))
-
-    results = out["candidates"]
-
-    if not results:
-        st.warning(
-            "**Nessun candidato qualificato dopo full scoring.** "
-            "Possibili cause: regime macro contrarian non favorevole "
-            "(STRONG_BULL/STRONG_BEAR azzerano il composite via hard gate), "
-            "oppure soglie prefilter troppo strict per il momento di mercato. "
-            "Prova a rilassare RSI max o distance ATR min."
-        )
-        st.stop()
-else:
-    with st.spinner(f"Scanning {len(tickers)} ticker (contrarian)…"):
-        for t in tickers:
-            r = cached_analyze_contra(t, vix)
-            if r is not None:
-                results.append(r)
-
-    if not results:
-        st.error("Nessun ticker analizzabile. Verifica i simboli o la connessione.")
-        st.stop()
+# Discovery summary metrics (only for discovery branch)
+if branch == "discovery":
+    _summary = st.session_state.get("contra_discover_summary") or {}
+    if _summary:
+        _summary_cols = st.columns(4)
+        _summary_cols[0].metric("Universe", _summary["universe_size"])
+        _summary_cols[1].metric("Prefilter pass", _summary["prefilter_pass"])
+        _summary_cols[2].metric("Scored", _summary["scored"])
+        _summary_cols[3].metric("Returned (top N)", len(results))
 
 # ---------------------------------------------------------------------------
-# Auto-add classe A+B alla watchlist con source=auto_scan_contra
+# Auto-add classe A+B alla watchlist con source=auto_scan_contra.
+# Guard ``contra_first_render`` — il flag è settato a True nei branch submit
+# e consumato qui (pop) così l'auto-add fa side-effect SOLO al primo render
+# post-submit, non a ogni rerun da widget interattivi (radio prompt, button).
 # ---------------------------------------------------------------------------
 actionable = [
     r for r in results if r.get("classification", "").startswith(("A", "B"))
 ]
-if actionable:
+if actionable and st.session_state.pop("contra_first_render", False):
     from propicks.io.watchlist_store import add_to_watchlist, load_watchlist
 
     wl = load_watchlist()
