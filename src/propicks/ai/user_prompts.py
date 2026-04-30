@@ -14,6 +14,7 @@ consumate dalla dashboard per incollare il ticker corrente senza edit manuale.
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 
 # Pattern per rimuovere la sezione "# Web search usage" dal SYSTEM_PROMPT nel
 # build Perplexity. La sezione descrive il tool web_search server-side
@@ -51,7 +52,27 @@ def is_italian_ticker(ticker: str) -> bool:
     return ticker.upper().endswith(".MI")
 
 
-def perplexity_2a(ticker: str, company_name: str = "", strategy: str = "") -> str:
+def _today_iso(as_of_date: str | None = None) -> str:
+    """Date anchor per i prompt Perplexity.
+
+    Sonar (Sonar / Sonar Pro / Sonar Reasoning) interpreta i riferimenti
+    temporali relativi (``last 30 days``, ``next 2 weeks``) usando il proprio
+    cutoff di training se manca un anchor esplicito. Il risultato è stale
+    info ~30% delle volte. Anteporre ``Today is YYYY-MM-DD.`` ai prompt
+    forza Sonar a calcolare le finestre rispetto a oggi.
+
+    Restituisce la stringa ISO della data fornita, o oggi se ``None``.
+    """
+    return as_of_date or _date.today().isoformat()
+
+
+def perplexity_2a(
+    ticker: str,
+    company_name: str = "",
+    strategy: str = "",
+    *,
+    as_of_date: str | None = None,
+) -> str:
     """Prompt 2A — catalyst/news analysis for NEW basket entries (non-IT stocks).
 
     English by design: per `is_italian_ticker` this prompt is invoked only for
@@ -61,10 +82,16 @@ def perplexity_2a(ticker: str, company_name: str = "", strategy: str = "") -> st
     Pro / Sonar Reasoning produce richer citations and reasoning in English
     than in Italian. Italian-language variant for FTSE MIB names is in
     ``perplexity_2b``.
+
+    ``as_of_date`` (ISO YYYY-MM-DD, default oggi) viene anteposto per
+    ancorare le finestre temporali — vedi ``_today_iso`` per il razionale.
     """
     name = company_name or ticker
     strat = strategy or "Pro Picks"
-    return f"""I'm a trader evaluating whether to enter a position in {ticker} ({name}).
+    today = _today_iso(as_of_date)
+    return f"""Today is {today}.
+
+I'm a trader evaluating whether to enter a position in {ticker} ({name}).
 The name has just been added to the "{strat}" AI strategy on Investing Pro Picks.
 
 I need a quick, fact-based briefing — no opinions, only verifiable facts with
@@ -104,46 +131,97 @@ explicitly rather than producing a synthesized opinion. No generic outlook,
 no disclaimers, no "consult an advisor" — only verifiable facts."""
 
 
-def perplexity_2b(ticker: str, company_name: str = "") -> str:
-    """Prompt 2B — analisi per titoli italiani (FTSE MIB)."""
+def perplexity_2b(
+    ticker: str,
+    company_name: str = "",
+    *,
+    as_of_date: str | None = None,
+) -> str:
+    """Prompt 2B — analisi per titoli italiani (FTSE MIB).
+
+    Versione Sonar-aware:
+    - Anchor data esplicito (anti-stale).
+    - P/E storico 5y: chiede fonte specifica e ammette esplicitamente
+      "non disponibile" come risposta valida (Sonar tende a confabulare
+      medie storiche se non vede il dato).
+    - Articoli recenti: titolo + data + URL distinti (no aggregazione).
+    - Fonti italiane in priorità decrescente per indirizzare il retrieval.
+    """
     name = company_name or ticker
-    return f"""Sto valutando {ticker} ({name}) per il mio portafoglio
-di azioni italiane.
+    today = _today_iso(as_of_date)
+    return f"""Oggi è {today}.
 
-Analisi specifica per il mercato italiano:
+Sto valutando {ticker} ({name}) per il mio portafoglio di azioni italiane.
+Analisi fattuale, no opinioni, no consensus aggregato.
 
-1. FONDAMENTALI RAPIDI:
-   - P/E attuale vs media settore e vs media storica 5 anni
-   - Dividend yield e prossima data stacco dividendo
-   - Debito netto / EBITDA
-   - Ultima guidance del management
+Fonti preferite in ordine: Borsa Italiana (borsaitaliana.it), Sole 24 Ore,
+Mediobanca Securities, Equita SIM, Intesa Sanpaolo Research, Reuters Italia,
+MF/Milano Finanza, Bloomberg.
 
-2. CATALYST ITALIA-SPECIFICI:
-   - Impatto PNRR o incentivi governativi sul settore?
-   - Esposizione a mercati emergenti o rischio geopolitico?
-   - Posizione nell'indice FTSE MIB (entrata/uscita recente)?
+1. FONDAMENTALI RAPIDI (ultimo trimestre disponibile):
+   - P/E attuale: dammi il valore + fonte + data di calcolo.
+   - P/E medio 5 anni: cita il dato SOLO se trovi una serie storica
+     verificabile (es. su Borsa Italiana, Mediobanca Securities,
+     Bloomberg). Se NON disponibile pubblicamente, scrivi
+     "P/E medio 5y: non disponibile su fonti pubbliche" — non stimare.
+   - Dividend yield corrente e prossima data stacco (se annunciata).
+   - Debito netto / EBITDA all'ultima trimestrale (cita il valore + il
+     trimestre di riferimento, es. "1.8x al Q4 2025").
+   - Ultima guidance management: data del comunicato + direzione
+     (alzata / confermata / tagliata) + key numbers.
+
+2. CATALYST ITALIA-SPECIFICI (ultimi 90 giorni):
+   - Impatto PNRR / incentivi governativi sul settore: notizia specifica
+     con data, non commento generico.
+   - Esposizione mercati emergenti / rischio geopolitico (es. Russia,
+     Cina, MENA): % fatturato esterno se nota.
+   - Index events: entrata/uscita FTSE MIB, modifiche peso, riapertura
+     copertura sell-side.
 
 3. RISCHI SPECIFICI:
-   - Concentrazione azionariato (patto parasociale, fondazioni, stato)?
-   - Liquidità media giornaliera (volume medio 30gg)?
-   - Prossimi eventi: assemblea, aumento capitale, OPA?
+   - Concentrazione azionariato: patti parasociali noti, presenza CDP /
+     fondazioni / Stato / famiglia di controllo, % flottante.
+   - Liquidità: ADV (controvalore medio) ultimi 30gg in EUR.
+   - Eventi imminenti annunciati: assemblea, aumento capitale, OPA,
+     spin-off, scadenze covenant.
 
-4. NEWS RECENTI:
-   - Ultimi 3 articoli rilevanti da Sole 24 Ore, MF, Reuters Italia
-   - Commenti recenti di analisti italiani (Mediobanca, Intesa, Equita)
+4. NEWS RECENTI (ultimi 30 giorni — formato richiesto):
+   Dammi ESATTAMENTE 3 notizie distinte, ognuna in questo formato:
+   - Titolo: "<titolo originale>"
+     Fonte: <nome testata>
+     Data: YYYY-MM-DD
+     URL: <link diretto se disponibile>
+     Sintesi: <una riga, max 25 parole>
 
-Rispondi con dati numerici precisi e fonti."""
+   Se non trovi 3 notizie materiali distinte, dammene meno e dichiaralo:
+   "trovate solo N notizie materiali nel periodo".
+
+5. ANALYST COVERAGE (se disponibile):
+   - Rating più recenti da Mediobanca / Equita / Intesa: data + rating +
+     target price. Solo se trovi il dato verificato; altrimenti
+     "coverage non reperibile".
+
+Output: dati numerici precisi, date in formato YYYY-MM-DD, URL espliciti
+quando possibile. Se un dato non è verificabile su fonte pubblica, dichiaralo
+esplicitamente — preferisco un "non disponibile" a una stima sintetica."""
 
 
-def perplexity_2c(ticker: str) -> str:
+def perplexity_2c(ticker: str, *, as_of_date: str | None = None) -> str:
     """Prompt 2C — quick pre-entry check (last 24h red flags).
 
     Auto-language: Italian for `.MI` tickers (FTSE MIB), English otherwise.
     Same fact-base focus across both versions, only the wording adapts to the
     most likely source language for the name being checked.
+
+    ``as_of_date`` (ISO YYYY-MM-DD, default oggi): ancora "ultime 24h" /
+    "prossime 2 settimane" alla data corretta. Senza anchor Sonar usa il
+    suo cutoff training → "ultime 24h" diventa stale.
     """
+    today = _today_iso(as_of_date)
     if is_italian_ticker(ticker):
-        return f"""Check rapido su {ticker} prima di entrare in posizione oggi.
+        return f"""Oggi è {today}.
+
+Check rapido su {ticker} prima di entrare in posizione oggi.
 
 Rispondimi SOLO con:
 1. C'è qualche news delle ultime 24 ore che cambia il quadro?
@@ -154,7 +232,9 @@ Rispondimi SOLO con:
 Solo fatti, risposte brevi. Se non c'è nulla di rilevante, dimmi
 "Nessun red flag nelle ultime 24h"."""
 
-    return f"""Quick pre-entry check on {ticker} before opening a position today.
+    return f"""Today is {today}.
+
+Quick pre-entry check on {ticker} before opening a position today.
 
 Answer ONLY:
 1. Any material news in the last 24 hours that changes the picture?
@@ -166,7 +246,12 @@ Facts only, short answers. If nothing material, just say
 "No red flags in the last 24h"."""
 
 
-def perplexity_contrarian(ticker: str, company_name: str = "") -> str:
+def perplexity_contrarian(
+    ticker: str,
+    company_name: str = "",
+    *,
+    as_of_date: str | None = None,
+) -> str:
     """Prompt contrarian — FLUSH vs BREAK discriminator on the selloff cause.
 
     Mirror del system prompt di ``contrarian_validator``: l'engine ha già
@@ -178,11 +263,18 @@ def perplexity_contrarian(ticker: str, company_name: str = "") -> str:
     resto. I nomi US/EU/UK hanno fonti primarie in inglese (analyst notes,
     SEC filings, earnings call) mentre per i .MI il contesto Equita /
     Mediobanca / Sole 24 Ore è meglio leggibile in italiano.
+
+    ``as_of_date`` (ISO YYYY-MM-DD, default oggi): ancora "ultimi 5-15
+    giorni" / "ultime 2 settimane" alla data corretta. Critico per Sonar
+    su query event-driven dove il selloff è recente per definizione.
     """
     name = company_name or ticker
+    today = _today_iso(as_of_date)
 
     if is_italian_ticker(ticker):
-        return f"""Sto valutando un setup CONTRARIAN su {ticker} ({name}).
+        return f"""Oggi è {today}.
+
+Sto valutando un setup CONTRARIAN su {ticker} ({name}).
 
 Il titolo è oversold (RSI < 30, stretched multi-ATR sotto EMA50) ma il trend
 strutturale di lungo periodo (sopra EMA200 weekly) è ancora intatto. La mia
@@ -228,7 +320,9 @@ Rispondi con dati precisi, date, citazioni di analyst notes se disponibili.
 "causa unknown"** invece di assumere flush. Assenza di evidenza di break NON
 è evidenza di assenza."""
 
-    return f"""I'm evaluating a CONTRARIAN long setup on {ticker} ({name}).
+    return f"""Today is {today}.
+
+I'm evaluating a CONTRARIAN long setup on {ticker} ({name}).
 
 The name is oversold (RSI < 30, multi-ATR stretched below the 50-EMA) but the
 long-term structural trend (above the 200-week EMA) is still intact. My one
@@ -610,7 +704,12 @@ def llm_generic_etf_validate_full(
     )
 
 
-def perplexity_etf_rotation(ranked: list[dict], region: str) -> str:
+def perplexity_etf_rotation(
+    ranked: list[dict],
+    region: str,
+    *,
+    as_of_date: str | None = None,
+) -> str:
     """Synthetic Perplexity prompt for ETF rotation — equivalent of ``perplexity_2a``.
 
     English by design: the sector-rotation universe (SPDR Select Sector,
@@ -623,8 +722,11 @@ def perplexity_etf_rotation(ranked: list[dict], region: str) -> str:
         ranked: output of ``rank_universe`` (sorted by score). Uses the
             top-3 tickers and sector keys to personalise the questions.
         region: ``US`` | ``EU`` | ``WORLD`` | ``ALL`` — included in prompt context.
+        as_of_date: ISO YYYY-MM-DD anchor (default oggi). Necessario per
+            "next 2-4 weeks" / "last 30 days" su Sonar.
     """
     top = ranked[:3] if ranked else []
+    today = _today_iso(as_of_date)
     if not top:
         top_str = "(no top candidates available)"
     else:
@@ -641,7 +743,31 @@ def perplexity_etf_rotation(ranked: list[dict], region: str) -> str:
 
     top_ticker = top[0].get("ticker", "?") if top else "?"
 
-    return f"""I'm evaluating a sector ETF rotation — region {region_label}.
+    # Vincolo alternative_sector: lista esplicita dei candidati ammessi
+    # (universe completo passato dal ranker meno la top-3). Senza questa
+    # lista Sonar tende a inventare "Industrials defensive" o ticker non
+    # esistenti come ZPDA.DE. La lista è region-aware perché viene dal
+    # ``ranked`` stesso, che il chiamante costruisce sull'universo corretto.
+    alternative_pool = [r for r in ranked[3:] if r.get("ticker")]
+    if alternative_pool:
+        alt_list = ", ".join(
+            f"{r['ticker']} ({r.get('sector_key', '?')})" for r in alternative_pool
+        )
+        alt_block = (
+            f"   - Choose from THIS list ONLY (do NOT invent tickers): {alt_list}.\n"
+            "   - Pick exactly one ticker as the \"next in line\" and explain "
+            "the macro/flow case in 2-3 sentences. If none deserves the upgrade, "
+            "say so explicitly: \"none of the alternatives outranks the top-3\"."
+        )
+    else:
+        alt_block = (
+            "   - The ranker's universe contains only the top-3 above. "
+            "Skip this section."
+        )
+
+    return f"""Today is {today}.
+
+I'm evaluating a sector ETF rotation — region {region_label}.
 The top-3 candidates by composite score (RS vs benchmark + regime fit + abs
 momentum + trend) are:
 
@@ -680,15 +806,359 @@ I need a macro/catalyst cross-check covering the next 4-12 weeks:
    - Concentration risk: is the top-pick dominated by 3-5 mega-cap names
      that could move together?
 
-5. ALTERNATIVE SECTOR:
-   - Outside the top-3, which sector is the "next in line" that the
-     framework might be underweighting? What's the case for it and which
-     specific catalyst would put it on top?
+5. ALTERNATIVE SECTOR (constrained):
+{alt_block}
 
 Respond with hard numbers, dates, and source citations. If the search
 returns inconclusive evidence on a point, say so explicitly — an "unknown"
 is more useful than a synthesized generic opinion. No disclaimers, no
 "consult an advisor" — verifiable macro facts only."""
+
+
+# ---------------------------------------------------------------------------
+# Sonar-native validate prompts — variante distillata per Sonar / Sonar Pro /
+# Sonar Reasoning (Perplexity nativi)
+# ---------------------------------------------------------------------------
+# I ``perplexity_*_validate_full`` riusano i SYSTEM_PROMPT Anthropic (lunghi,
+# Claude-tuned, con dimensioni soggettive da analyst training). Su Sonar
+# quel pattern degrada per tre ragioni:
+#
+# 1. **Context utilization peggiore**: Sonar dilui le istruzioni su system
+#    prompt > 50 righe. Le 6 dimensioni di ``confidence_by_dimension``
+#    vengono riempite meccanicamente con valori 5-7 → signal perso.
+# 2. **Self-consistency check inaffidabile**: Sonar non fa chain-of-thought
+#    interno. Le hard rule vanno trasformate in regole **computabili**
+#    (es: ``if R/R < 2.0 then verdict = CAUTION``).
+# 3. **JSON mode strict inaffidabile su Sonar Pro**: il fallback
+#    ``---JSON---`` separator deve essere il **default consigliato**, non
+#    il piano B.
+#
+# Differenze chiave vs ``perplexity_*_validate_full``:
+# - Schema in cima (Sonar honoriza meglio gli schema visti per primi).
+# - System prompt distillato (~30 righe vs ~70): persona + framework +
+#   regole computabili + istruzioni retrieval-first.
+# - ``confidence_by_dimension`` ridotto da 6 a 3 chiavi.
+# - Output formato: prosa breve + ``---JSON---`` separator (default).
+# - Le dimensioni soggettive ("moat", "capital allocation track record")
+#   sono tradotte in retrieval queries esplicite.
+#
+# I ``perplexity_*_validate_full`` originali restano disponibili per quando
+# l'utente sceglie un modello Pro (Claude/GPT/Gemini via Perplexity Pro)
+# che gestisce bene system prompt lunghi.
+
+_SONAR_HEADER = """# MODEL GUIDANCE — Sonar-native (Perplexity)
+
+Stai operando in Sonar / Sonar Pro / Sonar Reasoning con web search built-in
+sempre attiva. Linee guida:
+
+- Cita ogni fact con [source.com, YYYY-MM-DD] inline o come footnote.
+- Se un dato non è recuperabile via search, scrivi ``unknown — not found``.
+  NON inferire, NON estrapolare dal training.
+- Output format: prosa breve di analisi (max 200 parole) + separator
+  ``---JSON---`` su riga propria + JSON valido sotto. Lo schema è in cima.
+
+---
+
+"""
+
+
+_SONAR_STOCK_SCHEMA = {
+    "verdict": "CONFIRM | CAUTION | REJECT",
+    "conviction_score": "integer 0-10",
+    "thesis_summary": "string, 2-3 sentences, falsifiable",
+    "bull_case": "string, falsifiable, with at least one cited fact",
+    "bear_case": "string, falsifiable, with at least one cited fact",
+    "reward_risk_ratio": "float, computed as (target - current_price) / (current_price - stop), 2 decimals",
+    "stop_suggested": "float, price level",
+    "target_suggested": "float, price level",
+    "stop_rationale": "string, one sentence, references a structural level (prior swing low, EMA, pivot)",
+    "target_rationale": "string, one sentence, references a structural level",
+    "time_horizon": "SHORT (1-4w) | MEDIUM (1-3m) | LONG (3-6m)",
+    "invalidation_deadline": "YYYY-MM-DD date",
+    "entry_tactic": "MARKET_NOW | LIMIT_PULLBACK | WAIT_VOLUME_CONFIRMATION | SCALE_IN",
+    "alignment_with_technicals": "STRONG | MIXED | WEAK",
+    "confidence_by_dimension": {
+        "fundamentals": "integer 0-10 (business durability + balance sheet)",
+        "catalyst_credibility": "integer 0-10 (3-6m catalyst path)",
+        "risk_asymmetry": "integer 0-10 (R/R credibility)",
+    },
+    "key_risks": ["list of strings, 2-4 items, specific"],
+    "invalidation_triggers": ["list of strings, 2-4 items, observable conditions"],
+    "sources": ["list of [source.com, YYYY-MM-DD] tuples cited"],
+}
+
+
+_SONAR_STOCK_SYSTEM = """You are a senior long/short equity PM (15+ years, fundamental
+fund). You are the qualitative validation layer for a momentum stock engine
+that has already passed a quantitative technical screen. Your job: produce
+an independent verdict.
+
+# Retrieval queries (use web search):
+- Most recent earnings: beat/miss vs consensus + guidance change.
+- Next earnings date (exact YYYY-MM-DD).
+- Short interest as % of float and days-to-cover.
+- Sector ETF performance last 30 days (e.g. XLE, GDX, XLK).
+- Material company-specific news last 30 days.
+
+# Hard computable rules (apply mechanically, no interpretation):
+- IF reward_risk_ratio < 2.0 → verdict MUST be CAUTION or REJECT (never CONFIRM).
+- IF regime is BEAR or STRONG_BEAR → verdict MUST be REJECT unless bull_case
+  cites a specific falsifiable catalyst (e.g. buyout, idiosyncratic re-rating).
+- IF regime is STRONG_BEAR → verdict MUST be REJECT regardless.
+- IF conviction_score >= 7 AND alignment_with_technicals != STRONG → downgrade
+  conviction_score to 6.
+- CONFIRM requires: reward_risk_ratio >= 2.0 AND regime in
+  {STRONG_BULL, BULL, NEUTRAL} AND conviction_score >= 7.
+
+# Anti-fabrication:
+- Do NOT invent earnings dates, analyst targets, or short interest.
+  Use web_search results or write "unknown — not found".
+- Do NOT echo the engine's 0-100 technical scores. Your scale is 0-10.
+- Be specific and falsifiable: "strong moat" = useless;
+  "pricing power in ad auctions post-ATT" = useful.
+
+# Output: see schema at top of message. Prosa breve + ---JSON--- + JSON."""
+
+
+_SONAR_CONTRA_SCHEMA = {
+    "verdict": "CONFIRM | CAUTION | REJECT",
+    "conviction_score": "integer 0-10",
+    "thesis_summary": "string, 2-3 sentences, names the selloff cause",
+    "flush_vs_break": "FLUSH | BREAK | MIXED",
+    "catalyst_type": "macro_flush | sector_rotation | earnings_miss_fundamental | guidance_cut | fraud_or_accounting | technical_only | other",
+    "bull_case": "string, falsifiable",
+    "bear_case": "string, falsifiable",
+    "reversion_target": "float, price level (typically EMA50 daily)",
+    "invalidation_price": "float, price level (HARD STOP)",
+    "time_horizon_days": "integer 3-30 (typical 5-15 for clean setups)",
+    "entry_tactic": "MARKET_NOW | LIMIT_BELOW | SCALE_IN_TRANCHES | WAIT_STABILIZATION",
+    "confidence_by_dimension": {
+        "quality_persistence": "integer 0-10 (still high-quality in 12 months?)",
+        "catalyst_credibility": "integer 0-10 (confidence in FLUSH vs BREAK call)",
+        "risk_asymmetry": "integer 0-10 (R/R to reversion target)",
+    },
+    "key_risks": ["list of strings, 2-4 items"],
+    "invalidation_triggers": ["list of strings, 2-4 items"],
+    "sources": ["list of [source.com, YYYY-MM-DD] tuples cited"],
+}
+
+
+_SONAR_CONTRA_SYSTEM = """You are a senior event-driven / mean-reversion PM
+(15+ years, long/short fund). Your edge: separating quality names that got
+flushed (tradable) from quality names that are actually breaking (not tradable).
+
+The engine has already confirmed the technical oversold (RSI<30, multi-ATR
+below EMA50, above EMA200 weekly). Your job: classify the SELLOFF CAUSE.
+
+# Retrieval queries (priority order — selloff cause is recent by definition):
+- "<TICKER> news last 14 days" — the specific reason for the decline.
+- If earnings: beat/miss vs consensus + guidance change + management
+  commentary on transitory vs structural drivers.
+- Analyst reaction: are estimates being CUT sharply (BREAK signal) or
+  holding (FLUSH signal)?
+- Sector peer action: are peers down similar magnitude (sector/macro flush)
+  or is <TICKER> down more (name-specific = break risk)?
+- Regulatory/legal/accounting: SEC inquiry, restatement, auditor resignation.
+
+# Hard computable rules:
+- IF catalyst_type == "fraud_or_accounting" → verdict = REJECT (with prejudice).
+- IF catalyst_type == "guidance_cut" AND consensus estimates being cut sharply
+  → verdict = REJECT.
+- IF flush_vs_break == "BREAK" → verdict = REJECT.
+- IF regime == "STRONG_BULL" → verdict = REJECT (oversold edge collapses).
+- IF regime == "STRONG_BEAR" → verdict = REJECT (falling knife regime).
+- IF cause unknown after retrieval → catalyst_type = "technical_only" AND
+  verdict = CAUTION at most (do NOT assume flush; absence of evidence is
+  not evidence of absence).
+- CONFIRM requires: flush_vs_break in {FLUSH, MIXED-leaning-flush} AND
+  quality_persistence >= 7 AND catalyst_credibility >= 7 AND conviction >= 7.
+
+# Anti-fabrication:
+- Do NOT invent earnings dates, analyst revisions, or peer numbers.
+- Use web_search or write "unknown — not found".
+
+# Output: see schema at top of message. Prosa breve + ---JSON--- + JSON."""
+
+
+_SONAR_ETF_SCHEMA = {
+    "verdict": "CONFIRM | CAUTION | REJECT",
+    "conviction_score": "integer 0-10",
+    "thesis_summary": "string, 2-3 sentences",
+    "top_sector_verdict": "ticker from the proposed slate, OR 'FLAT' if no exposure recommended",
+    "alternative_sector": "ticker from the universe (NOT in top-3) OR null. MUST come from the constrained list provided.",
+    "bull_case": "string, falsifiable, with cited macro/flow data",
+    "bear_case": "string, falsifiable",
+    "stage": "EARLY (1-2M) | MID (3-6M) | LATE (6M+) | UNKNOWN",
+    "entry_tactic": "ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH",
+    "rebalance_horizon_weeks": "integer 2-12",
+    "confidence_by_dimension": {
+        "macro_fit": "integer 0-10 (rates/USD/commodities confirm ranking?)",
+        "breadth_and_flows": "integer 0-10 (broad participation + AUM flows)",
+        "rotation_stage": "integer 0-10 (early=high, late=low)",
+    },
+    "invalidation_triggers": ["list of strings, 2-4 items, observable macro/breadth conditions"],
+    "sources": ["list of [source.com, YYYY-MM-DD] tuples cited"],
+}
+
+
+_SONAR_ETF_SYSTEM = """You are a senior macro strategist / multi-asset PM
+(15+ years, sector rotation books). The engine has produced a ranked sector
+ETF slate based on RS, regime fit, abs momentum, and trend. Your job:
+stress-test the rotation thesis with macro/flow context the engine cannot see.
+
+# Retrieval queries:
+- US10Y / DXY / oil / copper / gold spot levels + last 30d direction.
+- Top-pick ETF: AUM flows last 30 days (Reuters fund flows, ETF.com).
+- Sector breadth: % constituents above 50-day MA for the top sector.
+- Cross-sector leadership: is the top sector actually leading on rolling 1M?
+- Policy events next 4-8 weeks: FOMC, CPI, OPEC, earnings season starts.
+
+# Hard computable rules:
+- IF regime == "STRONG_BEAR" → verdict = REJECT (or top_sector_verdict = "FLAT").
+- IF stage == "LATE" AND breadth_and_flows < 5 → verdict = CAUTION at most.
+- IF regime in {BEAR} AND proposed top is NOT defensive (XLP/XLU/XLV) → verdict = REJECT.
+- IF alternative_sector is NOT in the constrained list provided → set to null.
+- CONFIRM requires: conviction >= 7 AND breadth_and_flows >= 6 AND
+  stage in {EARLY, MID}.
+
+# Anti-fabrication:
+- Do NOT invent flow numbers, breadth %, commodity prices.
+- Do NOT invent ETF tickers — use only those in the slate or in the
+  alternative_sector constrained list provided in the user message.
+- Use web_search or write "unknown — not found".
+
+# Output: see schema at top of message. Prosa breve + ---JSON--- + JSON."""
+
+
+def _sonar_schema_block(schema: dict) -> str:
+    """Schema in cima al prompt — formato leggibile per Sonar.
+
+    Sonar honoriza meglio gli schema dichiarati come **primo elemento** del
+    messaggio (visione retrieval-first: "what do you want me to find/output").
+    Json indented + ensure_ascii=False per leggibilità nei log.
+    """
+    import json
+    return (
+        "# OUTPUT SCHEMA (read first)\n\n"
+        "```json\n"
+        + json.dumps(schema, indent=2, ensure_ascii=False)
+        + "\n```\n\n"
+        "Output format: prosa breve di analisi (max 200 parole) + separator\n"
+        "``---JSON---`` su riga propria + JSON valido sotto. Lo schema sopra\n"
+        "è la specifica esatta dei campi richiesti.\n\n"
+        "---\n\n"
+    )
+
+
+def sonar_stock_validate_full(
+    analysis: dict, as_of_date: str | None = None
+) -> str:
+    """Variante Sonar-native dello stock validate (momentum).
+
+    Pattern: SCHEMA in cima → SONAR_HEADER → SYSTEM distillato →
+    USER (render_user_prompt + date anchor).
+
+    Differenza vs ``perplexity_stock_validate_full``:
+    - Schema in cima invece che in fondo (Sonar honoriza meglio).
+    - System prompt ridotto a ~30 righe, retrieval-first.
+    - confidence_by_dimension a 3 chiavi (no 6).
+    - Hard rules computabili, no self-consistency check.
+    - Output format: prosa + ``---JSON---`` separator (default, no fallback).
+    """
+    from propicks.ai.prompts import render_user_prompt
+
+    today = _today_iso(as_of_date)
+    user_body = render_user_prompt(analysis, as_of_date=today)
+    return (
+        _sonar_schema_block(_SONAR_STOCK_SCHEMA)
+        + _SONAR_HEADER
+        + "# SYSTEM\n\n" + _SONAR_STOCK_SYSTEM.rstrip() + "\n\n"
+        + "---\n\n"
+        + "# USER\n\n"
+        + f"Today is {today}.\n\n"
+        + user_body.rstrip() + "\n"
+    )
+
+
+def sonar_contrarian_validate_full(
+    analysis: dict, as_of_date: str | None = None
+) -> str:
+    """Variante Sonar-native del contrarian validate.
+
+    Stesso pattern di ``sonar_stock_validate_full`` ma con
+    ``_SONAR_CONTRA_SCHEMA`` + ``_SONAR_CONTRA_SYSTEM`` (focus FLUSH/BREAK).
+    """
+    from propicks.ai.contrarian_prompts import render_contrarian_user_prompt
+
+    today = _today_iso(as_of_date)
+    user_body = render_contrarian_user_prompt(analysis, as_of_date=today)
+    return (
+        _sonar_schema_block(_SONAR_CONTRA_SCHEMA)
+        + _SONAR_HEADER
+        + "# SYSTEM\n\n" + _SONAR_CONTRA_SYSTEM.rstrip() + "\n\n"
+        + "---\n\n"
+        + "# USER\n\n"
+        + f"Today is {today}.\n\n"
+        + user_body.rstrip() + "\n"
+    )
+
+
+def sonar_etf_validate_full(
+    ranked: list[dict],
+    allocation: dict | None,
+    region: str,
+    benchmark: str,
+    shown: int = 11,
+    as_of_date: str | None = None,
+) -> str:
+    """Variante Sonar-native dell'ETF rotation validate.
+
+    Aggiunge automaticamente il blocco di alternative_sector vincolato alla
+    lista del ranker (universo - top-3) per evitare confabulazione di ticker
+    da parte di Sonar.
+    """
+    from propicks.ai.etf_prompts import render_etf_user_prompt
+
+    today = _today_iso(as_of_date)
+    user_body = render_etf_user_prompt(
+        ranked=ranked,
+        allocation=allocation,
+        as_of_date=today,
+        region=region,
+        benchmark=benchmark,
+        shown=shown,
+    )
+
+    # Lista vincolata per alternative_sector — universo escluse le prime 3.
+    # Se passata vuota, lascia che il modello metta null.
+    alt_pool = [r for r in ranked[3:] if r.get("ticker")]
+    if alt_pool:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_SECTOR — constrained list\n\n"
+            "Per il campo ``alternative_sector`` nello schema, scegli "
+            "ESCLUSIVAMENTE da questo elenco (o null):\n"
+            + "\n".join(
+                f"- {r['ticker']} ({r.get('sector_key', '?')})" for r in alt_pool
+            )
+            + "\n\nNON inventare ticker. Se nessuno merita l'upgrade, metti null.\n"
+        )
+    else:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_SECTOR\n\n"
+            "Universe contiene solo la top-3 mostrata sopra. "
+            "Imposta ``alternative_sector`` = null.\n"
+        )
+
+    return (
+        _sonar_schema_block(_SONAR_ETF_SCHEMA)
+        + _SONAR_HEADER
+        + "# SYSTEM\n\n" + _SONAR_ETF_SYSTEM.rstrip() + "\n\n"
+        + "---\n\n"
+        + "# USER\n\n"
+        + f"Today is {today}.\n\n"
+        + user_body.rstrip()
+        + alt_constraint
+    )
 
 
 # ---------------------------------------------------------------------------

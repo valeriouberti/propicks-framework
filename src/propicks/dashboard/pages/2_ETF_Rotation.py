@@ -54,7 +54,14 @@ with st.form("rotate_form", border=True):
     )
     submitted = st.form_submit_button("Esegui ranking", type="primary", width="stretch")
 
-if not submitted:
+# Persistenza submit-flag in session_state: senza, ogni widget post-submit
+# (es. il radio "Target LLM" nei prompt expander) causa un Streamlit rerun
+# in cui ``submitted`` torna False → ``st.stop()`` collassa il ranking e
+# il prompt selector sparisce. La key è scoped per pagina.
+if submitted:
+    st.session_state["etf_rotate_active"] = True
+
+if not st.session_state.get("etf_rotate_active"):
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -211,61 +218,90 @@ with st.expander("Prompt Perplexity rotation (copia-incolla)", expanded=False):
     st.code(perplexity_etf_rotation(ranked, region), language=None)
 
 # ---------------------------------------------------------------------------
-# Fallback validate completo — due varianti distinte. System prompt
-# Anthropic byte-equivalent in entrambi → compat piena con SDK / claude.ai.
+# Fallback validate completo — selettore target LLM con 3 varianti.
+# Vedi pages/1_Momentum.py per il razionale completo dei trade-off.
+# La variante Sonar nativo include constraint esplicito su alternative_sector
+# (lista universo - top-3) per evitare ticker confabulati.
 # ---------------------------------------------------------------------------
 with st.expander(
-    "Prompt --validate completo per Perplexity (Sonar / Reasoning / Pro)",
+    "Prompt --validate completo (selettore target LLM)",
     expanded=False,
 ):
     from datetime import date as _date
 
-    from propicks.ai.user_prompts import perplexity_etf_validate_full
+    from propicks.ai.user_prompts import (
+        llm_generic_etf_validate_full,
+        perplexity_etf_validate_full,
+        sonar_etf_validate_full,
+    )
+
+    _target_label = st.radio(
+        "Target LLM",
+        options=[
+            "Sonar (Perplexity nativo)",
+            "Perplexity Pro (Claude/GPT/Gemini via Pro)",
+            "Claude.ai / ChatGPT / Gemini diretto",
+        ],
+        index=0,
+        horizontal=False,
+        key="etf_prompt_target",
+        help=(
+            "Sonar nativo: prompt distillato + constraint esplicito su "
+            "alternative_sector (no ticker inventati). Perplexity Pro: "
+            "system prompt Claude completo. LLM diretto: Anthropic byte-per-byte."
+        ),
+    )
+
+    _today = _date.today().isoformat()
+    if _target_label.startswith("Sonar"):
+        st.caption(
+            "Ottimizzato per Sonar / Sonar Pro / Sonar Reasoning. Schema "
+            "JSON in cima, persona macro strategist distillata, regole "
+            "computabili (REJECT in STRONG_BEAR, CAUTION se LATE+breadth<5). "
+            "**Constraint esplicito** su `alternative_sector` (solo universo "
+            "rimanente, no ticker inventati). **Default consigliato**."
+        )
+        _prompt = sonar_etf_validate_full(
+            ranked=ranked,
+            allocation=allocation,
+            as_of_date=_today,
+            region=region,
+            benchmark=bench,
+        )
+    elif _target_label.startswith("Perplexity Pro"):
+        st.caption(
+            "Per Claude / GPT / Gemini eseguiti via Perplexity Pro. System "
+            "prompt Anthropic completo con sezione `# Web search usage` "
+            "rimossa (Perplexity ha search nativa). Schema JSON con fallback "
+            "`---JSON---`. NO constraint esplicito su alternative_sector — "
+            "il modello vede solo il system prompt originale."
+        )
+        _prompt = perplexity_etf_validate_full(
+            ranked=ranked,
+            allocation=allocation,
+            as_of_date=_today,
+            region=region,
+            benchmark=bench,
+        )
+    else:
+        st.caption(
+            "Per Claude.ai / console Anthropic / ChatGPT / Gemini direct. "
+            "System prompt Anthropic byte-per-byte → compat piena con SDK "
+            "Claude e claude.ai. Schema JSON strict. Verifica la context "
+            "window del modello target prima di incollare."
+        )
+        _prompt = llm_generic_etf_validate_full(
+            ranked=ranked,
+            allocation=allocation,
+            as_of_date=_today,
+            region=region,
+            benchmark=bench,
+        )
 
     st.caption(
-        "Ottimizzato per Perplexity multi-modello (web search built-in). "
-        "Header dedicato Sonar / Sonar Pro / Reasoning + Claude/GPT/Gemini via "
-        "Perplexity Pro. Schema JSON con fallback `---JSON---` separator per "
-        "modelli senza JSON mode strict."
+        f"~{len(_prompt):,} caratteri · ~{len(_prompt) // 4:,} token stimati."
     )
-    _perp = perplexity_etf_validate_full(
-        ranked=ranked,
-        allocation=allocation,
-        as_of_date=_date.today().isoformat(),
-        region=region,
-        benchmark=bench,
-    )
-    st.caption(
-        f"~{len(_perp):,} caratteri · ~{len(_perp) // 4:,} token stimati."
-    )
-    st.code(_perp, language="markdown")
-
-with st.expander(
-    "Prompt --validate completo per LLM generico (Claude.ai / ChatGPT / Gemini)",
-    expanded=False,
-):
-    from datetime import date as _date
-
-    from propicks.ai.user_prompts import llm_generic_etf_validate_full
-
-    st.caption(
-        "Ottimizzato per Claude.ai / console Anthropic / ChatGPT / Gemini "
-        "direct. System prompt Anthropic byte-per-byte → compat piena con "
-        "SDK Claude e claude.ai senza modifiche. Schema JSON strict. Usa "
-        "questo per un secondo parere SDK-grade sulla rotation macro view."
-    )
-    _llm = llm_generic_etf_validate_full(
-        ranked=ranked,
-        allocation=allocation,
-        as_of_date=_date.today().isoformat(),
-        region=region,
-        benchmark=bench,
-    )
-    st.caption(
-        f"~{len(_llm):,} caratteri · ~{len(_llm) // 4:,} token stimati. "
-        "Verifica la context window del modello target prima di incollare."
-    )
-    st.code(_llm, language="markdown")
+    st.code(_prompt, language="markdown")
 
 # ---------------------------------------------------------------------------
 # AI validation (macro view)

@@ -175,7 +175,14 @@ with tab_discovery:
         submitted = True
 
 
-if not submitted:
+# Persistenza submit-flag in session_state: senza, ogni widget post-submit
+# (es. il radio "Target LLM" nei prompt expander) causa un Streamlit rerun
+# in cui ``submitted`` torna False → ``st.stop()`` collassa results.
+# La key è scoped per pagina.
+if submitted:
+    st.session_state["contra_active"] = True
+
+if not st.session_state.get("contra_active"):
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -570,53 +577,70 @@ for r in results:
             st.code(perplexity_2c(r["ticker"]), language=None)
 
         # -----------------------------------------------------------------
-        # Fallback validate completo — due varianti distinte (Perplexity vs
-        # LLM generico). System prompt Anthropic byte-equivalent in entrambi.
+        # Fallback validate completo — selettore target LLM con 3 varianti.
+        # Vedi pages/1_Momentum.py per il razionale completo dei trade-off.
         # -----------------------------------------------------------------
         with st.expander(
-            "Prompt --validate contrarian per Perplexity (Sonar / Reasoning / Pro)",
+            "Prompt --validate contrarian (selettore target LLM)",
             expanded=False,
         ):
             from datetime import date as _date
 
-            from propicks.ai.user_prompts import perplexity_contrarian_validate_full
+            from propicks.ai.user_prompts import (
+                llm_generic_contrarian_validate_full,
+                perplexity_contrarian_validate_full,
+                sonar_contrarian_validate_full,
+            )
+
+            _target_label = st.radio(
+                "Target LLM",
+                options=[
+                    "Sonar (Perplexity nativo)",
+                    "Perplexity Pro (Claude/GPT/Gemini via Pro)",
+                    "Claude.ai / ChatGPT / Gemini diretto",
+                ],
+                index=0,
+                horizontal=False,
+                key=f"contra_prompt_target_{r['ticker']}",
+                help=(
+                    "Sonar nativo: prompt distillato + schema in cima + "
+                    "regole computabili FLUSH/BREAK. Perplexity Pro: system "
+                    "prompt Claude completo (~70 righe). LLM diretto: system "
+                    "prompt Anthropic byte-per-byte."
+                ),
+            )
+
+            _today = _date.today().isoformat()
+            if _target_label.startswith("Sonar"):
+                st.caption(
+                    "Ottimizzato per Sonar / Sonar Pro / Sonar Reasoning. "
+                    "Schema JSON in cima, persona event-driven / mean-reversion "
+                    "PM distillata, FLUSH/BREAK come regola computabile, "
+                    "confidence_by_dimension a 3 chiavi (quality_persistence / "
+                    "catalyst_credibility / risk_asymmetry). **Default consigliato**."
+                )
+                _prompt = sonar_contrarian_validate_full(r, _today)
+            elif _target_label.startswith("Perplexity Pro"):
+                st.caption(
+                    "Per Claude / GPT / Gemini eseguiti via Perplexity Pro. "
+                    "Persona system prompt: senior event-driven / mean-reversion "
+                    "PM (versione Anthropic completa, sezione `# Web search "
+                    "usage` rimossa). Schema JSON con fallback `---JSON---`."
+                )
+                _prompt = perplexity_contrarian_validate_full(r, _today)
+            else:
+                st.caption(
+                    "Per Claude.ai / console Anthropic / ChatGPT / Gemini "
+                    "direct. System prompt Anthropic byte-per-byte → compat "
+                    "piena con SDK Claude e claude.ai. Schema JSON strict. "
+                    "Verifica la context window del modello target prima di incollare."
+                )
+                _prompt = llm_generic_contrarian_validate_full(r, _today)
 
             st.caption(
-                "Ottimizzato per Perplexity multi-modello (web search built-in). "
-                "Persona system prompt: senior event-driven / mean-reversion PM. "
-                "Header dedicato Sonar / Reasoning / Claude/GPT/Gemini via Pro. "
-                "Schema JSON con fallback `---JSON---` per modelli senza JSON strict."
+                f"~{len(_prompt):,} caratteri · ~{len(_prompt) // 4:,} token stimati."
             )
-            _perp = perplexity_contrarian_validate_full(
-                r, _date.today().isoformat()
-            )
-            st.caption(
-                f"~{len(_perp):,} caratteri · ~{len(_perp) // 4:,} token stimati."
-            )
-            st.code(_perp, language="markdown")
-
-        with st.expander(
-            "Prompt --validate contrarian per LLM generico (Claude.ai / ChatGPT / Gemini)",
-            expanded=False,
-        ):
-            from datetime import date as _date
-
-            from propicks.ai.user_prompts import llm_generic_contrarian_validate_full
-
-            st.caption(
-                "Ottimizzato per Claude.ai / console Anthropic / ChatGPT / Gemini "
-                "direct. System prompt Anthropic byte-per-byte → compat piena con "
-                "SDK Claude e claude.ai senza modifiche. Schema JSON strict. Usa "
-                "questo per un secondo parere SDK-grade su FLUSH vs BREAK."
-            )
-            _llm = llm_generic_contrarian_validate_full(
-                r, _date.today().isoformat()
-            )
-            st.caption(
-                f"~{len(_llm):,} caratteri · ~{len(_llm) // 4:,} token stimati. "
-                "Verifica la context window del modello target prima di incollare."
-            )
-            st.code(_llm, language="markdown")
+            st.code(_prompt, language="markdown")
 
         # AI validation on-demand
         if validate_ai:
