@@ -247,6 +247,15 @@ class _LibsqlCursorWrap:
             yield _LibsqlRow(row, keys)
 
 
+def _coerce_params_args(args: tuple) -> tuple:
+    """Converte il 2° arg posizionale (parameters) da list a tuple se serve.
+    libsql_experimental.Connection.execute accetta solo tuple/dict, sqlite3
+    stdlib accetta anche list — normalizziamo per compat drop-in."""
+    if len(args) >= 2 and isinstance(args[1], list):
+        return (args[0], tuple(args[1]), *args[2:])
+    return args
+
+
 class _LibsqlConnectionWrap:
     """Wrap libsql.Connection: execute() → _LibsqlCursorWrap.
 
@@ -263,9 +272,21 @@ class _LibsqlConnectionWrap:
         return getattr(self._conn, name)
 
     def execute(self, *args, **kwargs):
+        # libsql_experimental rifiuta list come parameters (vuole tuple).
+        # sqlite3 stdlib accetta entrambi → normalizziamo qui per compat.
+        args = _coerce_params_args(args)
+        if "parameters" in kwargs and isinstance(kwargs["parameters"], list):
+            kwargs["parameters"] = tuple(kwargs["parameters"])
         return _LibsqlCursorWrap(self._conn.execute(*args, **kwargs))
 
     def executemany(self, *args, **kwargs):
+        # executemany: secondo arg è iterable di param-sequences. Coerce ognuno.
+        if len(args) >= 2 and args[1] is not None:
+            args = (args[0], [tuple(p) if isinstance(p, list) else p for p in args[1]], *args[2:])
+        if "parameters" in kwargs and kwargs["parameters"] is not None:
+            kwargs["parameters"] = [
+                tuple(p) if isinstance(p, list) else p for p in kwargs["parameters"]
+            ]
         return _LibsqlCursorWrap(self._conn.executemany(*args, **kwargs))
 
     def executescript(self, *args, **kwargs):
