@@ -142,6 +142,66 @@ def _rolling_zscore(s: pd.Series, window: int = 252) -> pd.Series:
     return z
 
 
+def build_daily_regime_series_from_fred(
+    *,
+    start: str = "2010-01-01",
+    end: str | None = None,
+    breadth_universe: dict[str, pd.DataFrame] | None = None,
+    breadth_window: int = 200,
+    zscore_window: int = 252,
+    weights: tuple[float, float, float] = (0.40, 0.40, 0.20),
+) -> pd.Series:
+    """Helper di alto livello: fetcha FRED + computa breadth → ritorna ``regime_code`` series.
+
+    Pronto per ``simulate_portfolio(regime_series=...)``. Source:
+    - HY OAS via ``market.fred_client`` (BAMLH0A0HYM2)
+    - VIX via FRED (VIXCLS)
+    - Breadth: optional, calcolato da ``breadth_universe`` se passato
+
+    Args:
+        start, end: range fetch FRED.
+        breadth_universe: optional dict {ticker: OHLCV df} per breadth interno.
+            Se None, breadth feature esclusa (composite usa solo HY+VIX).
+        breadth_window: MA period per breadth (default 200).
+        zscore_window: lookback z-score (default 252).
+        weights: (w_hy, w_breadth, w_vix). Default (0.40, 0.40, 0.20).
+
+    Returns:
+        ``pd.Series`` regime_code (1-5) indicizzata by date. Pronto come input
+        a ``simulate_portfolio.regime_series``.
+    """
+    from propicks.market.fred_client import fetch_fred_series
+    from propicks.domain.breadth import breadth_series as _breadth_series
+
+    if end is None:
+        end = pd.Timestamp.today().strftime("%Y-%m-%d")
+
+    hy_d = fetch_fred_series("BAMLH0A0HYM2", start=start, end=end)
+    hy = pd.Series(hy_d, dtype=float)
+    if not hy.empty:
+        hy.index = pd.to_datetime(hy.index)
+
+    vix_d = fetch_fred_series("VIXCLS", start=start, end=end)
+    vix = pd.Series(vix_d, dtype=float)
+    if not vix.empty:
+        vix.index = pd.to_datetime(vix.index)
+
+    breadth = None
+    if breadth_universe:
+        breadth = _breadth_series(breadth_universe, window=breadth_window)
+
+    df = compute_regime_series(
+        hy_oas=hy if not hy.empty else None,
+        breadth=breadth,
+        vix=vix if not vix.empty else None,
+        zscore_window=zscore_window,
+        weights=weights,
+    )
+    if df.empty:
+        return pd.Series(dtype=float, name="regime_code")
+    return df["regime_code"].dropna()
+
+
 def compute_regime_series(
     hy_oas: pd.Series | None = None,
     breadth: pd.Series | None = None,

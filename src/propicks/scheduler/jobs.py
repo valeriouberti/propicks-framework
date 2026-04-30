@@ -587,6 +587,120 @@ def weekly_attribution_report_job() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 8b. Decay monitor (weekly, Fase D.4 SIGNAL_ROADMAP)
+# ---------------------------------------------------------------------------
+@run_job("decay_monitor_check")
+def decay_monitor_check(
+    *, expected_sharpe_per_trade: float = 0.20,
+    rolling_window: int = 30,
+) -> dict:
+    """Run decay detection on closed trades per strategy.
+
+    Per ogni strategia (momentum/contrarian/etf): query closed trades
+    ultimi 365 giorni, esegui ``decay_alert_summary``, crea alert se
+    decision è ALERT_DECAY o WARNING. Audit trail via @run_job decorator.
+
+    Args:
+        expected_sharpe_per_trade: Sharpe atteso da baseline_v2 (default 0.20).
+        rolling_window: window per rolling Sharpe (default 30 trade).
+    """
+    import json as _json
+
+    from propicks.domain.decay_monitor import decay_alert_summary
+    from propicks.io.db import connect, transaction
+
+    strategies = ["momentum", "contrarian", "etf"]
+    alerts_created = 0
+    summaries: list[dict] = []
+
+    conn = connect()
+    try:
+        for strat in strategies:
+            rows = conn.execute(
+                """SELECT pnl_pct FROM trades
+                   WHERE status='closed' AND pnl_pct IS NOT NULL
+                     AND strategy = ?
+                     AND exit_date >= date('now', '-365 days')
+                   ORDER BY exit_date ASC""",
+                (strat,),
+            ).fetchall()
+            returns = [r["pnl_pct"] / 100.0 for r in rows]
+            if len(returns) < 5:
+                summaries.append({
+                    "strategy": strat,
+                    "n_trades": len(returns),
+                    "decision": "INSUFFICIENT_DATA",
+                })
+                continue
+
+            summary = decay_alert_summary(
+                returns,
+                expected_sharpe_per_trade=expected_sharpe_per_trade,
+                rolling_window=rolling_window,
+            )
+            summary["strategy"] = strat
+            summaries.append(summary)
+
+            decision = summary["decision"]
+
+            # Audit trail: persist decay_runs (P3.12 SIGNAL_ROADMAP)
+            with transaction() as conn_audit:
+                conn_audit.execute(
+                    """INSERT INTO decay_runs (
+                        strategy, decision, n_trades, rolling_sharpe,
+                        cusum_alarm_index, sprt_decision, expected_sharpe, evidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        strat,
+                        decision,
+                        summary.get("n_obs"),
+                        summary.get("rolling_sharpe_latest"),
+                        summary.get("cusum_alarm_index"),
+                        summary.get("sprt_decision"),
+                        expected_sharpe_per_trade,
+                        _json.dumps(summary, default=str),
+                    ),
+                )
+            if decision in ("ALERT_DECAY", "WARNING"):
+                severity = "critical" if decision == "ALERT_DECAY" else "warning"
+                emoji = "🔴" if decision == "ALERT_DECAY" else "🟡"
+                msg = (
+                    f"{emoji} Decay {decision} su strategia **{strat}** — "
+                    f"n_trades={summary['n_obs']}, "
+                    f"rolling_SR={summary.get('rolling_sharpe_latest')}, "
+                    f"CUSUM_alarm={summary.get('cusum_alarm_index')}, "
+                    f"SPRT={summary.get('sprt_decision')}"
+                )
+                create_alert(
+                    alert_type="decay_alert",
+                    severity=severity,
+                    message=msg,
+                    metadata={
+                        "strategy": strat,
+                        "decision": decision,
+                        "n_trades": summary["n_obs"],
+                        "rolling_sharpe": summary.get("rolling_sharpe_latest"),
+                        "cusum_alarm": summary.get("cusum_alarm_index"),
+                        "sprt_decision": summary.get("sprt_decision"),
+                        "expected_sharpe": expected_sharpe_per_trade,
+                    },
+                    dedup_key=f"decay_{strat}_{decision}",
+                )
+                alerts_created += 1
+    finally:
+        conn.close()
+
+    return {
+        "n_items": len(summaries),
+        "notes": (
+            f"decay check {len(strategies)} strategies, {alerts_created} alerts. "
+            f"Decisions: "
+            + ", ".join(f"{s['strategy']}={s['decision']}" for s in summaries)
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 8. Cleanup stale watchlist (weekly)
 # ---------------------------------------------------------------------------
 @run_job("cleanup_stale_watchlist")

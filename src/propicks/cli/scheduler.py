@@ -35,6 +35,8 @@ _JOB_REGISTRY: dict[str, str] = {
     "weekly_attribution_report": "weekly_attribution_report_job",
     "attribution": "weekly_attribution_report_job",  # alias
     "report": "weekly_attribution_report_job",
+    "decay_monitor_check": "decay_monitor_check",
+    "decay": "decay_monitor_check",  # alias
 }
 
 

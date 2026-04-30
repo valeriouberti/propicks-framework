@@ -31,6 +31,7 @@ from propicks.obs.log import get_logger
 from propicks.scheduler.jobs import (
     check_earnings_calendar,
     cleanup_stale_watchlist,
+    decay_monitor_check,
     record_regime,
     scan_watchlist,
     snapshot_portfolio,
@@ -124,6 +125,16 @@ def _add_jobs(scheduler) -> None:
         misfire_grace_time=7200,
     )
 
+    # Decay monitor (Fase D.4 SIGNAL_ROADMAP): sabato 21:30 CET (post-attribution)
+    scheduler.add_job(
+        decay_monitor_check,
+        trigger=CronTrigger(day_of_week="sat", hour=21, minute=30, timezone=_TZ),
+        id="decay_monitor_check",
+        name="decay_monitor_check",
+        replace_existing=True,
+        misfire_grace_time=7200,
+    )
+
 
 def run_daemon() -> int:
     """Avvia il BlockingScheduler daemon. Bloccante fino a SIGINT/SIGTERM."""
@@ -158,11 +169,12 @@ def run_daemon() -> int:
         "  • scan_watchlist             Mon-Fri 18:30\n"
         "  • trailing_stop_check        Mon-Fri 18:30\n"
         "  • weekly_attribution_report  Sat 21:00\n"
+        "  • decay_monitor_check        Sat 21:30  (Fase D.4 SIGNAL_ROADMAP)\n"
         "  • cleanup_stale_watchlist    Sun 20:00\n"
         "\nCtrl+C per fermare.",
         file=sys.stderr,
     )
-    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 8}})
+    _log.info("scheduler_started", extra={"ctx": {"tz": _TZ, "n_jobs": 9}})
 
     try:
         scheduler.start()

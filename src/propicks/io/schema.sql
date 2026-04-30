@@ -259,6 +259,25 @@ CREATE TABLE IF NOT EXISTS index_constituents (
 CREATE INDEX IF NOT EXISTS idx_constituents_index ON index_constituents(index_name);
 
 
+-- Decay monitor audit trail (Fase D.4 SIGNAL_ROADMAP). 1 riga per
+-- run del job decay_monitor_check (sabato 21:30 CET). Audit + history
+-- per pattern detection (es. "decay alert su contrarian 3 volte ultimo mese").
+CREATE TABLE IF NOT EXISTS decay_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  strategy TEXT NOT NULL,                -- 'momentum' | 'contrarian' | 'etf'
+  decision TEXT NOT NULL,                -- 'ALIVE' | 'WARNING' | 'ALERT_DECAY' | 'MONITOR' | 'INSUFFICIENT_DATA'
+  n_trades INTEGER,
+  rolling_sharpe REAL,
+  cusum_alarm_index INTEGER,
+  sprt_decision TEXT,
+  expected_sharpe REAL,
+  evidence TEXT                          -- JSON blob con detail completo
+);
+CREATE INDEX IF NOT EXISTS idx_decay_runs_strategy_ts
+  ON decay_runs(strategy, run_timestamp);
+
+
 -- FRED series daily cache (Fase B.3 SIGNAL_ROADMAP) — macro indicators
 -- (HY OAS, VIX, yield curve). Source: fred.stlouisfed.org/graph/fredgraph.csv
 -- (CSV public endpoint, no auth). PK (series_id, date) per supportare

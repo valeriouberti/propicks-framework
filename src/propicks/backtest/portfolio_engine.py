@@ -137,6 +137,13 @@ class BacktestConfig:
     skippati indipendentemente dal momentum score. Richiede ``quality_scores``
     fornito."""
 
+    # Fase D.2 SIGNAL_ROADMAP — signal persistence
+    signal_persistence_bars: int = 1
+    """Numero di bar consecutivi in cui ``score >= threshold`` richiesti
+    PRIMA di entry. Default 1 (no requirement, behavior legacy). 2-3
+    raccomandato per riduzione whipsaw single-day noise. Tracking interno
+    via state map ticker → consecutive_bars_above_threshold."""
+
 
 # ---------------------------------------------------------------------------
 # Core simulation loop
@@ -204,6 +211,9 @@ def simulate_portfolio(
         cash=config.initial_capital,
         initial_capital=config.initial_capital,
     )
+
+    # Fase D.2: persistence tracking — counter consecutive bars above threshold
+    persistence_counter: dict[str, int] = {}
 
     for t in all_dates:
         today = _as_date(t)
@@ -316,6 +326,25 @@ def simulate_portfolio(
         else:
             candidates = [
                 (t, s) for t, s in scored.items() if s >= config.score_threshold
+            ]
+
+        # Fase D.2 SIGNAL_ROADMAP: signal persistence requirement.
+        # Update persistence counter for ticker che soddisfano threshold OGGI;
+        # reset per ticker che non lo soddisfano. Solo ticker con
+        # counter >= signal_persistence_bars passano a entry candidacy.
+        if config.signal_persistence_bars > 1:
+            candidate_set = {t for t, _ in candidates}
+            # Bump counter ticker pass-threshold
+            for t in candidate_set:
+                persistence_counter[t] = persistence_counter.get(t, 0) + 1
+            # Reset ticker NOT pass-threshold (in scored but below)
+            for t in scored:
+                if t not in candidate_set:
+                    persistence_counter[t] = 0
+            # Filter: only ticker con persistence sufficiente
+            candidates = [
+                (t, s) for t, s in candidates
+                if persistence_counter.get(t, 0) >= config.signal_persistence_bars
             ]
 
         # 4. Ordina per score desc, apri top-N che stanno nel budget

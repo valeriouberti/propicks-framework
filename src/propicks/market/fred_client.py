@@ -8,10 +8,14 @@ documented but soft-throttled). Per uso intensivo conviene API key gratis
 ## Serie supportate (B.3 minimal viable)
 
 - ``BAMLH0A0HYM2``: ICE BofA US High Yield Index Option-Adjusted Spread
-  (credit-equity barometer, leading indicator regime turning point)
-- ``VIXCLS``: CBOE Volatility Index (fear gauge, daily close)
-- ``T10Y2Y``: 10-Year Treasury minus 2-Year Treasury yield (yield curve
-  slope, recession indicator quando inverte)
+  (credit-equity barometer, leading indicator regime turning point).
+  ⚠ **Limite endpoint public**: ritorna solo ultimi ~3 anni (proxy via
+  HYG/IEF ratio yfinance per range pre-2023).
+- ``VIXCLS``: CBOE Volatility Index (fear gauge, daily close). Full history
+  1990+ disponibile.
+- ``T10Y2Y``: 10-Year minus 2-Year Treasury yield (yield curve slope,
+  recession indicator). Full history 1976+ disponibile.
+- ``DTWEXBGS``: Trade Weighted U.S. Dollar Index Broad. Full 2006+.
 
 ## Cache
 
@@ -205,7 +209,10 @@ def fetch_fred_series(
     if isinstance(end, date):
         end = end.isoformat()
     if start is None:
-        start = (date.today() - timedelta(days=365 * 5)).isoformat()
+        # Fase P2.11 SIGNAL_ROADMAP: default 15 anni back per coprire ciclo
+        # bull/bear completo (2010-2026). Per backtest pre-2010 passare start
+        # esplicito (yfinance pre-2010 quality issues).
+        start = (date.today() - timedelta(days=365 * 15)).isoformat()
     if end is None:
         end = date.today().isoformat()
 

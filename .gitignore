@@ -43,4 +43,6 @@ data/
 
 # Local OHLCV/meta/index_constituents cache (regenerabile, non sync su Turso)
 *.db.cache
-*.db.cache-*
+*.db.cache-*data/backups/
+
+data/backups/

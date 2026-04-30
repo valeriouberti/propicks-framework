@@ -312,6 +312,9 @@ def analyze_etf(
     benchmark_weekly: pd.Series | None = None,
     regime_code: int | None = None,
     regime: dict | None = None,
+    *,
+    macro_z: dict[str, float] | None = None,
+    macro_overlay_weight: float = 0.0,
 ) -> dict | None:
     """Analizza un singolo ETF settoriale.
 
@@ -365,12 +368,29 @@ def analyze_etf(
     abs_mom = score_abs_momentum(perf_3m)
     trend = score_etf_trend(weekly["Close"])
 
-    composite_raw = (
+    # Fase B.5 SIGNAL_ROADMAP: cross-asset macro overlay (opt-in via
+    # ``macro_overlay_weight`` > 0 + ``macro_z`` dict provided).
+    # Default 0.0 = disabilitato (backward compat).
+    macro_fit_value: float | None = None
+    if macro_overlay_weight > 0 and macro_z:
+        from propicks.domain.macro_overlay import macro_fit_score
+        macro_fit_value = macro_fit_score(ticker, macro_z)
+
+    composite_raw_base = (
         rs["score"] * ETF_WEIGHT_RS
         + regime_fit * ETF_WEIGHT_REGIME_FIT
         + abs_mom * ETF_WEIGHT_ABS_MOMENTUM
         + trend["score"] * ETF_WEIGHT_TREND
     )
+
+    if macro_fit_value is not None and macro_overlay_weight > 0:
+        # Re-normalizzazione: shrink i pesi base di (1 - w_macro) e aggiungi
+        # macro_fit pesato w_macro. Mantiene composite ∈ [0, 100].
+        w_m = max(0.0, min(1.0, macro_overlay_weight))
+        composite_raw = (1.0 - w_m) * composite_raw_base + w_m * macro_fit_value
+    else:
+        composite_raw = composite_raw_base
+
     composite_raw = max(0.0, min(100.0, composite_raw))
     composite = apply_regime_cap(composite_raw, sector_key, regime_code)
     cap_triggered = composite < composite_raw
@@ -395,6 +415,10 @@ def analyze_etf(
         "score_composite_raw": round(composite_raw, 1),
         "score_composite": round(composite, 1),
         "regime_cap_applied": cap_triggered,
+        "macro_fit_score": (
+            round(macro_fit_value, 1) if macro_fit_value is not None else None
+        ),
+        "macro_overlay_weight": macro_overlay_weight if macro_fit_value is not None else 0.0,
         "classification": classify_etf(composite),
         "regime": regime,
         "regime_code": regime_code,
