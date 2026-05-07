@@ -35,8 +35,8 @@ sono il layer real-time che yfinance (EOD) non copre.
 |-----|-------|
 | [INSTALLATION_AND_SETUP](docs/INSTALLATION_AND_SETUP.md) | Setup completo, .env, Docker, smoke test |
 | [USER_GUIDE](docs/USER_GUIDE.md) | Quick start (15 min) per il trader |
-| [CLI_REFERENCE](docs/CLI_REFERENCE.md) | Reference esaustivo dei 14 entry points CLI |
-| [DASHBOARD_GUIDE](docs/DASHBOARD_GUIDE.md) | Walkthrough delle 11 page Streamlit |
+| [CLI_REFERENCE](docs/CLI_REFERENCE.md) | Reference esaustivo dei 15 entry points CLI |
+| [DASHBOARD_GUIDE](docs/DASHBOARD_GUIDE.md) | Walkthrough delle 12 page Streamlit |
 | [PINE_SCRIPTS_REFERENCE](docs/PINE_SCRIPTS_REFERENCE.md) | 4 Pine scripts (weekly regime, daily signal, ETF, contrarian) |
 | [SECURITY_AND_SECRETS](docs/SECURITY_AND_SECRETS.md) | API key, .env, segreti, rotation |
 | [FAQ_AND_TROUBLESHOOTING](docs/FAQ_AND_TROUBLESHOOTING.md) | Errori comuni, regime offtrack, cache stale, bot down |
@@ -48,6 +48,7 @@ sono il layer real-time che yfinance (EOD) non copre.
 | [MOMENTUM_STRATEGY](docs/MOMENTUM_STRATEGY.md) | `propicks-momentum` — momentum/quality stock screener |
 | [CONTRARIAN_STRATEGY](docs/CONTRARIAN_STRATEGY.md) | `propicks-contra` — quality-filtered mean reversion |
 | [ETF_ROTATION_STRATEGY](docs/ETF_ROTATION_STRATEGY.md) | `propicks-rotate` — sector ETF rotation US/EU/WORLD |
+| [SECTOR_MOMENTUM_STRATEGY](docs/SECTOR_MOMENTUM_STRATEGY.md) | `propicks-sector-momentum` — top-down sector gate + bottom-up momentum + peer-RS overlay |
 
 ### Sottosistemi operativi
 
@@ -126,6 +127,7 @@ Per setup completo (Docker, scheduler daemon, bot Telegram) vedi
 | Screening momentum stock | `propicks-momentum` | `1_Momentum.py` | `daily_signal_engine.pine` |
 | Mean reversion contrarian | `propicks-contra` | `8_Contrarian.py` | `contrarian_signal_engine.pine` |
 | Rotazione settoriale ETF | `propicks-rotate` | `2_ETF_Rotation.py` | `etf_rotation_engine.pine` |
+| Sector-Filtered Momentum (SFM) | `propicks-sector-momentum` | `15_Sector_Momentum.py` | *(riusa daily_signal + etf_rotation)* |
 | Regime macro weekly | *(parte del scan)* | *(visibile in Momentum)* | `weekly_regime_engine.pine` |
 | Sizing & risk | `propicks-portfolio size --advanced` | `3_Portfolio.py` → tab Rischio | — |
 | Trade management | `propicks-portfolio manage --apply` | `3_Portfolio.py` → tab Management | — |

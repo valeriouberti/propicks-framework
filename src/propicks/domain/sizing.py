@@ -6,7 +6,7 @@ di risultato. L'I/O è responsabilità di io/portfolio_store.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Callable, Literal
 
 from propicks.config import (
     CONTRA_MAX_AGGREGATE_EXPOSURE_PCT,
@@ -22,11 +22,13 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
     MIN_SCORE_CLAUDE,
     MIN_SCORE_TECH,
+    SFM_MAX_AGGREGATE_EXPOSURE_PCT,
+    SFM_MAX_STOCKS_PER_SECTOR,
 )
 from propicks.domain.validation import validate_scores
 
 AssetTypeLiteral = Literal["STOCK", "SECTOR_ETF"]
-StrategyBucket = Literal["momentum", "contrarian"]
+StrategyBucket = Literal["momentum", "contrarian", "sfm"]
 
 
 def is_contrarian_position(p: dict) -> bool:
@@ -67,6 +69,108 @@ def contrarian_position_count(portfolio: dict) -> int:
         1 for p in portfolio.get("positions", {}).values()
         if is_contrarian_position(p)
     )
+
+
+def is_sfm_position(p: dict) -> bool:
+    """Match per riconoscere posizioni SFM (sector-filtered momentum).
+
+    Convention: ``p["strategy"]`` inizia case-insensitive con "sfm" oppure
+    contiene il tag "SFM" — tollera "SFM", "sfm-tech", "SFM — XLK leader".
+    """
+    s = p.get("strategy") or ""
+    if not isinstance(s, str):
+        return False
+    lower = s.lower()
+    return lower.startswith("sfm") or "sfm" in lower.split("-")[0].lower()
+
+
+def sfm_aggregate_exposure(portfolio: dict) -> float:
+    """Somma valore SFM corrente / portfolio_value (frazione 0-1).
+
+    Bucket cap: SFM aggregate non può superare ``SFM_MAX_AGGREGATE_EXPOSURE_PCT``.
+    """
+    total = portfolio_value(portfolio)
+    if total <= 0:
+        return 0.0
+    sfm_value = sum(
+        float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+        for p in portfolio.get("positions", {}).values()
+        if is_sfm_position(p)
+    )
+    return sfm_value / total
+
+
+def sfm_position_count(portfolio: dict) -> int:
+    """Quante posizioni SFM aperte in portfolio."""
+    return sum(
+        1 for p in portfolio.get("positions", {}).values()
+        if is_sfm_position(p)
+    )
+
+
+def sfm_positions_in_sector(portfolio: dict, sector_key: str) -> int:
+    """Quante posizioni SFM aperte per un dato sector_key.
+
+    Usa il campo ``p["sector_key"]`` salvato a add-time. Posizioni SFM
+    legacy senza sector_key (pre-migration) vengono escluse dal conteggio
+    — comportamento conservativo (non bloccare per metadata mancante).
+    """
+    return sum(
+        1 for p in portfolio.get("positions", {}).values()
+        if is_sfm_position(p) and p.get("sector_key") == sector_key
+    )
+
+
+def sector_aggregate_exposure(
+    portfolio: dict,
+    sector_key: str,
+    *,
+    sector_resolver: Callable[[str, dict], str | None] | None = None,
+) -> float:
+    """Esposizione aggregata su un settore (cross-bucket: SFM + momentum + ETF).
+
+    Per ogni posizione:
+    - Se la position ha ``sector_key`` salvato (SFM o ETF rotation), usa quello.
+    - Altrimenti chiama ``sector_resolver(ticker, position_dict)`` per derivarlo
+      (tipicamente via yfinance + normalize). Se il resolver ritorna None
+      (sector sconosciuto), la posizione viene **esclusa** dal totale —
+      conservativo: non penalizza per metadata mancante.
+
+    Args:
+        portfolio: dict portfolio (dict view).
+        sector_key: target sector_key normalizzato (es. ``"technology"``).
+        sector_resolver: callback ``(ticker, position) → sector_key | None``.
+            None → solo positions con ``sector_key`` esplicito sono incluse.
+
+    Returns:
+        Frazione [0, 1] della somma di posizioni in ``sector_key`` /
+        portfolio_value.
+    """
+    total = portfolio_value(portfolio)
+    if total <= 0:
+        return 0.0
+    matched_value = 0.0
+    for ticker, p in portfolio.get("positions", {}).items():
+        # Path 1: sector_key esplicito (SFM o ETF rotation)
+        explicit = p.get("sector_key")
+        if isinstance(explicit, str) and explicit:
+            if explicit == sector_key:
+                matched_value += float(p.get("shares") or 0) * float(
+                    p.get("entry_price") or 0
+                )
+            continue
+        # Path 2: resolver dinamico per posizioni legacy (momentum / contra)
+        if sector_resolver is None:
+            continue
+        try:
+            resolved = sector_resolver(ticker, p)
+        except Exception:
+            resolved = None
+        if resolved == sector_key:
+            matched_value += float(p.get("shares") or 0) * float(
+                p.get("entry_price") or 0
+            )
+    return matched_value / total
 
 
 def portfolio_value(portfolio: dict) -> float:

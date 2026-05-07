@@ -1,6 +1,6 @@
 # Dashboard Guide — Streamlit Multi-Page
 
-Guida alle 11 page della dashboard Streamlit. La dashboard è **parallela alla
+Guida alle 12 page della dashboard Streamlit. La dashboard è **parallela alla
 CLI** (vedi [CLI_REFERENCE](CLI_REFERENCE.md)) — chiama le stesse funzioni del
 motore Python e legge/scrive lo stesso `data/propicks.db`.
 
@@ -15,7 +15,7 @@ propicks-dashboard                # http://localhost:8501
 docker compose up -d dashboard
 ```
 
-Layout: una **home** (Portfolio Overview) + 11 page numerate nella sidebar
+Layout: una **home** (Portfolio Overview) + 12 page numerate nella sidebar
 sinistra. Le page sono navigabili con click; lo stato è persistito su DB
 quindi non si perde tra refresh.
 
@@ -40,7 +40,8 @@ src/propicks/dashboard/
     ├── 8_Contrarian.py
     ├── 9_Calendar.py
     ├── 10_Scheduler.py
-    └── 11_Backtest_Portfolio.py
+    ├── 11_Backtest_Portfolio.py
+    └── 15_Sector_Momentum.py
 ```
 
 Le page sono **thin** come la CLI: parsing input UI + chiamata a domain/io/ai +
@@ -303,6 +304,43 @@ Tab "Alerts":
 - Coda alert pending con severity / ticker / message / age
 - Bulk ack / single ack
 - Stats: delivered / muted / failed last 24h
+
+---
+
+## 15. Sector Momentum — `pages/15_Sector_Momentum.py`
+
+**Sector-Filtered Momentum** (= [`propicks-sector-momentum`](CLI_REFERENCE.md#propicks-sector-momentum)).
+Top-down ETF rotation gate + bottom-up momentum scoring intra-settore +
+peer-RS overlay. Vedi [SECTOR_MOMENTUM_STRATEGY](SECTOR_MOMENTUM_STRATEGY.md).
+
+Tab "Rotate-driven":
+- Form: `top_sectors` / `top_stocks_per_sector` / `min_sector_score` / `min_stock_score` / `rs_overlay_weight`
+- Submit → ranking ETF rotation US → top settori OVERWEIGHT → discovery momentum intra-settore
+
+Tab "Sector esplicito":
+- Dropdown `sector_key` (`technology`, `financials`, ...) o ticker peer ETF (`XLK`, `XLF`, ...) → skippa Stage 1 rotation
+- Form `top_stocks` + `min_stock_score`
+- Util per backtest deterministici / override discrezionale
+
+Sezioni post-submit:
+- **Sectors evaluated**: tabella settori scansionati con composite ETF + #candidati ammessi + reason di skip
+- **Candidates summary**: ranked desc by `score_sfm` cross-sector
+- **Per-ticker expander**:
+  - Score SFM + score momentum + regime badge
+  - **Peer-RS deep dive** (4 metric: score / ratio / slope / peer ETF) con badge 🟢 leader confermato / 🟡 passenger risk
+  - 6 sub-score momentum (trend / momentum / volume / dist_high / volatility / ma_cross)
+  - Trade params (entry, stop SFM 6%, max size SFM 10%, R/R)
+  - Earnings warning + watchlist add button
+  - **AI validation panel** (verdict + confidence_by_dimension + bull/bear case) — visibile solo se `--validate` attivato
+
+Sidebar — `invariants_note(strategy_bucket="sfm")`:
+- SFM positions count + bucket exposure live (% / cap 25%)
+- Regole SFM-specifiche (cap 25% bucket, 10% pos, 3-per-sector, 6% loss, cross-bucket 35%)
+
+Note operative:
+- **Universe S&P 500 only** (fase 1). NASDAQ100 / STOXX600 / FTSE MIB non supportati.
+- **Auto-watchlist**: classe A+B aggiunti come `source="auto_sfm_scan"` (toggle off via `--no-watchlist` solo CLI; dashboard sempre on).
+- **Cache AI**: chiave `<TICKER>_<SECTOR>_sfm-v1_<YYYY-MM-DD>` con TTL 24h (separata da momentum).
 
 ---
 

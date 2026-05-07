@@ -44,6 +44,7 @@ turso = [
 
 [project.scripts]
 propicks-momentum  = "propicks.cli.momentum:main"
+propicks-sector-momentum = "propicks.cli.sector_momentum:main"
 propicks-contra    = "propicks.cli.contrarian:main"
 propicks-portfolio = "propicks.cli.portfolio:main"
 propicks-journal   = "propicks.cli.journal:main"

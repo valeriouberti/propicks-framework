@@ -27,6 +27,12 @@ from propicks.config import (
     MAX_LOSS_WEEKLY_PCT,
     MAX_POSITIONS,
     MIN_CASH_RESERVE_PCT,
+    SFM_CROSS_BUCKET_SECTOR_CAP_PCT,
+    SFM_MAX_AGGREGATE_EXPOSURE_PCT,
+    SFM_MAX_LOSS_PER_TRADE_PCT,
+    SFM_MAX_POSITION_SIZE_PCT,
+    SFM_MAX_STOCKS_PER_SECTOR,
+    SFM_RS_OVERLAY_WEIGHT,
 )
 
 
@@ -234,8 +240,11 @@ def invariants_note(strategy_bucket: str = "momentum") -> None:
     """Sidebar con stato live + regole. I semafori leggono il portfolio corrente.
 
     Args:
-        strategy_bucket: ``"momentum"`` (default, regole stock/ETF classiche) o
-            ``"contrarian"`` (regole 8%/3pos/20% del bucket mean reversion).
+        strategy_bucket: bucket di riferimento per regole/semafori:
+            - ``"momentum"`` (default, regole stock/ETF classiche)
+            - ``"contrarian"`` (regole 8%/3pos/20% del bucket mean reversion)
+            - ``"sfm"`` (regole 10%/3-per-sector/25% bucket sector-filtered momentum)
+
             Ogni page della dashboard passa il bucket appropriato per evitare
             di mostrare regole fuorvianti a chi opera sulla strategia sbagliata.
     """
@@ -243,6 +252,8 @@ def invariants_note(strategy_bucket: str = "momentum") -> None:
         contrarian_aggregate_exposure,
         contrarian_position_count,
         portfolio_value,
+        sfm_aggregate_exposure,
+        sfm_position_count,
     )
     from propicks.io.portfolio_store import get_initial_capital
 
@@ -278,6 +289,23 @@ def invariants_note(strategy_bucket: str = "momentum") -> None:
         f"**{risk_pct * 100:.2f}%** (max {MAX_LOSS_WEEKLY_PCT * 100:.0f}%)"
     )
 
+    # Stato bucket SFM — visibile solo sulla page SFM (sector-filtered momentum).
+    if strategy_bucket == "sfm":
+        sfm_n = sfm_position_count(portfolio)
+        sfm_pct = sfm_aggregate_exposure(portfolio)
+        sfm_pct_status = (
+            "bad" if sfm_pct >= SFM_MAX_AGGREGATE_EXPOSURE_PCT
+            else "warn" if sfm_pct >= SFM_MAX_AGGREGATE_EXPOSURE_PCT * 0.75
+            else "ok"
+        )
+        st.sidebar.markdown(
+            f"{_dot('ok')} SFM pos · **{sfm_n}**"
+        )
+        st.sidebar.markdown(
+            f"{_dot(sfm_pct_status)} SFM expo · "
+            f"**{sfm_pct * 100:.1f}%** / {SFM_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}%"
+        )
+
     # Stato bucket contrarian — visibile solo sulla page contrarian per
     # non rumorare le altre page con info non rilevanti.
     if strategy_bucket == "contrarian":
@@ -305,7 +333,19 @@ def invariants_note(strategy_bucket: str = "momentum") -> None:
     st.sidebar.caption(f"Capitale rif.: € {ref_capital:,.0f}")
 
     st.sidebar.markdown("---")
-    if strategy_bucket == "contrarian":
+    if strategy_bucket == "sfm":
+        st.sidebar.caption(
+            "**Regole SFM (sector-filtered momentum)**  \n"
+            f"• Max size/stock: {SFM_MAX_POSITION_SIZE_PCT * 100:.0f}%  \n"
+            f"• Max stock per settore: {SFM_MAX_STOCKS_PER_SECTOR}  \n"
+            f"• Max expo bucket: {SFM_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}%  \n"
+            f"• Cross-bucket sector cap: {SFM_CROSS_BUCKET_SECTOR_CAP_PCT * 100:.0f}%  \n"
+            f"• Max loss/trade: {SFM_MAX_LOSS_PER_TRADE_PCT * 100:.0f}% (vs 8% momentum)  \n"
+            f"• Peer-RS overlay: {SFM_RS_OVERLAY_WEIGHT * 100:.0f}%  \n"
+            f"• Cap globale condiviso: {MAX_POSITIONS} pos totali  \n"
+            "• Gate: ETF rotation A + score momentum ≥ 75 + peer-RS leader"
+        )
+    elif strategy_bucket == "contrarian":
         st.sidebar.caption(
             "**Regole contrarian (bucket)**  \n"
             f"• Max posizioni bucket: {CONTRA_MAX_POSITIONS}  \n"

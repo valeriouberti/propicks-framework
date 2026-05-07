@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS positions (
   score_claude INTEGER,
   score_tech INTEGER,
   catalyst TEXT,
+  -- SFM: sector_key normalizzato (technology / financials / ...). Usato dal
+  -- cross-bucket sector cap (sum SFM + ETF + momentum stesso settore).
+  -- NULL = posizione legacy senza tag (resolver lookup runtime).
+  sector_key TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

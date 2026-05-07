@@ -561,6 +561,86 @@ CONTRA_AI_MIN_SCORE_FOR_VALIDATION: float = 60.0
 
 
 # ---------------------------------------------------------------------------
+# SECTOR-FILTERED MOMENTUM (SFM)
+# ---------------------------------------------------------------------------
+# Ibrido top-down/bottom-up (Moskowitz-Grinblatt 1999): ETF rotation seleziona
+# i settori OVERWEIGHT, poi momentum scoring sceglie i top stock all'interno.
+# Edge atteso: industry momentum + intra-industry winners battono ETF puro
+# di 200-400 bps annui in trend regimes. Trade-off: factor concentration +
+# beta inflation in regime shift → invarianti tighter del momentum standalone.
+#
+# Cap aggregato cross-bucket (SFM + momentum stock + ETF rotation sullo stesso
+# settore) ≤ SFM_CROSS_BUCKET_SECTOR_CAP_PCT — applicato dal portfolio layer
+# in fase di add, non qui.
+
+# Bucket SFM independente (bucket cap su sum(SFM positions))
+SFM_MAX_AGGREGATE_EXPOSURE_PCT: float = 0.25
+
+# Per-stock cap più stretto del momentum standalone (15%) per limitare il
+# rischio di concentrazione fattoriale: 3 stock × 8% = 24% bucket pieno.
+SFM_MAX_POSITION_SIZE_PCT: float = 0.10
+
+# Max stock simultanei per singolo settore (evita over-concentration intra-bucket).
+SFM_MAX_STOCKS_PER_SECTOR: int = 3
+
+# Cross-bucket sector cap: somma di SFM + ETF rotation + momentum stock dello
+# STESSO settore non può eccedere questa soglia. Evita 3× exposure stesso fattore.
+SFM_CROSS_BUCKET_SECTOR_CAP_PCT: float = 0.35
+
+# Stop tighter del momentum (8%) per il beta inflation premium: stock
+# in settore vincente high-beta drawdown 1.5× ETF in regime shift.
+SFM_MAX_LOSS_PER_TRADE_PCT: float = 0.06
+
+# Peer-RS overlay: aumenta il peso del rs_vs_sector nel composite quando
+# il settore è OVERWEIGHT. Pattern overlay come earnings revision (B.2):
+# composite_sfm = base_composite × (1 - w) + rs_vs_sector_score × w
+SFM_RS_OVERLAY_WEIGHT: float = 0.20
+
+# Gate ETF rotation: solo settori con score_composite ≥ questo threshold
+# qualificano per SFM (≥ ETF_SCORE_OVERWEIGHT = classe A).
+SFM_MIN_SECTOR_SCORE: float = 70.0
+
+# Gate momentum minimo per stock SFM (più stretto di MIN_SCORE_TECH=60):
+# vogliamo solo classe A (≥75) dentro settori OVERWEIGHT.
+SFM_MIN_STOCK_SCORE: float = 75.0
+
+# Top-N settori da pipeline rotate-driven. Default 2 = bilancio diversification
+# (no single-sector all-in) e concentration (no over-rotation).
+SFM_DEFAULT_TOP_SECTORS: int = 2
+
+# AI validation cache (separata dal momentum: stesso ticker valutato in contesto
+# SFM ha bias settoriale diverso, no shared cache).
+SFM_AI_CACHE_TTL_HOURS: int = 24
+
+# ---------------------------------------------------------------------------
+# SFM Sub-ETF mode (instrument="subetf")
+# ---------------------------------------------------------------------------
+# Variante SFM che sostituisce il bottom-up stock pick con un sub-ETF
+# thematic/industry pick (es. dentro XLK → SOXX, IGV, CIBR). Edge residuo
+# atteso più piccolo dello stock-mode (intra-sub-industry dispersion <
+# intra-sector intra-stock dispersion) ma elimina idio risk + earnings gate.
+# Bucket cap shared con SFM stock (no extra bucket — stesso edge family).
+#
+# Sizing intermedio tra stock SFM (10%) e parent ETF rotation (20%): sub-ETF
+# è un basket diversificato ma più volatile del parent (concentration su
+# sub-industry single-factor, es. SOXX = 100% semis).
+SFM_SUBETF_MAX_POSITION_SIZE_PCT: float = 0.13
+
+# Stop tighter di stock SFM (6%) per la lower vol intrinseca dell'ETF basket.
+# Sub-ETF tipicamente ATR/price ~1.5-2.5% (vs 2.5-4% single stock).
+SFM_SUBETF_MAX_LOSS_PER_TRADE_PCT: float = 0.05
+
+# Liquidity gate: AUM minimo per inclusione nell'universe sub-ETF. Evita ETF
+# nicchia thin-traded (HACK 2018 era < $50M AUM, spread 30bps).
+SFM_SUBETF_MIN_AUM_USD: float = 200_000_000.0
+
+# Liquidity gate ADV (Average Daily Volume USD): assicura che size 13% capitale
+# sia eseguibile senza market impact significativo (stima: 1-3 giorni di
+# liquidity baseline su universo retail-friendly).
+SFM_SUBETF_MIN_ADV_USD: float = 5_000_000.0
+
+
+# ---------------------------------------------------------------------------
 # REGIME → SETTORI FAVORITI
 # ---------------------------------------------------------------------------
 # Lookup che traduce il regime_code weekly (1-5 da domain.regime) nella lista

@@ -38,12 +38,22 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
     MIN_SCORE_CLAUDE,
     MIN_SCORE_TECH,
+    SFM_CROSS_BUCKET_SECTOR_CAP_PCT,
+    SFM_MAX_AGGREGATE_EXPOSURE_PCT,
+    SFM_MAX_LOSS_PER_TRADE_PCT,
+    SFM_MAX_POSITION_SIZE_PCT,
+    SFM_MAX_STOCKS_PER_SECTOR,
 )
 from propicks.domain.sizing import (
     contrarian_aggregate_exposure,
     contrarian_position_count,
     is_contrarian_position,
+    is_sfm_position,
     portfolio_value,
+    sector_aggregate_exposure,
+    sfm_aggregate_exposure,
+    sfm_position_count,
+    sfm_positions_in_sector,
 )
 from propicks.domain.validation import validate_scores
 from propicks.io.db import connect, meta_set_many, transaction
@@ -60,6 +70,14 @@ _POSITION_FIELDS = (
 
 def _row_to_position_dict(row) -> dict:
     """Converte una riga della tabella positions nel dict legacy-compatibile."""
+    # sector_key: defensive — su row mappings da DB pre-migration potrebbe
+    # mancare la chiave. Try/except evita crash su istanze legacy non ancora
+    # migrate (la migration corre a connect() time ma c'è race window al
+    # primo boot post-upgrade su Turso remoto).
+    try:
+        sector_key = row["sector_key"]
+    except (KeyError, IndexError):
+        sector_key = None
     return {
         "entry_price": row["entry_price"],
         "entry_date": row["entry_date"],
@@ -72,6 +90,7 @@ def _row_to_position_dict(row) -> dict:
         "score_claude": row["score_claude"],
         "score_tech": row["score_tech"],
         "catalyst": row["catalyst"],
+        "sector_key": sector_key,
     }
 
 
@@ -246,6 +265,7 @@ def add_position(
     entry_date: str | None = None,
     *,
     ignore_earnings: bool = False,
+    sector_key: str | None = None,
 ) -> dict:
     """Apre una posizione con tutti i gate di business.
 
@@ -255,9 +275,20 @@ def add_position(
     Gate contrarian: size 8%, max 3 pos, 20% aggregate, loss 12%. Riconosce
     il bucket da ``strategy.lower().startswith("contra")``.
 
+    Gate SFM: size 10%, max 3 stock per settore, 25% bucket aggregato, loss
+    6%, cross-bucket sector cap 35% (sum SFM + ETF rotation + momentum stock
+    dello stesso settore). Riconosce bucket da ``strategy.lower().startswith("sfm")``.
+    Quando ``sector_key`` è passato, viene salvato sulla position per
+    enforcement futuro del cross-bucket cap.
+
     Phase 8 gate: hard block se earnings entro ``EARNINGS_HARD_GATE_DAYS``
     (default 5). Override con ``ignore_earnings=True`` per trade contrarian
     intentional post-earnings.
+
+    Args:
+        sector_key: settore normalizzato (technology / financials / ...).
+            Required per SFM. Optional per altre strategie ma raccomandato
+            per abilitare il cross-bucket sector cap futuro.
     """
     ticker = ticker.upper()
 
@@ -300,16 +331,25 @@ def add_position(
 
     total = portfolio_value(portfolio)
 
-    is_contra = isinstance(strategy, str) and strategy.lower().startswith("contra")
+    strategy_lower = strategy.lower() if isinstance(strategy, str) else ""
+    is_contra = strategy_lower.startswith("contra")
+    is_sfm = strategy_lower.startswith("sfm")
     if is_contra:
         size_cap_pct = CONTRA_MAX_POSITION_SIZE_PCT
         loss_cap_pct = CONTRA_MAX_LOSS_PER_TRADE_PCT
+    elif is_sfm:
+        size_cap_pct = SFM_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = SFM_MAX_LOSS_PER_TRADE_PCT
     else:
         size_cap_pct = MAX_POSITION_SIZE_PCT
         loss_cap_pct = MAX_LOSS_PER_TRADE_PCT
 
     if cost > total * size_cap_pct:
-        bucket_label = "contrarian" if is_contra else "standard"
+        bucket_label = (
+            "contrarian" if is_contra
+            else "sfm" if is_sfm
+            else "standard"
+        )
         raise ValueError(
             f"Size {cost/total*100:.1f}% supera il limite "
             f"{size_cap_pct*100:.0f}% per posizione ({bucket_label})."
@@ -336,6 +376,73 @@ def add_position(
                 f"sopra il cap {CONTRA_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
             )
 
+    if is_sfm:
+        # Gate 1: sector_key required
+        if not sector_key:
+            raise ValueError(
+                f"SFM gate: posizione SFM richiede sector_key. "
+                f"Pass sector_key='technology' / 'financials' / etc. dal "
+                f"sector_momentum dict (campo 'sector_key')."
+            )
+
+        # Gate 2: bucket aggregate (sum SFM positions ≤ 25%)
+        new_sfm_value = sum(
+            float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+            for p in positions.values()
+            if is_sfm_position(p)
+        ) + cost
+        new_sfm_pct = new_sfm_value / total if total > 0 else 0.0
+        if new_sfm_pct > SFM_MAX_AGGREGATE_EXPOSURE_PCT:
+            current_expo = sfm_aggregate_exposure(portfolio)
+            raise ValueError(
+                f"Aggiungere {ticker} porterebbe l'esposizione SFM a "
+                f"{new_sfm_pct*100:.1f}% (da {current_expo*100:.1f}%), "
+                f"sopra il cap {SFM_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+
+        # Gate 3: max stock per settore (≤ 3 nello stesso sector_key)
+        sector_n = sfm_positions_in_sector(portfolio, sector_key)
+        if sector_n >= SFM_MAX_STOCKS_PER_SECTOR:
+            raise ValueError(
+                f"Sector SFM '{sector_key}' pieno: "
+                f"{sector_n}/{SFM_MAX_STOCKS_PER_SECTOR} stock già aperti. "
+                f"Rimuovi una posizione prima di aggiungere un nuovo nome dello stesso settore."
+            )
+
+    # Cross-bucket sector cap (sum SFM + momentum + ETF rotation stesso settore).
+    # Applica a TUTTE le strategie quando sector_key è disponibile (SFM o ETF).
+    # Posizioni momentum/contra senza sector_key salvato → resolver via yfinance.
+    if sector_key:
+        from propicks.market.yfinance_client import get_ticker_sector
+        from propicks.domain.sector_momentum import normalize_sector_to_key
+        from propicks.domain.etf_universe import get_sector_key as _etf_sector_key
+
+        def _resolve(t: str, p: dict) -> str | None:
+            # ETF: lookup statico
+            etf_sec = _etf_sector_key(t)
+            if etf_sec:
+                return etf_sec
+            # Stock: yfinance cached lookup → normalize
+            try:
+                yf_sec = get_ticker_sector(t)
+            except Exception:
+                return None
+            return normalize_sector_to_key(yf_sec)
+
+        current_sector_pct = sector_aggregate_exposure(
+            portfolio, sector_key, sector_resolver=_resolve
+        )
+        new_sector_pct = current_sector_pct + (cost / total if total > 0 else 0.0)
+        if new_sector_pct > SFM_CROSS_BUCKET_SECTOR_CAP_PCT:
+            raise ValueError(
+                f"Cross-bucket sector cap: aggiungere {ticker} "
+                f"({sector_key}) porterebbe l'esposizione settoriale aggregata "
+                f"(SFM + momentum + ETF) a {new_sector_pct*100:.1f}% "
+                f"(da {current_sector_pct*100:.1f}%), sopra il cap "
+                f"{SFM_CROSS_BUCKET_SECTOR_CAP_PCT*100:.0f}%. "
+                f"Riduci esposizione esistente sullo stesso settore prima di aggiungere."
+            )
+
     new_cash = cash - cost
     if new_cash < total * MIN_CASH_RESERVE_PCT:
         raise ValueError(
@@ -345,7 +452,11 @@ def add_position(
         )
     risk_pct_trade = (entry_price - stop_loss) / entry_price
     if risk_pct_trade > loss_cap_pct:
-        bucket_label = "contrarian" if is_contra else "standard"
+        bucket_label = (
+            "contrarian" if is_contra
+            else "sfm" if is_sfm
+            else "standard"
+        )
         raise ValueError(
             f"Stop distante {risk_pct_trade*100:.2f}% > limite "
             f"{loss_cap_pct*100:.0f}% per trade ({bucket_label})."
@@ -370,6 +481,7 @@ def add_position(
         "score_claude": score_claude,
         "score_tech": score_tech,
         "catalyst": catalyst,
+        "sector_key": sector_key,
     }
     new_cash = round(cash - cost, 2)
     now = datetime.now().strftime(DATE_FMT)
@@ -378,8 +490,9 @@ def add_position(
         conn.execute(
             """INSERT INTO positions (
                 ticker, strategy, entry_price, entry_date, shares,
-                stop_loss, target, score_claude, score_tech, catalyst
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                stop_loss, target, score_claude, score_tech, catalyst,
+                sector_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ticker,
                 strategy,
@@ -391,6 +504,7 @@ def add_position(
                 score_claude,
                 score_tech,
                 catalyst,
+                sector_key,
             ),
         )
         for key, value in (("cash", str(new_cash)), ("last_updated", now)):

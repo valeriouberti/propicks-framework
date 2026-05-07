@@ -26,6 +26,7 @@ journaling → review.
 | Stock momentum / quality | [`MOMENTUM_STRATEGY.md`](docs/MOMENTUM_STRATEGY.md) | `propicks-momentum` | 6 sub-score (trend/momentum/volume/dist-high/vol/MA-cross) |
 | Quality-filtered mean reversion | [`CONTRARIAN_STRATEGY.md`](docs/CONTRARIAN_STRATEGY.md) | `propicks-contra` | 4 sub-score (oversold/quality/context/reversion) |
 | Sector ETF rotation | [`ETF_ROTATION_STRATEGY.md`](docs/ETF_ROTATION_STRATEGY.md) | `propicks-rotate` | 4 sub-score (RS/regime-fit/abs-mom/trend) |
+| **Sector-Filtered Momentum (SFM)** | [`SECTOR_MOMENTUM_STRATEGY.md`](docs/SECTOR_MOMENTUM_STRATEGY.md) | `propicks-sector-momentum` | Top-down ETF rotation gate + bottom-up 6 sub-score + peer-RS overlay 20% |
 
 ### Sistemi operativi
 
@@ -106,6 +107,7 @@ propicks-ai-framework/
 │   │   ├── etf_scoring.py        # ETF: 4 sub-score + rank_universe + alloc + suggest_defensive_allocation (C.7)
 │   │   ├── etf_universe.py       # Query helpers SECTOR_ETFS_US/EU/WORLD
 │   │   ├── stock_rs.py           # Peer RS stock vs sector ETF (US-only)
+│   │   ├── sector_momentum.py    # SFM: GICS↔Yahoo normalize + filter universe + peer-RS overlay + 2-mode pipeline (rotate-driven / sector-explicit)
 │   │   ├── regime.py             # Classifier macro weekly (5-bucket, mirror Pine)
 │   │   ├── regime_composite.py   # Fase B.3: regime daily z-score (HY OAS + breadth + VIX)
 │   │   ├── breadth.py            # Fase B.3: % above MA200 cross-sectional
@@ -134,7 +136,7 @@ propicks-ai-framework/
 │   ├── market/yfinance_client.py # Unico modulo yfinance + get_quality_metrics (B.4) + get_earnings_revision_metrics (B.2)
 │   ├── market/index_constituents.py # Wikipedia fetch (S&P 500, FTSE MIB, STOXX 600)
 │   ├── market/fred_client.py     # Fase B.3+B.5: FRED CSV cached (HY OAS, VIX, T10Y2Y, USD)
-│   ├── ai/                       # Adapter Anthropic (claude_client + prompts + validators)
+│   ├── ai/                       # Adapter Anthropic (claude_client + prompts + validators per ogni strategia, incl. sfm_prompts + sfm_validator)
 │   ├── reports/                  # Markdown generators (weekly/monthly/attribution)
 │   ├── cli/                      # Thin argparse wrappers (entry points)
 │   ├── scheduler/                # Phase 3: APScheduler + jobs + alerts + history
@@ -250,6 +252,13 @@ propicks-rotate                                   # US, top 3
 propicks-rotate --top 5 --region {US|EU|WORLD}
 propicks-rotate --allocate [--validate] [--json]
 
+# Sector-Filtered Momentum SFM (vedi docs/SECTOR_MOMENTUM_STRATEGY.md)
+propicks-sector-momentum                                  # rotate-driven: top 2 settori × 3 stock
+propicks-sector-momentum --top-sectors 3 --top-stocks 5   # custom
+propicks-sector-momentum --sector XLK [--top-stocks 5]    # mode esplicito
+propicks-sector-momentum --sector technology --validate   # AI SFM-specific prompt
+propicks-sector-momentum --rs-weight 0.30 --json          # peer-RS overlay tunable
+
 # Portfolio
 propicks-portfolio status / risk
 propicks-portfolio size AAPL --entry X --stop Y --score-claude 8 --score-tech 75
@@ -339,6 +348,7 @@ pytest                                            # tutti senza rete
 | `propicks-backtest` | `pages/6_Backtest.py` (+ `pages/11_Backtest_Portfolio.py`) |
 | `propicks-watchlist add/remove/update/list/status` | `pages/7_Watchlist.py` |
 | `propicks-contra [--validate]` | `pages/8_Contrarian.py` |
+| `propicks-sector-momentum [--sector] [--validate]` | `pages/15_Sector_Momentum.py` |
 
 ---
 
@@ -347,29 +357,38 @@ pytest                                            # tutti senza rete
 Queste regole sono hardcoded e NON devono essere aggirate. Per i dettagli e le
 ragioni di ogni soglia, vedi il MD della strategia rilevante.
 
-- **Max posizioni aperte**: **10** (shared cap, include momentum + contrarian + ETF)
+- **Max posizioni aperte**: **10** (shared cap, include momentum + contrarian + ETF + SFM)
 - **Max size singola posizione**:
   - Stock momentum: **15%**
   - Sector ETF: **20%**
   - Contrarian: **8%**
+  - **SFM**: **10%** (vs 15% momentum — beta inflation premium per high-beta intra-sector winners)
 - **Max esposizione aggregata sector ETF**: **60%** del capitale
 - **Max esposizione aggregata contrarian**: **20%** (bucket cap indipendente)
+- **Max esposizione aggregata SFM**: **25%** (bucket cap indipendente)
 - **Max posizioni contrarian simultanee**: **3** (cap interno al bucket)
+- **Max stock SFM per settore**: **3** (evita over-concentration intra-bucket)
+- **Cross-bucket sector cap**: **35%** del capitale per settore (sum SFM + ETF rotation + momentum stock dello stesso `sector_key`). Resolver runtime via `etf_universe.get_sector_key` + `yfinance.get_ticker_sector` + `normalize_sector_to_key`. Posizioni con `sector_key=NULL` (legacy pre-migration) escluse dal totale (conservativo).
 - **Min cash reserve**: **20%** del capitale
 - **Max loss per trade**:
   - Stock momentum: **8%**
   - Sector ETF: **5%**
   - Contrarian: **12%** (stop = `recent_low − 1×ATR`, vedi CONTRARIAN_STRATEGY.md)
+  - **SFM**: **6%** (vs 8% momentum — high-beta drawdown atteso in regime shift)
 - **Max loss settimanale**: 5% del capitale → blocco trading
 - **Max loss mensile**: 15% del capitale → blocco trading e revisione
 - **Earnings hard gate**: blocco entry se earnings entro **5 giorni**
   (override esplicito con `--ignore-earnings` per trade contrarian intentional)
 - **Score minimo per entry**: Claude ≥ 6/10, Tecnico ≥ 60/100
+- **Score minimo SFM**: composite ≥ **75** (classe A) + sector ETF score ≥ **70** (classe A OVERWEIGHT)
+- **Peer-RS overlay weight SFM**: **0.20** (`score_sfm = composite × 0.80 + peer_rs × 0.20`)
 - **Regime gate validazione AI**:
   - **Momentum**: skip BEAR / STRONG_BEAR (richiede regime ≥ NEUTRAL)
   - **Contrarian**: skip STRONG_BULL / STRONG_BEAR (edge collassa agli estremi)
   - **ETF Rotation**: in STRONG_BEAR i settori non favoriti sono forzati a 0;
     in BEAR sono capped a 50
+  - **SFM**: skip BEAR / STRONG_BEAR (regime ≥ NEUTRAL) + skip se peer-RS DEAD
+    (`score < 60 AND slope ≤ 0` = passenger trade, sector beta puro)
 
 ---
 
@@ -393,10 +412,14 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
   index constituents). Se in futuro si cambia provider, si tocca solo qui.
 - **`ai/`** è l'unico modulo che parla con l'SDK Anthropic. Espone
   `validate_thesis(...)` / `validate_contrarian_thesis(...)` /
-  `validate_rotation(...)` che ritornano dict strutturati. Nessun altro layer
-  importa `anthropic` direttamente. Include gate su `score_composite` e regime
-  (varia per strategia), cache giornaliera in tabella `ai_verdicts`, tool
-  `web_search` server-side.
+  `validate_rotation(...)` / `validate_sfm_thesis(...)` che ritornano dict
+  strutturati. Nessun altro layer importa `anthropic` direttamente. Include
+  gate su `score_composite` e regime (varia per strategia), cache giornaliera
+  in tabella `ai_verdicts` (chiavi versionate per strategia: `_v4_` momentum,
+  `_sfm-v1_` SFM, `rotation_` ETF), tool `web_search` server-side.
+  SFM-specific: passenger gate (peer-RS dead → skip senza spendere AI), system
+  prompt distinto in `sfm_prompts.py` (frame "intra-sector winner" vs
+  "is this stock a buy?").
 - **`reports/`** può importare da tutti gli altri layer per comporre i markdown.
 - **`cli/`** è thin: parsing argparse + chiamata a funzioni
   domain/io/ai/reports + formatting tabellare. **Nessuna logica di business.**

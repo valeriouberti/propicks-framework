@@ -513,6 +513,14 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     except (sqlite3.OperationalError, ValueError):
         pass
 
+    # SFM: sector_key column su positions per cross-bucket sector cap.
+    # NULL su posizioni legacy: il resolver runtime gestirà via yfinance.
+    if not _column_exists(conn, "positions", "sector_key"):
+        try:
+            conn.execute("ALTER TABLE positions ADD COLUMN sector_key TEXT")
+        except (sqlite3.OperationalError, ValueError):
+            pass
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Applica lo schema + migrations incrementali.

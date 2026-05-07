@@ -474,6 +474,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             catalyst=args.catalyst,
             entry_date=args.entry_date,
             ignore_earnings=getattr(args, "ignore_earnings", False),
+            sector_key=getattr(args, "sector_key", None),
         )
     except ValueError as exc:
         print(f"[errore] {exc}", file=sys.stderr)
@@ -739,6 +740,21 @@ def main() -> int:
             "Shortcut: default strategy='Contrarian' se non passata. Attiva i "
             "gate bucket contrarian (size 8%%, loss 12%%, max 3 pos, 20%% "
             "aggregate) via riconoscimento prefisso 'contra' in add_position."
+        ),
+    )
+    p_add.add_argument(
+        "--sector-key",
+        dest="sector_key",
+        default=None,
+        choices=(
+            "technology", "financials", "energy", "healthcare", "industrials",
+            "consumer_discretionary", "consumer_staples", "utilities",
+            "real_estate", "materials", "communications",
+        ),
+        help=(
+            "Settore GICS-normalizzato. Required per strategy='SFM'. "
+            "Optional per altre strategie ma raccomandato per abilitare "
+            "il cross-bucket sector cap (35%%) senza yfinance lookup."
         ),
     )
     p_add.set_defaults(func=cmd_add)

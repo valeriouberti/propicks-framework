@@ -1,6 +1,6 @@
 # CLI Reference
 
-Reference esaustivo dei 14 entry points CLI definiti in `pyproject.toml`. Tutti
+Reference esaustivo dei 15 entry points CLI definiti in `pyproject.toml`. Tutti
 funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 `reports/` sono ancorati alla root del progetto.
 
@@ -18,6 +18,7 @@ funzionano da qualsiasi cwd dopo `pip install -e .` perché i path di `data/` e
 | `propicks-momentum` | [Momentum momentum](#propicks-momentum) |
 | `propicks-contra` | [Contrarian mean reversion](#propicks-contra) |
 | `propicks-rotate` | [ETF sector rotation](#propicks-rotate) |
+| `propicks-sector-momentum` | [Sector-Filtered Momentum (SFM)](#propicks-sector-momentum) |
 | `propicks-portfolio` | [Portfolio & sizing](#propicks-portfolio) |
 | `propicks-journal` | [Journal trades](#propicks-journal) |
 | `propicks-report` | [Markdown reports](#propicks-report) |
@@ -123,6 +124,60 @@ propicks-rotate                              # US, top 3
 propicks-rotate --region WORLD --top 5
 propicks-rotate --allocate --validate
 ```
+
+---
+
+## propicks-sector-momentum
+
+Sector-Filtered Momentum (SFM) — top-down ETF rotation gate + bottom-up
+momentum scoring intra-settore + peer-RS overlay 20%.
+Vedi [SECTOR_MOMENTUM_STRATEGY](SECTOR_MOMENTUM_STRATEGY.md).
+
+```bash
+propicks-sector-momentum [opzioni]
+```
+
+| Opzione | Default | Effetto |
+|---------|---------|---------|
+| `--sector SECTOR` | — | Sector esplicito (skippa rotation gating). Ticker peer ETF (`XLK`, `XLF`, ...) o `sector_key` (`technology`, `financials`, ...). Mode B |
+| `--top-sectors N` | 2 (`SFM_DEFAULT_TOP_SECTORS`) | Mode rotate-driven: top-N settori OVERWEIGHT da scansionare |
+| `--top-stocks N` | 3 (`SFM_MAX_STOCKS_PER_SECTOR`) | Top-N stock per settore |
+| `--min-sector-score N` | 70 (`SFM_MIN_SECTOR_SCORE`) | Score composite ETF minimo per qualificare (≥ classe A OVERWEIGHT) |
+| `--min-stock-score N` | 75 (`SFM_MIN_STOCK_SCORE`) | Score momentum minimo (≥ classe A AZIONE IMMEDIATA) |
+| `--rs-weight FLOAT` | 0.20 (`SFM_RS_OVERLAY_WEIGHT`) | Peso overlay peer-RS in `score_sfm`. Range [0, 1] |
+| `--validate` | off | Valida tesi via Claude (3 gate hard: score / regime / passenger peer-RS) |
+| `--force-validate` | off | Bypassa gate + cache |
+| `--no-watchlist` | off | Disabilita auto-add classe A/B alla watchlist |
+| `--refresh-universe` | off | Re-fetch S&P 500 da Wikipedia (bypass cache 7gg) |
+| `--json` | off | Output JSON |
+| `--brief` | off | Solo tabella riassuntiva |
+
+**Universe**: solo S&P 500 (fase 1). NASDAQ100 / STOXX600 / FTSE MIB richiedono
+peer ETF mapping + index_membership history (vedi
+[SECTOR_MOMENTUM_STRATEGY §9.1](SECTOR_MOMENTUM_STRATEGY.md)).
+
+**Esempi**:
+
+```bash
+# Mode A — rotate-driven (default): top 2 settori × 3 stock
+propicks-sector-momentum
+
+# Custom: top 3 settori, top 5 stock, peer-RS overlay 30%
+propicks-sector-momentum --top-sectors 3 --top-stocks 5 --rs-weight 0.30
+
+# Mode B — sector esplicito (skip rotation)
+propicks-sector-momentum --sector XLK --top-stocks 5
+propicks-sector-momentum --sector technology --validate
+
+# JSON per scripting
+propicks-sector-momentum --json | jq '.candidates[].ticker'
+```
+
+**Output**: per ogni candidato `score_sfm = composite × (1−w) + peer_rs × w`,
+classification A/B/C/D, peer-RS deep dive (score/ratio/slope), sub-score
+momentum, trade params (entry / stop SFM 6% / max size 10%), AI verdict
+opzionale. Header sintetico settori valutati + reason di skip
+(`peer_rs_dead`, `regime_block`, `score_below`).
 
 ---
 

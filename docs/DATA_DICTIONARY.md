@@ -45,7 +45,7 @@ Posizioni correnti. Una riga per ticker aperto. PK `ticker`.
 | Colonna | Tipo | Semantica |
 |---------|------|-----------|
 | `ticker` | TEXT PK | Normalizzato yfinance (es. `AAPL`, `ENI.MI`) |
-| `strategy` | TEXT | `TechTitans`, `Contrarian`, `SectorETF`, ... |
+| `strategy` | TEXT | `TechTitans`, `Contrarian`, `SectorETF`, `SFM`, ... |
 | `entry_price` | REAL | Prezzo di entry effettivo (con slippage) |
 | `entry_date` | DATE | YYYY-MM-DD |
 | `shares` | INTEGER | Quantità — sempre intera |
@@ -56,6 +56,7 @@ Posizioni correnti. Una riga per ticker aperto. PK `ticker`.
 | `score_claude` | INTEGER | 0-10 conviction al momento dell'entry |
 | `score_tech` | INTEGER | 0-100 composite tecnico al momento dell'entry |
 | `catalyst` | TEXT | Free-text (es. "earnings beat + AI tailwind") |
+| `sector_key` | TEXT NULL | SFM-driven: sector_key normalizzato (`technology`, `financials`, ...). Salvato esplicitamente da SFM / ETF rotation; opzionale per momentum. Usato dal cross-bucket sector cap 35% in `portfolio_store.add_position`. Posizioni legacy `NULL` → resolver runtime via `etf_universe.get_sector_key` + `yfinance.get_ticker_sector` + `normalize_sector_to_key`. Migration idempotente in `_apply_migrations` (no backfill) |
 | `created_at`, `updated_at` | TIMESTAMP | Auto |
 
 ---

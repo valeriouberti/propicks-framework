@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from propicks.ai.contrarian_prompts import CONTRA_SYSTEM_PROMPT
 from propicks.ai.etf_prompts import ETF_SYSTEM_PROMPT
 from propicks.ai.prompts import SYSTEM_PROMPT
+from propicks.ai.sfm_prompts import SFM_SYSTEM_PROMPT
 from propicks.config import (
     AI_MAX_TOKENS,
     AI_MODEL,
@@ -553,3 +554,18 @@ def call_contrarian_validation(user_prompt: str) -> ContrarianVerdict:
         return ContrarianVerdict.model_validate(payload)
     except Exception as err:
         raise AIValidationError(f"Schema mismatch (contrarian): {err}") from err
+
+
+def call_sfm_validation(user_prompt: str) -> ThesisVerdict:
+    """Chiama Claude per la validazione tesi SFM (sector-filtered momentum).
+
+    Riusa lo schema ``ThesisVerdict`` (stesse 6 dimensioni di
+    confidence_by_dimension) ma con SYSTEM prompt SFM-specifico: l'analyst
+    framework qui assume sector come dato (già validato dalla rotation),
+    focus su intra-sector winner selection + peer-RS edge.
+    """
+    payload = _call_claude_with_schema(user_prompt, SFM_SYSTEM_PROMPT, _JSON_SCHEMA)
+    try:
+        return ThesisVerdict.model_validate(payload)
+    except Exception as err:
+        raise AIValidationError(f"Schema mismatch (sfm): {err}") from err
