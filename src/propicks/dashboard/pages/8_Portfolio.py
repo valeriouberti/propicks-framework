@@ -1145,7 +1145,19 @@ with tab_add:
         a_strategy = cols2[1].selectbox("Strategy", STRATEGIES, key="add_strategy")
         a_claude = cols2[2].slider("Score Claude", 0, 10, 7, key="add_sc")
         a_tech = cols2[3].slider("Score tech", 0, 100, 70, key="add_st")
-        a_catalyst = st.text_input(
+
+        cols3 = st.columns([1, 3])
+        a_currency = cols3[0].selectbox(
+            "Currency",
+            options=("auto", "EUR", "USD", "GBP", "CHF", "JPY"),
+            index=0,
+            key="add_currency",
+            help=(
+                "auto = inferita da ticker suffix (.MI→EUR, .L→GBP, no suffix→USD). "
+                "Override manuale se necessario (es. ETF UCITS .L quotato USD)."
+            ),
+        )
+        a_catalyst = cols3[1].text_input(
             "Catalyst (breve)", placeholder="Earnings beat, guidance raise, …", key="add_cat"
         )
         submitted = st.form_submit_button("Apri posizione", type="primary")
@@ -1166,10 +1178,11 @@ with tab_add:
                     score_claude=a_claude,
                     score_tech=a_tech,
                     catalyst=a_catalyst or None,
+                    currency=(None if a_currency == "auto" else a_currency),
                 )
                 st.toast(
                     f"{a_ticker.upper()}: {pos['shares']} @ {pos['entry_price']:.2f} "
-                    f"= {fmt_eur(pos['shares'] * pos['entry_price'])}",
+                    f"{pos.get('currency', 'EUR')}",
                     icon="✅",
                 )
                 st.rerun()

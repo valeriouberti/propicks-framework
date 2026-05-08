@@ -426,3 +426,21 @@ INSERT OR IGNORE INTO schema_version (version, description)
   VALUES (1, 'initial schema — migration from JSON stores');
 INSERT OR IGNORE INTO schema_version (version, description)
   VALUES (2, 'manual_ai_verdicts — paste-based AI accuracy tracking');
+INSERT OR IGNORE INTO schema_version (version, description)
+  VALUES (3, 'multi-currency — currency column on positions+trades, fx_rates_daily table');
+
+
+-- ----------------------------------------------------------------------------
+-- FX rates daily cache
+-- ----------------------------------------------------------------------------
+-- Multi-currency support. Cache yfinance EURUSD=X / EURGBP=X / EURJPY=X.
+-- Aggiornata via scheduler EOD job o on-demand quando convert_to_base
+-- chiamato e cache stale (TTL 24h).
+CREATE TABLE IF NOT EXISTS fx_rates_daily (
+  date DATE NOT NULL,
+  pair TEXT NOT NULL,                 -- 'EURUSD' / 'EURGBP' / 'EURJPY' / 'EURCHF'
+  rate REAL NOT NULL,                 -- es. EURUSD = 1.08 = 1 EUR = 1.08 USD
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (date, pair)
+);
+CREATE INDEX IF NOT EXISTS idx_fx_rates_pair ON fx_rates_daily(pair, date);

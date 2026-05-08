@@ -460,6 +460,7 @@ else:
         rows.append({
             "": pnl_arrow(pnl_pct),
             "Ticker": ticker,
+            "Cur": (p.get("currency") or "EUR"),
             "Strategy": p.get("strategy") or "—",
             "Shares": p["shares"],
             "Entry": p["entry_price"],

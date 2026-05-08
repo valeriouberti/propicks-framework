@@ -305,6 +305,14 @@ def apply_broker_position(
     eff_strategy = strategy or _infer_strategy(broker_pos)
     eff_catalyst = catalyst or f"Broker import {eff_date}"
 
+    # Currency: priority broker.valuta > infer_currency(ticker)
+    from propicks.domain.currency import infer_currency
+    eff_currency = (
+        (broker_pos.valuta or "").upper()
+        if broker_pos.valuta
+        else infer_currency(ticker)
+    )
+
     trade, position, warnings = open_trade(
         ticker=ticker,
         direction="long",
@@ -319,8 +327,10 @@ def apply_broker_position(
         catalyst=eff_catalyst,
         notes=(
             f"ISIN={broker_pos.isin or 'n/a'} · "
-            f"strumento={broker_pos.strumento or 'n/a'}"
+            f"strumento={broker_pos.strumento or 'n/a'} · "
+            f"currency={eff_currency}"
         ),
+        currency=eff_currency,
     )
     return {"trade": trade, "position": position, "warnings": warnings}
 

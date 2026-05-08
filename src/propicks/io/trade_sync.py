@@ -45,6 +45,7 @@ def open_trade(
     strategy: str | None = None,
     catalyst: str | None = None,
     notes: str | None = None,
+    currency: str | None = None,
 ) -> tuple[dict, dict | None, list[str]]:
     """Apre un trade: scrive journal e sincronizza portfolio.
 
@@ -96,6 +97,7 @@ def open_trade(
                 score_tech=score_tech,
                 catalyst=catalyst,
                 entry_date=entry_date,
+                currency=currency,
             )
         except ValueError as exc:
             warnings.append(

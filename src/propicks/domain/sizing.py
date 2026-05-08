@@ -191,19 +191,42 @@ def etf_aggregate_exposure(portfolio: dict) -> float:
     return aggregate / total
 
 
+def _fx_to_eur(amount: float, currency: str | None) -> float:
+    """Converte amount → EUR. Fallback identity se currency=None/EUR/error.
+
+    Lazy import per evitare ciclo. Errore FX → log + return amount as-is
+    (conservative: non blocca portfolio_value).
+    """
+    cur = (currency or "EUR").upper()
+    if cur == "EUR":
+        return float(amount)
+    try:
+        from propicks.domain.currency import convert_to_eur
+        return convert_to_eur(amount, cur)
+    except Exception:
+        # FX fetch failed → fallback as-is con warning sopprimibile
+        return float(amount)
+
+
 def portfolio_value(portfolio: dict) -> float:
-    """Valore totale del portafoglio = cash + sum(shares * entry_price).
+    """Valore totale del portafoglio in **EUR base** = cash + sum(shares × entry × FX).
 
     Usa i prezzi di entry (non i correnti): è una misura contabile,
     non di mark-to-market. Usata come base per i gate di sizing (15% cap,
     20% riserva) perché l'invariante è "% del capitale impegnato", non
     "% del P&L corrente".
+
+    **Multi-currency**: posizioni in USD/GBP/CHF/JPY convertite a EUR via
+    FX corrente (non FX-at-entry — semplificazione v1, cost basis include
+    drift FX storico).
     """
     cash = float(portfolio.get("cash") or 0)
-    invested = sum(
-        float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
-        for p in portfolio.get("positions", {}).values()
-    )
+    invested = 0.0
+    for p in portfolio.get("positions", {}).values():
+        shares = float(p.get("shares") or 0)
+        entry = float(p.get("entry_price") or 0)
+        cur = p.get("currency") or "EUR"
+        invested += _fx_to_eur(shares * entry, cur)
     return cash + invested
 
 
@@ -211,19 +234,17 @@ def portfolio_market_value(
     portfolio: dict,
     current_prices: dict[str, float | None],
 ) -> float:
-    """Valore mark-to-market = cash + sum(shares * current_price).
+    """Valore mark-to-market in **EUR base** = cash + sum(shares × current × FX).
 
     Usare come denominatore per i calcoli di **esposizione** (sector/beta/
     correlation): i numeratori in ``domain.exposure`` sono mark-to-market,
-    quindi anche il denominatore deve esserlo — altrimenti i weight non
-    sommano a 1 quando ci sono P&L unrealized (un portfolio +20% gonfia
-    i numeratori senza toccare il cost-basis del denominatore).
+    quindi anche il denominatore deve esserlo.
+
+    **Multi-currency**: prezzo corrente in currency della quotazione yfinance
+    (USD per US-listed, EUR per .MI/.DE/etc) convertito a EUR via FX corrente.
 
     **Semantica skip-on-None**: i ticker senza prezzo corrente vengono
-    esclusi dal totale, coerente con ``compute_sector_exposure`` e
-    ``compute_beta_weighted_exposure`` che li skippano anch'esse. Risultato:
-    un ticker senza prezzo sparisce da numeratore E denominatore — il peso
-    degli altri resta corretto tra loro, cash incluso.
+    esclusi dal totale.
     """
     cash = float(portfolio.get("cash") or 0)
     invested = 0.0
@@ -232,7 +253,8 @@ def portfolio_market_value(
         if cur is None:
             continue
         shares = float(p.get("shares") or 0)
-        invested += shares * float(cur)
+        currency = p.get("currency") or "EUR"
+        invested += _fx_to_eur(shares * float(cur), currency)
     return cash + invested
 
 

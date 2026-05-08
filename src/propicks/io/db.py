@@ -513,6 +513,16 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     except (sqlite3.OperationalError, ValueError):
         pass
 
+    # Schema v3: multi-currency. ALTER per DB pre-v3.
+    for table in ("positions", "trades"):
+        if not _column_exists(conn, table, "currency"):
+            try:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN currency TEXT DEFAULT 'EUR'"
+                )
+            except (sqlite3.OperationalError, ValueError):
+                pass
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Applica lo schema + migrations incrementali.

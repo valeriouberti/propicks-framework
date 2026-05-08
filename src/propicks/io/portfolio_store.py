@@ -76,6 +76,12 @@ _POSITION_FIELDS = (
 
 def _row_to_position_dict(row) -> dict:
     """Converte una riga della tabella positions nel dict legacy-compatibile."""
+    # Currency safety: column potrebbe essere assente in DB pre-migration o
+    # NULL su row legacy → fallback EUR.
+    try:
+        currency = row["currency"] or "EUR"
+    except (IndexError, KeyError):
+        currency = "EUR"
     return {
         "entry_price": row["entry_price"],
         "entry_date": row["entry_date"],
@@ -88,6 +94,7 @@ def _row_to_position_dict(row) -> dict:
         "score_claude": row["score_claude"],
         "score_tech": row["score_tech"],
         "catalyst": row["catalyst"],
+        "currency": currency,
     }
 
 
@@ -262,6 +269,7 @@ def add_position(
     entry_date: str | None = None,
     *,
     ignore_earnings: bool = False,
+    currency: str | None = None,
 ) -> dict:
     """Apre una posizione con tutti i gate di business.
 
@@ -306,6 +314,12 @@ def add_position(
             f"stop_loss {stop_loss:.2f} >= entry {entry_price:.2f}: invalido per long."
         )
     validate_scores(score_claude, score_tech)
+
+    # Currency: auto-infer da ticker suffix se non passata esplicitamente
+    if currency is None:
+        from propicks.domain.currency import infer_currency
+        currency = infer_currency(ticker)
+    currency = currency.upper()
 
     cost = shares * entry_price
     cash = float(portfolio.get("cash") or 0)
@@ -452,6 +466,7 @@ def add_position(
         "score_claude": score_claude,
         "score_tech": score_tech,
         "catalyst": catalyst,
+        "currency": currency,
     }
     new_cash = round(cash - cost, 2)
     now = datetime.now().strftime(DATE_FMT)
@@ -460,8 +475,8 @@ def add_position(
         conn.execute(
             """INSERT INTO positions (
                 ticker, strategy, entry_price, entry_date, shares,
-                stop_loss, target, score_claude, score_tech, catalyst
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                stop_loss, target, score_claude, score_tech, catalyst, currency
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ticker,
                 strategy,
@@ -473,6 +488,7 @@ def add_position(
                 score_claude,
                 score_tech,
                 catalyst,
+                currency,
             ),
         )
         for key, value in (("cash", str(new_cash)), ("last_updated", now)):
