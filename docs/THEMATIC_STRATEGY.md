@@ -22,7 +22,7 @@ Un ETF tematico ha valore solo se porta alfa **distinto** dal parent sector:
 - **SMH** ha senso vs **XLK** (≈70% top-10 di XLK è semis): se SMH non batte
   XLK, è solo leverage di XLK senza alfa.
 - **XBI** ha senso vs **XLV**: biotech è ≈60% di XLV, stesso ragionamento.
-- **LOCK.MI** ha senso vs **XDWT.DE** (parent MSCI World tech): se LOCK
+- **LOCK.MI** ha senso vs **XDWT.MI** (parent MSCI World tech): se LOCK
   non batte XDWT, l'edge cybersec è inesistente.
 
 L'asse RS giusto è theme/parent, **NON** theme/^GSPC. SMH che batte SPY è
@@ -201,7 +201,7 @@ Hardcoded in `config.py`:
   considerato genuino; sopra, score=0
 
 Constraint **non codato** (manuale, da rispettare in `propicks-portfolio add`):
-- Non aggiungere LOCK.MI se XDWT.DE è in portfolio sopra il 10% — il
+- Non aggiungere LOCK.MI se XDWT.MI è in portfolio sopra il 10% — il
   combined cap 25% si saturerebbe troppo.
 
 ---

@@ -140,7 +140,7 @@ propicks-ai-framework/
 │   ├── market/fred_client.py     # Fase B.3+B.5: FRED CSV cached (HY OAS, VIX, T10Y2Y, USD)
 │   ├── ai/                       # Adapter Anthropic (claude_client + prompts + validators)
 │   ├── reports/                  # Markdown generators (weekly/monthly/attribution)
-│   ├── cli/                      # Thin argparse wrappers (entry points)
+│   ├── cli/                      # Thin argparse wrappers (entry points: momentum/contra/rotate/themes/portfolio/journal/report/backtest/calibrate/watchlist/cache/scheduler/bot/calendar/regime/decay)
 │   ├── scheduler/                # Phase 3: APScheduler + jobs + alerts + history
 │   ├── notifications/            # Phase 4: Telegram dispatcher + bot
 │   └── dashboard/                # UI Streamlit multi-page (parallela alla CLI)
@@ -260,6 +260,14 @@ propicks-themes SMH XBI CIBR                     # batch ranking
 propicks-themes --rank [--region {US|WORLD|ALL}]
 propicks-themes --rank --theme cybersecurity
 
+# Regime daily composite (Fase B.3 — vedi docs/REGIME_COMPOSITE.md)
+propicks-regime composite [--start 2024-01-01] [--top-n 30] [--json]
+propicks-regime check                            # short-form latest reading
+
+# Strategy decay monitor (Fase D.4 — vedi docs/DECAY_MONITOR.md)
+propicks-decay monitor [--strategy {momentum|contrarian|etf|thematic|all}]
+propicks-decay monitor --expected-sharpe 0.20 --rolling 30 [--json]
+
 # Portfolio
 propicks-portfolio status / risk
 propicks-portfolio size AAPL --entry X --stop Y --score-claude 8 --score-tech 75
@@ -353,7 +361,8 @@ pytest                                            # tutti senza rete
 | `propicks-watchlist add/remove/update/list/status` | `pages/11_Watchlist.py` |
 | `propicks-calendar` | `pages/12_Calendar.py` |
 | `propicks-scheduler` | *(CLI-only, no dashboard page)* |
-| *(diagnostics)* | `pages/13_Regime_Composite.py`, `pages/14_Decay_Monitor.py` |
+| `propicks-regime composite` / `check` | `pages/13_Regime_Composite.py` |
+| `propicks-decay monitor` | `pages/14_Decay_Monitor.py` |
 
 ---
 

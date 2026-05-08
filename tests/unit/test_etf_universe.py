@@ -32,13 +32,11 @@ def test_us_sector_etf_detected():
 
 
 def test_world_sector_etf_detected():
-    # Xtrackers MSCI World sector series (.DE Xetra)
-    assert get_asset_type("XDW0.DE") == "SECTOR_ETF"  # Energy
-    assert get_asset_type("xdwt.de") == "SECTOR_ETF"  # Technology (case-insensitive)
-    assert get_asset_type("XWTS.DE") == "SECTOR_ETF"  # Communication Services (outlier)
-    assert get_asset_type("IQQ6.DE") == "SECTOR_ETF"  # Real Estate (separate series)
-    # Borsa Italiana .MI listings (same UCITS funds)
-    assert get_asset_type("XDWT.MI") == "SECTOR_ETF"
+    # Solo Borsa Italiana (.MI) listings — Xtrackers MSCI World sector
+    assert get_asset_type("XDW0.MI") == "SECTOR_ETF"  # Energy
+    assert get_asset_type("xdwt.mi") == "SECTOR_ETF"  # Technology (case-insensitive)
+    assert get_asset_type("XWTS.MI") == "SECTOR_ETF"  # Communication Services (outlier)
+    assert get_asset_type("IQQ6.MI") == "SECTOR_ETF"  # Real Estate (proxy iShares)
     assert get_asset_type("XDWF.MI") == "SECTOR_ETF"
 
 
@@ -52,12 +50,10 @@ def test_sector_key_for_us_etf():
 
 
 def test_sector_key_for_world_etf():
-    assert get_sector_key("XDW0.DE") == "energy"
-    assert get_sector_key("XDWT.DE") == "technology"
-    assert get_sector_key("XWTS.DE") == "communications"
-    assert get_sector_key("IQQ6.DE") == "real_estate"
-    # .MI listings
+    assert get_sector_key("XDW0.MI") == "energy"
     assert get_sector_key("XDWT.MI") == "technology"
+    assert get_sector_key("XWTS.MI") == "communications"
+    assert get_sector_key("IQQ6.MI") == "real_estate"
     assert get_sector_key("XDWH.MI") == "healthcare"
 
 
@@ -108,9 +104,9 @@ def test_xlp_favored_in_bear():
 
 
 def test_world_etf_respects_same_regime_lookup():
-    # XDWT.MI = listing BIt dello stesso fondo XDWT.DE → stesso sector → stesso regime fit
+    # XDWT.MI listing BIt → tech → favored in STRONG_BULL, non favored in STRONG_BEAR
     assert is_favored("XDWT.MI", 5) is True
-    assert is_favored("XDWT.DE", 1) is False
+    assert is_favored("XDWT.MI", 1) is False
 
 
 def test_stock_never_favored():
@@ -124,9 +120,8 @@ def test_stock_never_favored():
 def test_list_universe_all_contains_us_and_world():
     rows = list_universe("ALL")
     tickers = {r["ticker"] for r in rows}
-    assert "XLK" in tickers  # US
-    assert "XDWT.DE" in tickers  # WORLD .DE
-    assert "XDWT.MI" in tickers  # WORLD .MI
+    assert "XLK" in tickers  # US SPDR
+    assert "XDWT.MI" in tickers  # WORLD .MI Borsa Italiana
     expected = len(SECTOR_ETFS_US) + len(SECTOR_ETFS_WORLD)
     assert len(rows) == expected
 
@@ -175,9 +170,9 @@ def test_etf_info_none_for_stock():
 
 
 def test_etf_info_world_payload():
-    info = get_etf_info("XDW0.DE")
+    info = get_etf_info("XDW0.MI")
     assert info is not None
-    assert info["ticker"] == "XDW0.DE"
+    assert info["ticker"] == "XDW0.MI"
     assert info["region"] == "WORLD"
     assert info["sector_key"] == "energy"
     assert info["isin"] == "IE00BM67HM91"

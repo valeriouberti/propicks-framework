@@ -183,7 +183,7 @@ completa.
 **Scopo**: scoring rotazione settoriale ETF — mirror di `domain/etf_scoring.py`.
 
 **Quando usarlo**:
-- Su ogni ETF dell'universo (`XLK`, `XLF`, `XDWT.DE`, `XDWT.MI`, `IQQ6.DE`, ...).
+- Su ogni ETF dell'universo (`XLK`, `XLF`, `XDWT.MI`, `XDWF.MI`, `IQQ6.MI`, ...).
 - Timeframe **weekly preferito** (lo scoring è basato su RS weekly).
 
 **Setup obbligatorio**:

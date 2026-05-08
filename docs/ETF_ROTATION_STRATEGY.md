@@ -16,8 +16,8 @@ Due universi paralleli in `config.py`, selezionabili via `--region`. Default
 operativo è `WORLD` (allineato al broker retail Borsa Italiana).
 
 ### 1.1 WORLD — `SECTOR_ETFS_WORLD` (default)
-Xtrackers MSCI World sector UCITS — serie `XDW*.DE` (Xetra) e `XDW*.MI`
-(Borsa Italiana) per i nove settori GICS "core" più `XWTS.DE` per
+Xtrackers MSCI World sector UCITS — serie `XDW*.MI` (Xetra) e `XDW*.MI`
+(Borsa Italiana) per i nove settori GICS "core" più `XWTS.MI` per
 communications. Perimetro MSCI World (developed markets, ~65-70% US +
 ~15% Europa + ~6% Giappone), **non è un mirror dei SPDR** — settori world
 includono nomi europei/giapponesi con dinamica diversa (es. energy con
@@ -37,7 +37,7 @@ trader retail EU usa direttamente i listing `.MI` Xtrackers nel bucket WORLD.
 
 **Real Estate WORLD — eccezione di perimetro**: NON esiste un Xtrackers MSCI
 World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS su
-11). Il proxy più simile, liquido su Xetra/yfinance, è **`IQQ6.DE`** (iShares
+11). Il proxy più simile, liquido su Xetra/yfinance, è **`IQQ6.MI`** (iShares
 Developed Markets Property Yield UCITS, ISIN IE00B1FZS350). Questo NON è un
 fund Xtrackers: issuer iShares (BlackRock) e perimetro REIT developed
 **filtrati per dividend yield ≥ 2%**. Esclude REIT senza yield significativo
@@ -47,12 +47,12 @@ world. Asimmetria nota e accettata per chiudere il bucket; il sub-score
 
 ### 1.4 Eccezioni e gotchas
 
-- `XWTS.DE` è l'outlier naming della serie WORLD (communications); riflette il
+- `XWTS.MI` è l'outlier naming della serie WORLD (communications); riflette il
   GICS 2018 reshuffle, include Meta/Alphabet/Netflix come XLC US.
 - Listing Xetra `XDW*` e `IQQ6` sono accumulating (IE-domiciled). Su Borsa
   Italiana stessi fondi listati come `XDW*.MI` (ISIN identico). Varianti
   distributing su LSE hanno ticker diversi e non sono registrate qui.
-- Real Estate WORLD coperto via `IQQ6.DE` proxy (iShares Property Yield, NON
+- Real Estate WORLD coperto via `IQQ6.MI` proxy (iShares Property Yield, NON
   Xtrackers GICS Real Estate puro — composizione yield-tilted). Trade-off
   noto e accettato per chiudere il bucket Real Estate world.
 

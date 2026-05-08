@@ -640,7 +640,7 @@ with tab_size:
     )
     with st.form("size_form", border=True):
         cols = st.columns([2, 1, 1, 1, 1, 1, 1])
-        ticker = cols[0].text_input("Ticker", placeholder="AAPL / XLK / XDWT.DE")
+        ticker = cols[0].text_input("Ticker", placeholder="AAPL / XLK / XDWT.MI")
         entry = cols[1].number_input("Entry price", min_value=0.01, step=0.01, format="%.2f")
         stop = cols[2].number_input("Stop price", min_value=0.01, step=0.01, format="%.2f")
         score_claude = cols[3].slider("Score Claude", 0, 10, 7)

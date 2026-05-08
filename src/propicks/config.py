@@ -248,7 +248,7 @@ SECTOR_ETFS_US: dict[str, dict] = {
 # Real Estate WORLD — eccezione di perimetro: NON esiste un Xtrackers MSCI
 # World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS
 # su 11). Il proxy più simile disponibile e liquido su Xetra/yfinance è
-# IQQ6.DE (iShares Developed Markets Property Yield UCITS, ISIN IE00B1FZS350),
+# IQQ6.MI (iShares Developed Markets Property Yield UCITS, ISIN IE00B1FZS350),
 # che NON traccia il settore GICS Real Estate world ma un sottoinsieme:
 # REIT developed markets filtrati per dividend yield ≥2%, esclude REIT senza
 # yield significativo (growth REIT) → biased verso income vs growth real
@@ -262,58 +262,65 @@ SECTOR_ETFS_US: dict[str, dict] = {
 # (.MI) se disponibile.
 
 SECTOR_ETFS_WORLD: dict[str, dict] = {
-    "XDWT.DE": {
-        "name": "Xtrackers MSCI World Information Technology UCITS",
+    # Solo Borsa Italiana (.MI) listings — broker retail IT-resident.
+    # Listing Xetra (.DE) rimossi nella v2.0 cleanup: stessi fondi UCITS
+    # (ISIN IE identici), duplicato zero-info se non tradi su Xetra.
+    # Naming ticker uniforme XDW* (mirror del listing Xetra).
+    # Per Real Estate non esiste Xtrackers MSCI World RE — uso IQQ6.MI proxy
+    # iShares Developed Markets Property Yield (REIT con div yield ≥2%,
+    # NON GICS RE world full; composizione yield-tilted accettata).
+    "XDWT.MI": {
+        "name": "Xtrackers MSCI World Information Technology UCITS (BIt)",
         "sector_key": "technology",
         "isin": "IE00BM67HT60",
     },
-    "XDWF.DE": {
-        "name": "Xtrackers MSCI World Financials UCITS",
+    "XDWF.MI": {
+        "name": "Xtrackers MSCI World Financials UCITS (BIt)",
         "sector_key": "financials",
         "isin": "IE00BM67HL84",
     },
-    "XDW0.DE": {
-        "name": "Xtrackers MSCI World Energy UCITS",
+    "XDW0.MI": {
+        "name": "Xtrackers MSCI World Energy UCITS (BIt)",
         "sector_key": "energy",
         "isin": "IE00BM67HM91",
     },
-    "XDWH.DE": {
-        "name": "Xtrackers MSCI World Health Care UCITS",
+    "XDWH.MI": {
+        "name": "Xtrackers MSCI World Health Care UCITS (BIt)",
         "sector_key": "healthcare",
         "isin": "IE00BM67HK77",
     },
-    "XDWI.DE": {
-        "name": "Xtrackers MSCI World Industrials UCITS",
+    "XDWI.MI": {
+        "name": "Xtrackers MSCI World Industrials UCITS (BIt)",
         "sector_key": "industrials",
         "isin": "IE00BM67HV82",
     },
-    "XDWC.DE": {
-        "name": "Xtrackers MSCI World Consumer Discretionary UCITS",
+    "XDWC.MI": {
+        "name": "Xtrackers MSCI World Consumer Discretionary UCITS (BIt)",
         "sector_key": "consumer_discretionary",
         "isin": "IE00BM67HP23",
     },
-    "XDWS.DE": {
-        "name": "Xtrackers MSCI World Consumer Staples UCITS",
+    "XDWS.MI": {
+        "name": "Xtrackers MSCI World Consumer Staples UCITS (BIt)",
         "sector_key": "consumer_staples",
         "isin": "IE00BM67HN09",
     },
-    "XDWU.DE": {
-        "name": "Xtrackers MSCI World Utilities UCITS",
+    "XDWU.MI": {
+        "name": "Xtrackers MSCI World Utilities UCITS (BIt)",
         "sector_key": "utilities",
         "isin": "IE00BM67HQ30",
     },
-    "XDWM.DE": {
-        "name": "Xtrackers MSCI World Materials UCITS",
+    "XDWM.MI": {
+        "name": "Xtrackers MSCI World Materials UCITS (BIt)",
         "sector_key": "materials",
         "isin": "IE00BM67HS53",
     },
-    "XWTS.DE": {
-        "name": "Xtrackers MSCI World Communication Services UCITS",
+    "XWTS.MI": {
+        "name": "Xtrackers MSCI World Communication Services UCITS (BIt)",
         "sector_key": "communications",
         "isin": "IE00BM67HR47",
     },
-    "IQQ6.DE": {
-        "name": "iShares Developed Markets Property Yield UCITS",
+    "IQQ6.MI": {
+        "name": "iShares Developed Markets Property Yield UCITS (BIt)",
         "sector_key": "real_estate",
         "isin": "IE00B1FZS350",
         "perimeter_note": (
@@ -322,48 +329,6 @@ SECTOR_ETFS_WORLD: dict[str, dict] = {
             "REIT developed con dividend yield ≥2%, NON il GICS Real Estate "
             "world full. Composizione yield-tilted vs growth real estate."
         ),
-    },
-    # ─── Borsa Italiana (.MI) listings degli stessi Xtrackers MSCI World ────
-    # Stessi fondi UCITS dei .DE, listing .MI per trader retail su BIt. ISIN
-    # identici alle controparti Xetra. Naming ticker uniforme XDW* su tutti
-    # i settori (mirror del listing Xetra). Tieni entrambi i listing (DE e MI)
-    # come voci separate: yfinance li tratta come simboli distinti.
-    "XDWT.MI": {
-        "name": "Xtrackers MSCI World Information Technology UCITS (BIt)",
-        "sector_key": "technology",
-        "isin": "IE00BM67HT60",
-        "listing_note": "Borsa Italiana listing dello stesso fondo XDWT.DE",
-    },
-    "XDWI.MI": {
-        "name": "Xtrackers MSCI World Industrials UCITS (BIt)",
-        "sector_key": "industrials",
-        "isin": "IE00BM67HV82",
-        "listing_note": "Borsa Italiana listing dello stesso fondo XDWI.DE",
-    },
-    "XDWU.MI": {
-        "name": "Xtrackers MSCI World Utilities UCITS (BIt)",
-        "sector_key": "utilities",
-        "isin": "IE00BM67HQ30",
-    },
-    "XDWH.MI": {
-        "name": "Xtrackers MSCI World Health Care UCITS (BIt)",
-        "sector_key": "healthcare",
-        "isin": "IE00BM67HK77",
-    },
-    "XDW0.MI": {
-        "name": "Xtrackers MSCI World Energy UCITS (BIt)",
-        "sector_key": "energy",
-        "isin": "IE00BM67HM91",
-    },
-    "XDWF.MI": {
-        "name": "Xtrackers MSCI World Financials UCITS (BIt)",
-        "sector_key": "financials",
-        "isin": "IE00BM67HL84",
-    },
-    "XDWM.MI": {
-        "name": "Xtrackers MSCI World Materials UCITS (BIt)",
-        "sector_key": "materials",
-        "isin": "IE00BM67HS53",
     },
 }
 
@@ -378,7 +343,7 @@ SECTOR_ETFS_WORLD: dict[str, dict] = {
 # Mapping: ticker → {parent_ticker, parent_sector_key, region, theme_label}.
 # parent_ticker = il sector ETF di riferimento per RS (NON il benchmark broad).
 # Esempi: SMH parent XLK (semis è ~70% top-10 XLK), XBI parent XLV, LOCK.MI
-# parent XDWT.DE (cybersec è sub-industry tech world).
+# parent XDWT.MI (cybersec è sub-industry tech world).
 #
 # Region segue il listing del tematico — RS usa parent stesso region:
 # tematico US → parent SPDR US, tematico .DE/.MI/UCITS → parent Xtrackers WORLD.
