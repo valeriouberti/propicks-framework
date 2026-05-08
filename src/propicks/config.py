@@ -52,6 +52,18 @@ MAX_POSITIONS: int = 10
 MAX_POSITION_SIZE_PCT: float = 0.15
 MIN_CASH_RESERVE_PCT: float = 0.20
 
+# Aggregate bucket caps a livello di portafoglio. La somma dei position cost
+# divisa per il capitale corrente non può superare il cap del bucket.
+#
+# - STOCK bucket = momentum + contrarian merged (single-name discrezionale)
+# - ETF bucket   = sector rotation + thematic ETF (basket diversificato)
+#
+# Sub-cap interni restano: contrarian ≤ 20% del capitale (dentro stock bucket),
+# thematic parent-aggregate ≤ 25% (dentro ETF bucket). Cash min reserve 20%
+# applicato separatamente: stock + ETF + cash = 100%, max stock+ETF = 80%.
+STOCK_MAX_AGGREGATE_EXPOSURE_PCT: float = 0.40
+# ETF_MAX_AGGREGATE_EXPOSURE_PCT definito sotto in sezione ETF (60%).
+
 HIGH_CONVICTION_SIZE_PCT: float = 0.12
 MEDIUM_CONVICTION_SIZE_PCT: float = 0.08
 
@@ -248,8 +260,9 @@ SECTOR_ETFS_US: dict[str, dict] = {
 # Real Estate WORLD — eccezione di perimetro: NON esiste un Xtrackers MSCI
 # World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS
 # su 11). Il proxy più simile disponibile e liquido su Xetra/yfinance è
-# IQQ6.MI (iShares Developed Markets Property Yield UCITS, ISIN IE00B1FZS350),
-# che NON traccia il settore GICS Real Estate world ma un sottoinsieme:
+# IQQ6 (iShares Developed Markets Property Yield UCITS, ISIN IE00B1FZS350)
+# era candidato proxy ma NON quotato su Borsa Italiana → rimosso. Avrebbe
+# tracciato un sottoinsieme:
 # REIT developed markets filtrati per dividend yield ≥2%, esclude REIT senza
 # yield significativo (growth REIT) → biased verso income vs growth real
 # estate. Issuer iShares (BlackRock), non Xtrackers (DWS): correlazione +
@@ -319,17 +332,10 @@ SECTOR_ETFS_WORLD: dict[str, dict] = {
         "sector_key": "communications",
         "isin": "IE00BM67HR47",
     },
-    "IQQ6.MI": {
-        "name": "iShares Developed Markets Property Yield UCITS (BIt)",
-        "sector_key": "real_estate",
-        "isin": "IE00B1FZS350",
-        "perimeter_note": (
-            "Proxy di perimetro per il bucket Real Estate WORLD: nessun "
-            "Xtrackers MSCI World Real Estate UCITS esiste. IQQ6 traccia "
-            "REIT developed con dividend yield ≥2%, NON il GICS Real Estate "
-            "world full. Composizione yield-tilted vs growth real estate."
-        ),
-    },
+    # Real Estate WORLD — NON coperto: nessun Xtrackers MSCI World Real Estate
+    # UCITS esiste su BIt, e IQQ6 (iShares Property Yield) non quotato su Borsa
+    # Italiana. Bucket WORLD copre 10 settori GICS su 11. Per esposizione REIT
+    # usare bucket US (XLRE SPDR) o single-name su BIt.
 }
 
 

@@ -144,13 +144,13 @@ def test_vol_target_scales_down_when_vol_high():
     portfolio = {
         "cash": 5000.0,
         "positions": {
-            "X": {"shares": 50, "entry_price": 100.0, "strategy": "TechTitans"},
+            "XLK": {"shares": 50, "entry_price": 100.0, "strategy": "ETF_Rotation"},
         },
     }
     # Returns molto volatili per X
     rng = np.random.default_rng(42)
     idx = pd.date_range(end="2026-04-24", periods=100, freq="B")
-    returns_df = pd.DataFrame({"X": rng.normal(0.001, 0.05, 100)}, index=idx)
+    returns_df = pd.DataFrame({"XLK": rng.normal(0.001, 0.05, 100)}, index=idx)
 
     r = calculate_position_size_advanced(
         entry_price=100, stop_price=92,
@@ -174,13 +174,13 @@ def test_vol_target_no_scaling_when_below():
     portfolio = {
         "cash": 5000.0,
         "positions": {
-            "X": {"shares": 50, "entry_price": 100.0, "strategy": "TechTitans"},
+            "XLK": {"shares": 50, "entry_price": 100.0, "strategy": "ETF_Rotation"},
         },
     }
     # Returns bassa vol
     rng = np.random.default_rng(42)
     idx = pd.date_range(end="2026-04-24", periods=100, freq="B")
-    returns_df = pd.DataFrame({"X": rng.normal(0.001, 0.002, 100)}, index=idx)
+    returns_df = pd.DataFrame({"XLK": rng.normal(0.001, 0.002, 100)}, index=idx)
 
     r = calculate_position_size_advanced(
         entry_price=100, stop_price=92,
@@ -202,12 +202,12 @@ def test_safety_invariant_final_le_base_with_all_features():
     portfolio = {
         "cash": 5000.0,
         "positions": {
-            "X": {"shares": 50, "entry_price": 100.0, "strategy": "TechTitans"},
+            "XLK": {"shares": 50, "entry_price": 100.0, "strategy": "ETF_Rotation"},
         },
     }
     rng = np.random.default_rng(42)
     idx = pd.date_range(end="2026-04-24", periods=100, freq="B")
-    returns_df = pd.DataFrame({"X": rng.normal(0.001, 0.02, 100)}, index=idx)
+    returns_df = pd.DataFrame({"XLK": rng.normal(0.001, 0.02, 100)}, index=idx)
     trades = _profitable_strategy_trades(n=20)
 
     r = calculate_position_size_advanced(

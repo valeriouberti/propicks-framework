@@ -13,6 +13,7 @@ from propicks.config import (
     CONTRA_MAX_LOSS_PER_TRADE_PCT,
     CONTRA_MAX_POSITION_SIZE_PCT,
     CONTRA_MAX_POSITIONS,
+    ETF_MAX_AGGREGATE_EXPOSURE_PCT,
     ETF_MAX_POSITION_SIZE_PCT,
     HIGH_CONVICTION_SIZE_PCT,
     MAX_LOSS_PER_TRADE_PCT,
@@ -22,6 +23,7 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
     MIN_SCORE_CLAUDE,
     MIN_SCORE_TECH,
+    STOCK_MAX_AGGREGATE_EXPOSURE_PCT,
     THEMATIC_ETFS,
     THEMATIC_MAX_POSITION_SIZE_PCT,
     THEMATIC_MAX_POSITIONS,
@@ -139,6 +141,54 @@ def is_etf_rotation_position(p: dict, ticker: str | None = None) -> bool:
         return False
     from propicks.config import SECTOR_ETFS_US, SECTOR_ETFS_WORLD
     return tk_up in SECTOR_ETFS_US or tk_up in SECTOR_ETFS_WORLD
+
+
+def is_etf_position(p: dict, ticker: str | None = None) -> bool:
+    """True se posizione appartiene al **bucket ETF** (rotation O thematic).
+
+    Bucket aggregate cap (60%) applica all'unione dei due.
+    """
+    return is_thematic_position(p, ticker=ticker) or is_etf_rotation_position(p, ticker=ticker)
+
+
+def is_stock_position(p: dict, ticker: str | None = None) -> bool:
+    """True se posizione appartiene al **bucket Stock** (momentum + contrarian).
+
+    Definito come complemento del bucket ETF: tutto ciò che non è ETF
+    (rotation/thematic) è stock. Include momentum + contrarian + qualsiasi
+    altro tag single-name discrezionale ('Altro', 'TechTitans', ecc).
+    """
+    return not is_etf_position(p, ticker=ticker)
+
+
+def stock_aggregate_exposure(portfolio: dict) -> float:
+    """Frazione capitale impegnata nel bucket Stock (momentum + contrarian).
+
+    Usato per gate aggregate `STOCK_MAX_AGGREGATE_EXPOSURE_PCT` (40%).
+    """
+    total = portfolio_value(portfolio)
+    if total <= 0:
+        return 0.0
+    aggregate = 0.0
+    for tk, p in portfolio.get("positions", {}).items():
+        if is_stock_position(p, ticker=tk):
+            aggregate += float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+    return aggregate / total
+
+
+def etf_aggregate_exposure(portfolio: dict) -> float:
+    """Frazione capitale impegnata nel bucket ETF (rotation + thematic).
+
+    Usato per gate aggregate `ETF_MAX_AGGREGATE_EXPOSURE_PCT` (60%).
+    """
+    total = portfolio_value(portfolio)
+    if total <= 0:
+        return 0.0
+    aggregate = 0.0
+    for tk, p in portfolio.get("positions", {}).items():
+        if is_etf_position(p, ticker=tk):
+            aggregate += float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+    return aggregate / total
 
 
 def portfolio_value(portfolio: dict) -> float:
@@ -284,6 +334,36 @@ def calculate_position_size(
                 ),
             }
 
+    # Gate aggregate STOCK (40%) / ETF (60%): policy bucket-level.
+    # Stock = momentum + contrarian merged. ETF = rotation + thematic merged.
+    is_stock_bucket = strategy_bucket in ("momentum", "contrarian")
+    is_etf_bucket = strategy_bucket in ("etf_rotation", "thematic") or asset_type in (
+        "SECTOR_ETF",
+        "THEMATIC_ETF",
+    )
+    if is_stock_bucket and not is_etf_bucket:
+        cur = stock_aggregate_exposure(portfolio)
+        if cur >= STOCK_MAX_AGGREGATE_EXPOSURE_PCT:
+            return {
+                "ok": False,
+                "error": (
+                    f"Bucket Stock (momentum+contrarian) al cap aggregato: "
+                    f"{cur * 100:.1f}% >= "
+                    f"{STOCK_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}% del capitale."
+                ),
+            }
+    if is_etf_bucket:
+        cur = etf_aggregate_exposure(portfolio)
+        if cur >= ETF_MAX_AGGREGATE_EXPOSURE_PCT:
+            return {
+                "ok": False,
+                "error": (
+                    f"Bucket ETF (rotation+thematic) al cap aggregato: "
+                    f"{cur * 100:.1f}% >= "
+                    f"{ETF_MAX_AGGREGATE_EXPOSURE_PCT * 100:.0f}% del capitale."
+                ),
+            }
+
     # Gate allineato con add_position: i due minimi sono check separati,
     # non una media (altrimenti score_claude=3 + score_tech=90 passerebbe qui
     # ma fallirebbe in add_position). Vedi CLAUDE.md §Regole di Business.
@@ -344,6 +424,20 @@ def calculate_position_size(
         # mostrano un parent identificato. Fallback: usiamo il cap statico
         # THEMATIC_PARENT_AGGREGATE_CAP_PCT come max_value upper bound.
         max_value = min(max_value, total_capital * THEMATIC_PARENT_AGGREGATE_CAP_PCT)
+
+    # Bucket aggregate headroom (Stock 40% / ETF 60%): clamp position size
+    # all'headroom rimanente del bucket. Un position singolo non può saturare
+    # il bucket se altre posizioni sono già aperte.
+    if is_stock_bucket and not is_etf_bucket:
+        stock_headroom_pct = max(
+            0.0, STOCK_MAX_AGGREGATE_EXPOSURE_PCT - stock_aggregate_exposure(portfolio)
+        )
+        max_value = min(max_value, total_capital * stock_headroom_pct)
+    if is_etf_bucket:
+        etf_headroom_pct = max(
+            0.0, ETF_MAX_AGGREGATE_EXPOSURE_PCT - etf_aggregate_exposure(portfolio)
+        )
+        max_value = min(max_value, total_capital * etf_headroom_pct)
     reserve = total_capital * MIN_CASH_RESERVE_PCT
     cash_available = max(0.0, cash - reserve)
 

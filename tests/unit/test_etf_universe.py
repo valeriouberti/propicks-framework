@@ -36,8 +36,9 @@ def test_world_sector_etf_detected():
     assert get_asset_type("XDW0.MI") == "SECTOR_ETF"  # Energy
     assert get_asset_type("xdwt.mi") == "SECTOR_ETF"  # Technology (case-insensitive)
     assert get_asset_type("XWTS.MI") == "SECTOR_ETF"  # Communication Services (outlier)
-    assert get_asset_type("IQQ6.MI") == "SECTOR_ETF"  # Real Estate (proxy iShares)
     assert get_asset_type("XDWF.MI") == "SECTOR_ETF"
+    # Real Estate WORLD non coperto (IQQ6 non quotato su BIt)
+    assert get_asset_type("IQQ6.MI") == "STOCK"  # ticker NON registrato
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +54,9 @@ def test_sector_key_for_world_etf():
     assert get_sector_key("XDW0.MI") == "energy"
     assert get_sector_key("XDWT.MI") == "technology"
     assert get_sector_key("XWTS.MI") == "communications"
-    assert get_sector_key("IQQ6.MI") == "real_estate"
     assert get_sector_key("XDWH.MI") == "healthcare"
+    # Real Estate non coperto in WORLD
+    assert get_sector_key("IQQ6.MI") is None
 
 
 def test_sector_key_none_for_stock():
@@ -137,7 +139,8 @@ def test_list_universe_world_only():
     assert all(r["region"] == "WORLD" for r in rows)
     assert len(rows) == len(SECTOR_ETFS_WORLD)
     sectors = {r["sector_key"] for r in rows}
-    assert "real_estate" in sectors
+    # WORLD copre 10 settori GICS — real_estate NON coperto (no IQQ6.MI on BIt)
+    assert "real_estate" not in sectors
     assert "communications" in sectors
     assert "technology" in sectors
 
@@ -181,7 +184,8 @@ def test_etf_info_world_payload():
 # ---------------------------------------------------------------------------
 # WORLD universe: coverage e ISIN
 # ---------------------------------------------------------------------------
-def test_world_universe_covers_all_11_gics_sectors():
+def test_world_universe_covers_10_gics_sectors():
+    """WORLD copre 10 settori GICS (no real_estate — IQQ6 non quotato BIt)."""
     sectors = {meta["sector_key"] for meta in SECTOR_ETFS_WORLD.values()}
     expected = {
         "technology",
@@ -192,11 +196,11 @@ def test_world_universe_covers_all_11_gics_sectors():
         "consumer_discretionary",
         "consumer_staples",
         "utilities",
-        "real_estate",
         "materials",
         "communications",
     }
     assert sectors == expected
+    assert "real_estate" not in sectors
 
 
 def test_world_etfs_all_have_isin():

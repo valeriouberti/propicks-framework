@@ -154,17 +154,23 @@ def test_sizing_medium_conviction_uses_8_pct():
 
 
 def test_sizing_respects_cash_reserve():
-    # Cash basso → cash_available ridotto dalla riserva 20%
-    pf = _empty_portfolio(cash=3_000)
-    pf["positions"] = {"X": {"shares": 70, "entry_price": 100.0}}  # total=10k
+    # Cash reserve binding scenario — usa setup compatibile con bucket caps
+    # (Stock 40% / ETF 60%). Pre-existing: AAPL 20*100=2000 (stock 29%) +
+    # XLK 30*100=3000 (ETF 43%). Cash=2000. Total=7000.
+    pf = _empty_portfolio(cash=2_000)
+    pf["positions"] = {
+        "AAPL": {"shares": 20, "entry_price": 100.0, "strategy": "TechTitans"},
+        "XLK": {"shares": 30, "entry_price": 100.0, "strategy": "ETF_Rotation"},
+    }
     r = calculate_position_size(
         entry_price=100, stop_price=95, score_claude=9, score_tech=85,
         portfolio=pf,
     )
-    # riserva 20% di 10k = 2000, cash available = 3000-2000 = 1000
-    # target 1200 ma cash available 1000 → 10 shares
+    # total=7000, reserve=1400, cash_avail=600. target stock=12%×7000=840.
+    # max stock=15%×7000=1050. headroom_stock=(0.40-0.286)×7000=800.
+    # min(840, 1050, 600, 800) = 600 → 6 shares (cash binding).
     assert r["ok"] is True
-    assert r["shares"] == 10
+    assert r["shares"] == 6
 
 
 def test_sizing_stock_uses_15_pct_cap():

@@ -16,12 +16,16 @@ Due universi paralleli in `config.py`, selezionabili via `--region`. Default
 operativo è `WORLD` (allineato al broker retail Borsa Italiana).
 
 ### 1.1 WORLD — `SECTOR_ETFS_WORLD` (default)
-Xtrackers MSCI World sector UCITS — serie `XDW*.MI` (Xetra) e `XDW*.MI`
-(Borsa Italiana) per i nove settori GICS "core" più `XWTS.MI` per
-communications. Perimetro MSCI World (developed markets, ~65-70% US +
-~15% Europa + ~6% Giappone), **non è un mirror dei SPDR** — settori world
-includono nomi europei/giapponesi con dinamica diversa (es. energy con
-Shell/TotalEnergies vs Chevron/Exxon puri US).
+Xtrackers MSCI World sector UCITS listati su **Borsa Italiana** (`.MI`) —
+serie `XDW*.MI` per i 9 settori GICS "core" più `XWTS.MI` per
+communications. **Real Estate NON coperto**: nessun Xtrackers MSCI World
+RE UCITS esiste, e IQQ6 (iShares Property Yield) non quotato su BIt.
+Coverage: **10 settori GICS su 11**.
+
+Perimetro MSCI World (developed markets, ~65-70% US + ~15% Europa + ~6%
+Giappone), **non è un mirror dei SPDR** — settori world includono nomi
+europei/giapponesi con dinamica diversa (es. energy con Shell/TotalEnergies
+vs Chevron/Exxon puri US).
 
 ### 1.2 US — `SECTOR_ETFS_US` (reference)
 Select Sector SPDR (11 settori GICS, tickers `XL*`). Mantenuti come reference:
@@ -35,26 +39,20 @@ erano duplicati zero-info dell'universo US (stesso Select Sector Index, solo
 wrapper irlandese accumulating). Sono stati rimossi nella v2.0 cleanup. Il
 trader retail EU usa direttamente i listing `.MI` Xtrackers nel bucket WORLD.
 
-**Real Estate WORLD — eccezione di perimetro**: NON esiste un Xtrackers MSCI
-World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS su
-11). Il proxy più simile, liquido su Xetra/yfinance, è **`IQQ6.MI`** (iShares
-Developed Markets Property Yield UCITS, ISIN IE00B1FZS350). Questo NON è un
-fund Xtrackers: issuer iShares (BlackRock) e perimetro REIT developed
-**filtrati per dividend yield ≥ 2%**. Esclude REIT senza yield significativo
-(growth/non-yield REIT) → composizione income-tilted vs full GICS Real Estate
-world. Asimmetria nota e accettata per chiudere il bucket; il sub-score
-`regime_fit` per `sector_key="real_estate"` si applica con questo trade-off.
+**Real Estate WORLD — NON coperto**: nessun Xtrackers MSCI World Real
+Estate UCITS esiste (la serie XDW*/XWTS copre 10 settori GICS su 11). IQQ6
+(iShares Developed Markets Property Yield) non quotato su Borsa Italiana
+→ rimosso dall'universo. Per esposizione REIT usare il bucket US (XLRE
+SPDR `--region US`) o single-name su BIt.
 
 ### 1.4 Eccezioni e gotchas
 
 - `XWTS.MI` è l'outlier naming della serie WORLD (communications); riflette il
   GICS 2018 reshuffle, include Meta/Alphabet/Netflix come XLC US.
-- Listing Xetra `XDW*` e `IQQ6` sono accumulating (IE-domiciled). Su Borsa
-  Italiana stessi fondi listati come `XDW*.MI` (ISIN identico). Varianti
-  distributing su LSE hanno ticker diversi e non sono registrate qui.
-- Real Estate WORLD coperto via `IQQ6.MI` proxy (iShares Property Yield, NON
-  Xtrackers GICS Real Estate puro — composizione yield-tilted). Trade-off
-  noto e accettato per chiudere il bucket Real Estate world.
+- Listing `.MI` accumulating (IE-domiciled UCITS). Varianti `.DE` Xetra dello
+  stesso fondo (ISIN identico) NON registrate — usa direttamente `.MI` su BIt.
+- Real Estate WORLD non coperto (vedi sopra). Sector rotation WORLD ranking
+  produce 10 ETF max invece di 11.
 
 ### 1.5 Benchmark RS per region
 
@@ -139,7 +137,7 @@ Entry point dedicato (non un branch di `propicks-momentum`): la rotazione è un
 workflow diverso dal setup single-stock e merita un comando suo.
 
 ```bash
-propicks-rotate                        # WORLD (default, Xtrackers XDW*/XWTS + IQQ6 RE), top 3
+propicks-rotate                        # WORLD (default, Xtrackers XDW*.MI 10 settori), top 3
 propicks-rotate --top 5                # WORLD, top 5
 propicks-rotate --region US            # SPDR Select Sector (XL*) reference
 propicks-rotate --allocate             # include proposta allocazione

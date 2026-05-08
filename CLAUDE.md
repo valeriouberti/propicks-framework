@@ -377,9 +377,13 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
   - Sector ETF: **20%**
   - Thematic ETF: **15%**
   - Contrarian: **8%**
-- **Max esposizione aggregata sector ETF**: **60%** del capitale
-- **Max esposizione aggregata contrarian**: **20%** (bucket cap indipendente)
-- **Max posizioni thematic simultanee**: **2**, cap aggregato `weight(theme)+weight(parent_ETF) ≤ 25%`
+- **Bucket aggregate caps**:
+  - **Stock bucket** (momentum + contrarian merged): **40%** del capitale
+  - **ETF bucket** (rotation + thematic merged): **60%** del capitale
+  - Cash min reserve 20% separato → max stock+ETF = 80%
+- **Sub-cap interni** (oltre i bucket aggregate):
+  - Contrarian aggregate: **20%** (dentro bucket Stock)
+  - Thematic posizioni: max **2**, parent-aggregate `weight(theme)+weight(parent_ETF) ≤ 25%` (dentro bucket ETF)
 - **Thematic correlation kill-switch**: `corr_60d(theme, parent) ≥ 0.85` → composite forzato a 0
 - **Max posizioni contrarian simultanee**: **3** (cap interno al bucket)
 - **Min cash reserve**: **20%** del capitale

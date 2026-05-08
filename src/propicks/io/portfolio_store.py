@@ -30,7 +30,9 @@ from propicks.config import (
     CONTRA_MAX_LOSS_PER_TRADE_PCT,
     CONTRA_MAX_POSITION_SIZE_PCT,
     CONTRA_MAX_POSITIONS,
+    ETF_MAX_AGGREGATE_EXPOSURE_PCT,
     ETF_MAX_POSITION_SIZE_PCT,
+    STOCK_MAX_AGGREGATE_EXPOSURE_PCT,
     THEMATIC_ETFS,
     THEMATIC_MAX_POSITION_SIZE_PCT,
     THEMATIC_MAX_POSITIONS,
@@ -48,9 +50,13 @@ from propicks.config import (
 from propicks.domain.sizing import (
     contrarian_aggregate_exposure,
     contrarian_position_count,
+    etf_aggregate_exposure,
     is_contrarian_position,
+    is_etf_position,
     is_etf_rotation_position,
+    is_stock_position,
     is_thematic_position,
+    stock_aggregate_exposure,
     thematic_parent_aggregate,
     thematic_position_count,
     portfolio_value,
@@ -388,6 +394,30 @@ def add_position(
                     f"{new_parent_pct*100:.1f}% (da {current_parent_pct*100:.1f}%), "
                     f"sopra il cap {THEMATIC_PARENT_AGGREGATE_CAP_PCT*100:.0f}%."
                 )
+
+    # ─── Bucket aggregate gates (Stock 40% / ETF 60%) ────────────────────
+    # STOCK = momentum + contrarian merged. ETF = rotation + thematic merged.
+    # I sub-cap (contrarian 20%, thematic parent 25%) restano applicati sopra.
+    if is_contra or (not is_thematic and not is_etf_rot):
+        # bucket Stock
+        current_stock_pct = stock_aggregate_exposure(portfolio)
+        new_stock_pct = current_stock_pct + (cost / total if total > 0 else 0)
+        if new_stock_pct > STOCK_MAX_AGGREGATE_EXPOSURE_PCT:
+            raise ValueError(
+                f"Aggiungere {ticker} porterebbe il bucket Stock (momentum+contrarian) a "
+                f"{new_stock_pct*100:.1f}% (da {current_stock_pct*100:.1f}%), "
+                f"sopra il cap aggregato {STOCK_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+    elif is_thematic or is_etf_rot:
+        # bucket ETF
+        current_etf_pct = etf_aggregate_exposure(portfolio)
+        new_etf_pct = current_etf_pct + (cost / total if total > 0 else 0)
+        if new_etf_pct > ETF_MAX_AGGREGATE_EXPOSURE_PCT:
+            raise ValueError(
+                f"Aggiungere {ticker} porterebbe il bucket ETF (rotation+thematic) a "
+                f"{new_etf_pct*100:.1f}% (da {current_etf_pct*100:.1f}%), "
+                f"sopra il cap aggregato {ETF_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
 
     new_cash = cash - cost
     if new_cash < total * MIN_CASH_RESERVE_PCT:
