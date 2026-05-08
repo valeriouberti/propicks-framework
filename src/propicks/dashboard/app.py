@@ -457,74 +457,347 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# Workflow tipico — percorso end-to-end dal pick al review
+# Workflow per strategia — percorso end-to-end dal pick al review
 # ---------------------------------------------------------------------------
-st.subheader("Workflow tipico")
+st.subheader("Workflow per strategia")
 st.caption(
-    "Il ciclo end-to-end dal pick mensile al review. Ogni step ha una pagina "
-    "dedicata e il comando CLI equivalente."
+    "Step-by-step end-to-end per ogni strategia: scan → check engine Python → "
+    "AI verdict → conferma TradingView → entry sizing → trade management. "
+    "Ogni riga ha pagina dashboard + comando CLI."
 )
 
-_steps = [
-    (
-        "1 · Scan tecnico",
-        "🔍",
-        "Analisi indicatori + classificazione A/B/C/D. Auto-add in watchlist "
-        "per classe A (target = prezzo corrente) e B.",
-        "Momentum",
-        "propicks-momentum TICKER",
-    ),
-    (
-        "2 · Watchlist",
-        "👀",
-        "Incubatrice per classe B (target manuale) e A in attesa. Flag READY "
-        "quando score ≥ 60 e prezzo entro ±2% dal target.",
-        "Watchlist",
-        "propicks-watchlist list",
-    ),
-    (
-        "3 · Validate AI",
-        "🤖",
-        "Claude verdict strutturato (CONFIRM / CAUTION / REJECT) con gate "
-        "doppio: score ≥ 60 **e** regime ≥ NEUTRAL. Cache 24h.",
-        "Momentum → Valida",
-        "propicks-momentum TICKER --validate",
-    ),
-    (
-        "4 · Size + Open",
-        "📏",
-        "Sizing rischio (cap 15%/20%, reserve 20%, max loss 8%) poi Journal "
-        "add (sync automatico su portfolio).",
-        "Portfolio · Journal",
-        "propicks-journal add TICKER ...",
-    ),
-    (
-        "5 · Manage",
-        "🔧",
-        "Trailing stop ATR-based (ratchet-up) + time-stop su trade flat da "
-        "30 gg. Opt-in per posizione.",
-        "Portfolio → Trade mgmt",
-        "propicks-portfolio manage --apply",
-    ),
-    (
-        "6 · Close + Review",
-        "💰",
-        "Chiusura trade (P&L nel journal) e report weekly/monthly per "
-        "validare che la strategia funzioni.",
-        "Journal · Reports",
-        "propicks-journal close / propicks-report",
-    ),
-]
-_rows = [_steps[:3], _steps[3:]]
-for _row in _rows:
-    _cols = st.columns(3)
-    for _col, (_title, _emoji, _desc, _page, _cli) in zip(_cols, _row, strict=True):
-        _col.markdown(
-            f"**{_emoji} {_title}**  \n"
-            f"{_desc}  \n"
-            f"_Pagina_: **{_page}**  \n"
-            f"`{_cli}`"
-        )
+_wf_tabs = st.tabs([
+    "📊 Stock Momentum",
+    "↩️ Contrarian",
+    "🔁 ETF Rotation",
+    "🎯 Thematic ETF",
+])
+
+
+def _render_workflow(steps: list[tuple[str, str, str, str, str]]) -> None:
+    """Render N-step workflow as a vertical timeline with cards."""
+    for i, (title, emoji, desc, page, cli) in enumerate(steps, 1):
+        col_n, col_body = st.columns([1, 12])
+        with col_n:
+            st.markdown(
+                f"<div style='font-size:22px;line-height:1;text-align:center;"
+                f"padding-top:6px;color:#3b82f6;font-weight:700;'>{i}</div>",
+                unsafe_allow_html=True,
+            )
+        with col_body:
+            st.markdown(
+                f"**{emoji} {title}**  \n"
+                f"{desc}  \n"
+                f"_Pagina_: **{page}**  ·  `{cli}`"
+            )
+        if i < len(steps):
+            st.markdown(
+                "<div style='border-left:2px dashed #cbd5e1;height:14px;"
+                "margin-left:18px;'></div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ─── 1. Stock Momentum ────────────────────────────────────────────────────
+with _wf_tabs[0]:
+    st.markdown(
+        "**Quando**: regime weekly ≥ NEUTRAL, universo S&P 500 / Nasdaq / "
+        "FTSE MIB / STOXX 600. Setup pullback su uptrend o breakout.  \n"
+        "**Cap**: 15% per posizione · 8% loss · bucket Stock 40% aggregate."
+    )
+    _render_workflow([
+        (
+            "Scan tecnico Python", "🔍",
+            "Lancia discovery su universo (top 30-50 ticker per market cap). "
+            "Engine calcola composite 6 sub-score (trend/momentum/volume/dist-high/vol/MA-cross). "
+            "Auto-add classe A (target=current) e B (no target) in watchlist.",
+            "Page 1 Momentum → tab Discovery",
+            "propicks-momentum --discover-sp500 --top 50",
+        ),
+        (
+            "Validate AI (Claude)", "🤖",
+            "Gate doppio: score ≥60 + regime ≥NEUTRAL. Verdict CONFIRM/CAUTION/REJECT "
+            "con conviction 0-10, bull/bear case, invalidation triggers. Cache 24h.",
+            "Page 1 → bottone Valida",
+            "propicks-momentum AAPL --validate",
+        ),
+        (
+            "Cross-check Perplexity / Sonar", "🔎",
+            "Copy prompt --validate (selettore Sonar/Claude diretto) per second opinion. "
+            "Sonar ha web search live (catalyst, earnings imminent, short interest).",
+            "Page 1 → expander Prompt --validate",
+            "propicks-momentum AAPL --validate --json (fallback)",
+        ),
+        (
+            "Conferma su TradingView", "📈",
+            "Apri chart ticker daily + Pine `daily_signal_engine.pine`. "
+            "Verifica: composite Pine ≈ engine, regime weekly NEUTRAL+, "
+            "volume divergence, no gap earnings entro 5gg.",
+            "tradingview/daily_signal_engine.pine",
+            "(visual check, no CLI)",
+        ),
+        (
+            "Sizing + Entry", "📏",
+            "Tab Size calculator: entry/stop/target → propone shares con cap "
+            "15% + check earnings hard gate 5gg + Stock bucket 40% headroom.",
+            "Page 8 Portfolio → tab Size calculator",
+            "propicks-portfolio size AAPL --entry 100 --stop 95 --score-claude 8 --score-tech 75",
+        ),
+        (
+            "Open trade (sync portfolio + journal)", "📝",
+            "Tab Add position O Page 9 Journal → Add trade. Journal scrive prima "
+            "(append-only), poi sync portfolio (cash decrement, position add).",
+            "Page 9 Journal → tab Add trade",
+            "propicks-journal add AAPL long --entry-price 100 --shares 10 --stop 95 --target 120 --strategy TechTitans",
+        ),
+        (
+            "Trade management", "🔧",
+            "Trailing stop ATR-based (ratchet-up only, opt-in per posizione, default OFF). "
+            "Time-stop 30gg se P&L flat (|<2%|). Page 8 tab Trade mgmt → 'Calcola suggerimenti' + Apply.",
+            "Page 8 → tab Trade management",
+            "propicks-portfolio manage --apply",
+        ),
+        (
+            "Close + Review", "💰",
+            "Stop hit / target raggiunto / time-stop / tesi invalidata → Journal close. "
+            "Page 9 Stats: equity curve realized, P&L distribution, win rate per strategy.",
+            "Page 9 Journal → tab Close trade",
+            "propicks-journal close AAPL --exit-price 118 --reason 'Target raggiunto'",
+        ),
+    ])
+
+
+# ─── 2. Contrarian ──────────────────────────────────────────────────────
+with _wf_tabs[1]:
+    st.markdown(
+        "**Quando**: regime weekly NEUTRAL/BEAR (skip STRONG_BULL/STRONG_BEAR). "
+        "VIX > 20 = sweet spot (fear without crash). Setup oversold con quality intact.  \n"
+        "**Cap**: 8% per posizione · 12% loss · max 3 pos · bucket Contrarian 20% (sub di Stock 40%)."
+    )
+    _render_workflow([
+        (
+            "Discovery oversold", "🔍",
+            "3-stage pipeline: prefilter cheap (RSI<35 + dist ATR≥1×) → full scoring "
+            "(oversold 40% + quality 25% + context 20% + reversion 15%) → top N.",
+            "Page 3 Contrarian → tab Discovery",
+            "propicks-contra --discover-sp500 --top 20",
+        ),
+        (
+            "Quality gate hard", "🛡️",
+            "Filtro non bypass: price > EMA200 weekly. Garantisce trend lungo intact "
+            "(no falling knife). VIX context check: spike 25+ = paura tradabile, <14 = euforia (skip).",
+            "Page 3 → KPI VIX live",
+            "(automatico in scoring)",
+        ),
+        (
+            "Validate AI flush vs break", "🤖",
+            "Claude classifica selloff: FLUSH (macro/sector rotation/tech) → tradable, "
+            "BREAK (earnings miss strutturale, fraud, guidance cut) → REJECT. "
+            "Catalyst type assessment + reversion target (EMA50 daily).",
+            "Page 3 → bottone Valida",
+            "propicks-contra GILD --validate",
+        ),
+        (
+            "Conferma su TradingView", "📈",
+            "Apri chart + Pine `contrarian_signal_engine.pine`. "
+            "Verifica: oversold confermato (RSI<30, multi-ATR sotto EMA50), "
+            "quality EMA200w intact, regime weekly compatibile.",
+            "tradingview/contrarian_signal_engine.pine",
+            "(visual check)",
+        ),
+        (
+            "Sizing + Entry", "📏",
+            "Bucket=contrarian → cap 8%, loss 12%, max 3 pos enforced. Stop = "
+            "recent_low − 1×ATR (NO trailing — target fisso EMA50). "
+            "ignore_earnings=True ammesso per trade post-flush intentional.",
+            "Page 8 → tab Size (bucket=contrarian)",
+            "propicks-portfolio size GILD --entry 130 --stop 124 --contrarian",
+        ),
+        (
+            "Open trade", "📝",
+            "Strategy='Contrarian'. Target = EMA50 daily (drifta ricalcolato a ogni manage). "
+            "Tab Open posizione + sync journal.",
+            "Page 9 Journal → Add trade (strategy=Contrarian)",
+            "propicks-journal add GILD long --entry-price 130 --target 137 --stop 124 --strategy Contrarian",
+        ),
+        (
+            "Trade management", "🔧",
+            "Time-stop 15gg (mean reversion 5-15gg, oltre = tesi invalida). "
+            "Target dinamico EMA50 ricalcolato — se prezzo raggiunge target → close. "
+            "Trailing OFF di default per contrarian.",
+            "Page 8 → tab Trade management",
+            "propicks-portfolio manage --time-stop 15 --apply",
+        ),
+        (
+            "Close + Review", "💰",
+            "Reason: target / stop / time-stop / tesi rotta. Decay monitor "
+            "controlla edge nel tempo (richiede 50+ trade per affidabilità).",
+            "Page 14 Decay Monitor (filter contrarian)",
+            "propicks-decay monitor --strategy contrarian",
+        ),
+    ])
+
+
+# ─── 3. ETF Rotation ────────────────────────────────────────────────────
+with _wf_tabs[2]:
+    st.markdown(
+        "**Quando**: rebalance weekly/biweekly. Universo WORLD (Xtrackers MSCI World "
+        "10 settori, .MI Borsa Italiana) o US SPDR reference.  \n"
+        "**Cap**: 20% per posizione · 5% stop fisso · bucket ETF 60% (con thematic merged)."
+    )
+    _render_workflow([
+        (
+            "Ranking universo", "🔍",
+            "Scoring 4 sub-score: RS vs benchmark (40%) + regime fit (30%) + "
+            "abs momentum 3M (20%) + trend EMA30w (10%). Regime hard-gate: "
+            "STRONG_BEAR non-favored=0, BEAR non-favored cap 50.",
+            "Page 2 ETF Rotation",
+            "propicks-rotate (default WORLD)",
+        ),
+        (
+            "Allocation proposta", "📊",
+            "Top-N (default 3) equal-weight 20% ciascuno, capped 60% aggregate. "
+            "STRONG_BEAR → flat (no allocation). BEAR → top-1 difensivo only.",
+            "Page 2 → checkbox Allocazione",
+            "propicks-rotate --allocate",
+        ),
+        (
+            "Validate macro Claude", "🤖",
+            "Macro strategist persona: stress-test su breadth, positioning, flows, "
+            "rotation stage (EARLY/MID/LATE). Cache 8h, skip in STRONG_BEAR.",
+            "Page 2 → checkbox Valida",
+            "propicks-rotate --validate",
+        ),
+        (
+            "Cross-check Sonar", "🔎",
+            "Copy prompt Sonar nativo per macro view live: HY OAS, DXY, breadth %, "
+            "AUM flows ETF. Constraint alternative_sector = lista universo - top-3.",
+            "Page 2 → expander Prompt --validate",
+            "(copy-incolla Sonar)",
+        ),
+        (
+            "Conferma su TradingView", "📈",
+            "Apri chart ETF (es. XDWT.MI) weekly + Pine `etf_rotation_engine.pine`. "
+            "Verifica RS line slope, regime classifier weekly, sector_key match config.",
+            "tradingview/etf_rotation_engine.pine",
+            "(visual check)",
+        ),
+        (
+            "Sizing + Entry", "📏",
+            "asset_type=SECTOR_ETF → cap 20%. Stop -5% hard (ETF bassa vol, ATR salta). "
+            "Strategy='ETF_Rotation'. Bucket ETF aggregate gate 60%.",
+            "Page 8 → tab Size (asset_type=SECTOR_ETF)",
+            "propicks-portfolio size XDWT.MI --entry 110 --stop 104.5 --score-tech 75",
+        ),
+        (
+            "Open trade (a tranche)", "📝",
+            "Regola operativa: cambio regime BULL→BEAR = uscita 2-3 tranche su 5 sessioni "
+            "per evitare whipsaw. Add position con strategy=ETF_Rotation.",
+            "Page 9 Journal → Add trade",
+            "propicks-journal add XDWT.MI long --entry-price 110 --shares 3 --stop 104.5 --strategy ETF_Rotation",
+        ),
+        (
+            "Manage + Rebalance", "🔧",
+            "Trigger rotate quando score sotto threshold delta 10pts (hysteresis). "
+            "Stop -5% safety net, exit primario è regime change. "
+            "Page 13 Regime Composite per early-warning lead 1-3 settimane.",
+            "Page 2 (re-run) · Page 13 Regime Composite",
+            "propicks-rotate · propicks-regime composite",
+        ),
+        (
+            "Close + Review", "💰",
+            "Close su rotation suggested o regime degrade. Report attribution "
+            "decompone alpha/beta/sector/timing.",
+            "Page 9 Journal → Close · Page 10 Reports",
+            "propicks-report attribution",
+        ),
+    ])
+
+
+# ─── 4. Thematic ETF ────────────────────────────────────────────────────
+with _wf_tabs[3]:
+    st.markdown(
+        "**Quando**: tematici sub-industry / cross-sector con alfa distinto dal parent. "
+        "Bucket satellite, max 2 posizioni simultanee, skip BEAR/STRONG_BEAR.  \n"
+        "**Cap**: 15% per posizione · 10% loss · max 2 pos · cap parent-aggregate 25% "
+        "(weight(theme)+weight(parent_ETF)≤25%)."
+    )
+    _render_workflow([
+        (
+            "Ranking universo", "🔍",
+            "Scoring 4 sub-score: RS-vs-parent (50%) + abs mom 25% + trend 15% + "
+            "parent regime fit 10%. RS-vs-parent peso alto = discrimina alfa "
+            "tematico vs leveraged sector bet.",
+            "Page 4 Thematic → mode 'Ranking universo'",
+            "propicks-themes --rank",
+        ),
+        (
+            "Correlation kill-switch", "⚠️",
+            "Corr 60d theme/parent ≥ 0.85 → composite forzato a 0 (alfa illusorio = "
+            "leverage parent). Visibile in tabella con flag ⚠ CORR-KILL.",
+            "Page 4 → tabella ranking + chart sub-score",
+            "(automatico in scoring)",
+        ),
+        (
+            "Validate AI thematic specialist", "🤖",
+            "Persona thematic investor: theme stage (EARLY 3-6M / MID 6-18M / LATE 18M+), "
+            "crowding/AUM flows, concentration top 3-5 holdings, catalyst 2-3M.",
+            "Page 4 → bottone Valida",
+            "propicks-themes LOCK.MI --validate",
+        ),
+        (
+            "Cross-check Sonar (alternative_ticker)", "🔎",
+            "Sonar prompt con constraint alternative_ticker = same-cohort candidates "
+            "(es. cybersecurity → CIBR/BUG/LOCK). Anti-confabulazione + anti-cohort-drift.",
+            "Page 4 → expander Prompt --validate",
+            "(copy-incolla Sonar)",
+        ),
+        (
+            "Conferma su TradingView", "📈",
+            "Apri chart tematico (es. LOCK.MI) weekly + Pine `thematic_signal_engine.pine` "
+            "configurando parent symbol (es. XDWT.MI). RS line theme/parent on-chart, "
+            "alert su corr-kill.",
+            "tradingview/thematic_signal_engine.pine",
+            "(visual check, set parent_symbol)",
+        ),
+        (
+            "Sizing + Entry (parent-aggregate check)", "📏",
+            "Bucket=thematic → cap 15%, loss 10%, max 2 pos, parent-aggregate 25% enforce. "
+            "Esempio: se XDWT.MI già 12% in portfolio, LOCK.MI max 13% (= 25% - 12%).",
+            "Page 8 → tab Size (bucket=thematic, asset=THEMATIC_ETF)",
+            "propicks-portfolio size LOCK.MI --entry 9 --stop 8.1 --score-tech 75",
+        ),
+        (
+            "Open trade", "📝",
+            "Strategy='Thematic'. Add position con parent_aggregate gate enforced. "
+            "Detection automatica via ticker registrato in THEMATIC_ETFS.",
+            "Page 9 Journal → Add trade (strategy=Thematic)",
+            "propicks-journal add LOCK.MI long --entry-price 9 --shares 50 --stop 8.1 --strategy Thematic",
+        ),
+        (
+            "Trade management", "🔧",
+            "Stop hard 10% (ATR% tematici alto). Time-stop 30gg default. "
+            "Re-check corr trimestrale: se corr_60d cresce verso 0.85 → considera close.",
+            "Page 8 → tab Trade management",
+            "propicks-portfolio manage --apply",
+        ),
+        (
+            "Decay + Promotion gate", "📊",
+            "Gate journal-evidence: dopo 15 trade chiusi tematici verifica win rate ≥ "
+            "baseline single-stock + corr_avg < 0.85. Se fail → kill subpackage. "
+            "Decay monitor + filter thematic.",
+            "Page 14 Decay Monitor",
+            "propicks-decay monitor --strategy thematic",
+        ),
+    ])
+
+
+st.caption(
+    "💡 **Pattern comune ai 4 workflow**: scan engine Python → AI verdict (Claude) → "
+    "cross-check Sonar/Perplexity → conferma TradingView Pine (visual) → "
+    "sizing rispetta bucket cap → open journal+portfolio sync → manage trailing/time-stop → "
+    "close + review stats. Ogni step ha CLI e dashboard equivalente."
+)
 
 with st.expander("Scala di classificazione score (A/B/C/D)", expanded=False):
     _c1, _c2, _c3, _c4 = st.columns(4)
