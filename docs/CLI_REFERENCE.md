@@ -108,7 +108,7 @@ propicks-rotate [opzioni]
 
 | Opzione | Default | Effetto |
 |---------|---------|---------|
-| `--region {US\|EU\|WORLD\|ALL}` | `US` | Universo: SPDR XL*, UCITS ZPD*.DE, Xtrackers XDW* + IQQ6.DE proxy RE, o ALL |
+| `--region {US\|WORLD\|ALL}` | `WORLD` | WORLD: Xtrackers XDW*.DE/.MI + IQQ6 RE proxy (default, operativo retail EU). US: SPDR XL* (reference, lunga storia). ALL: unione |
 | `--top N` | 3 | Numero settori in proposta allocazione |
 | `--allocate` | off | Stampa proposta allocation con cap 20%/60% |
 | `--validate` | off | Valida rotation macro via Claude |

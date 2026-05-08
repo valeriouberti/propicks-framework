@@ -12,23 +12,28 @@ Il branch è determinato dal ticker via `domain.etf_universe.get_asset_type`:
 
 ## 1. Universo ETF
 
-Tre universi paralleli in `config.py`, selezionabili via `--region`:
+Due universi paralleli in `config.py`, selezionabili via `--region`. Default
+operativo è `WORLD` (allineato al broker retail Borsa Italiana).
 
-### 1.1 US — `SECTOR_ETFS_US`
-Select Sector SPDR (11 settori GICS, tickers `XL*`).
+### 1.1 WORLD — `SECTOR_ETFS_WORLD` (default)
+Xtrackers MSCI World sector UCITS — serie `XDW*.DE` (Xetra) e `XDW*.MI`
+(Borsa Italiana) per i nove settori GICS "core" più `XWTS.DE` per
+communications. Perimetro MSCI World (developed markets, ~65-70% US +
+~15% Europa + ~6% Giappone), **non è un mirror dei SPDR** — settori world
+includono nomi europei/giapponesi con dinamica diversa (es. energy con
+Shell/TotalEnergies vs Chevron/Exxon puri US).
 
-### 1.2 EU — `SECTOR_ETFS_EU`
-SPDR S&P U.S. Select Sector UCITS (`ZPD*.DE` su Xetra). **Wrapper UCITS degli
-stessi Select Sector Index US** — esposizione identica, solo wrapper irlandese
-accumulating. Tesi di rotazione unica con US; il trader sceglie il listing in
-base a fiscalità e liquidità.
+### 1.2 US — `SECTOR_ETFS_US` (reference)
+Select Sector SPDR (11 settori GICS, tickers `XL*`). Mantenuti come reference:
+storia yfinance più lunga (2007+) per backtest, parent universo dei thematic
+US (SMH/XBI/CIBR/IBB/ROBO/ICLN/XAR/ITA/KWEB). Per trader retail EU su Borsa
+Italiana NON sono direttamente operativi — usa il bucket WORLD `.MI`.
 
-### 1.3 WORLD — `SECTOR_ETFS_WORLD`
-Xtrackers MSCI World sector UCITS — serie `XDW*.DE` per i nove settori GICS
-"core" più `XWTS.DE` per communications. Perimetro MSCI World (developed
-markets, ~65-70% US + ~15% Europa + ~6% Giappone), **non è un mirror dei SPDR**
-— settori world includono nomi europei/giapponesi con dinamica diversa
-(es. energy con Shell/TotalEnergies vs Chevron/Exxon puri US).
+### 1.3 EU UCITS wrapper — RIMOSSO
+I wrapper UCITS dei Select Sector SPDR (ex `SECTOR_ETFS_EU`, tickers `ZPD*.DE`)
+erano duplicati zero-info dell'universo US (stesso Select Sector Index, solo
+wrapper irlandese accumulating). Sono stati rimossi nella v2.0 cleanup. Il
+trader retail EU usa direttamente i listing `.MI` Xtrackers nel bucket WORLD.
 
 **Real Estate WORLD — eccezione di perimetro**: NON esiste un Xtrackers MSCI
 World Real Estate UCITS quotato (la serie XDW*/XWTS copre 10 settori GICS su
@@ -42,21 +47,21 @@ world. Asimmetria nota e accettata per chiudere il bucket; il sub-score
 
 ### 1.4 Eccezioni e gotchas
 
-- `XLRE` non ha SPDR US Real Estate Select Sector UCITS equivalente
-  (`eu_equivalent=None`). Per la WORLD, vedi nota su `IQQ6.DE` qui sopra:
-  proxy iShares Property Yield, non un Xtrackers GICS Real Estate.
 - `XWTS.DE` è l'outlier naming della serie WORLD (communications); riflette il
   GICS 2018 reshuffle, include Meta/Alphabet/Netflix come XLC US.
-- Listing Xetra `ZPD*`, `XDW*` e `IQQ6` sono accumulating (IE-domiciled).
-  Alcuni broker retail EU non quotano `XWTS` o `IQQ6` su Xetra — fallback su
-  listing Milano (`.MI`) se disponibile. Varianti distributing su LSE hanno
-  ticker diversi e non sono registrate qui.
+- Listing Xetra `XDW*` e `IQQ6` sono accumulating (IE-domiciled). Su Borsa
+  Italiana stessi fondi listati come `XDW*.MI` (ISIN identico). Varianti
+  distributing su LSE hanno ticker diversi e non sono registrate qui.
+- Real Estate WORLD coperto via `IQQ6.DE` proxy (iShares Property Yield, NON
+  Xtrackers GICS Real Estate puro — composizione yield-tilted). Trade-off
+  noto e accettato per chiudere il bucket Real Estate world.
 
 ### 1.5 Benchmark RS per region
 
 `config.get_etf_benchmark`:
-- US/EU → `^GSPC` (coerente con Select Sector Index)
+- US → `^GSPC` (coerente con Select Sector Index)
 - WORLD → `URTH` (iShares MSCI World ETF, stesso perimetro dei XDW*)
+- ALL → `URTH` (default WORLD-centric per operational reality retail EU)
 
 Mischiare benchmark e universo confonde outperformance settoriale con
 differenze di perimetro geografico. `rank_universe` sceglie automaticamente il
@@ -134,10 +139,9 @@ Entry point dedicato (non un branch di `propicks-momentum`): la rotazione è un
 workflow diverso dal setup single-stock e merita un comando suo.
 
 ```bash
-propicks-rotate                        # US (SPDR Select Sector), top 3
-propicks-rotate --top 5                # US, top 5
-propicks-rotate --region EU            # SPDR UCITS (ZPD*.DE)
-propicks-rotate --region WORLD         # Xtrackers MSCI World 10 settori (XDW*/XWTS) + IQQ6.DE proxy RE
+propicks-rotate                        # WORLD (default, Xtrackers XDW*/XWTS + IQQ6 RE), top 3
+propicks-rotate --top 5                # WORLD, top 5
+propicks-rotate --region US            # SPDR Select Sector (XL*) reference
 propicks-rotate --allocate             # include proposta allocazione
 propicks-rotate --validate             # validazione macro via Claude
 propicks-rotate --json                 # output JSON

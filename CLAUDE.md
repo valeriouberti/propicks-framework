@@ -251,13 +251,13 @@ propicks-contra --discover-stoxx600                           # ~600 nomi EU
 
 # ETF Rotation (vedi docs/ETF_ROTATION_STRATEGY.md)
 propicks-rotate                                   # US, top 3
-propicks-rotate --top 5 --region {US|EU|WORLD}
+propicks-rotate --top 5 --region {US|WORLD}        # default WORLD
 propicks-rotate --allocate [--validate] [--json]
 
 # Thematic ETF (vedi docs/THEMATIC_STRATEGY.md)
 propicks-themes LOCK.MI [--validate] [--json]
 propicks-themes SMH XBI CIBR                     # batch ranking
-propicks-themes --rank [--region {US|EU|WORLD|ALL}]
+propicks-themes --rank [--region {US|WORLD|ALL}]
 propicks-themes --rank --theme cybersecurity
 
 # Portfolio

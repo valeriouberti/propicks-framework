@@ -391,9 +391,8 @@ propicks-contra AAPL --validate       # Claude flush-vs-break
 ### 5.3 `propicks-rotate` — ETF rotation
 
 ```bash
-propicks-rotate                         # US SPDR, top 3
-propicks-rotate --region WORLD          # Xtrackers MSCI World
-propicks-rotate --region EU             # UCITS SPDR
+propicks-rotate                         # WORLD (default, Xtrackers MSCI World), top 3
+propicks-rotate --region US             # SPDR XL* reference
 propicks-rotate --top 5 --allocate      # + proposta allocazione
 propicks-rotate --validate              # Claude macro validation
 ```

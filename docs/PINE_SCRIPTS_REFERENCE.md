@@ -183,11 +183,11 @@ completa.
 **Scopo**: scoring rotazione settoriale ETF — mirror di `domain/etf_scoring.py`.
 
 **Quando usarlo**:
-- Su ogni ETF dell'universo (`XLK`, `XLF`, `ZPDT.DE`, `XDWT.DE`, `IQQ6.DE`, ...).
+- Su ogni ETF dell'universo (`XLK`, `XLF`, `XDWT.DE`, `XDWT.MI`, `IQQ6.DE`, ...).
 - Timeframe **weekly preferito** (lo scoring è basato su RS weekly).
 
 **Setup obbligatorio**:
-1. **Benchmark Symbol**: `SPX` per US/EU, `URTH` per WORLD.
+1. **Benchmark Symbol**: `SPX` per US, `URTH` per WORLD.
 2. **Sector Key**: scegli il GICS sector (technology / financials / energy / ...). Senza, il regime_fit ricade a 50 (neutro) e perdi il match con Python.
 
 **Default chiave**:

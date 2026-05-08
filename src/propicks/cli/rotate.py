@@ -1,10 +1,9 @@
 """CLI thin wrapper per la rotazione settoriale ETF.
 
 Esempi:
-    propicks-rotate                        # US universe (SPDR Select Sector), top 3
-    propicks-rotate --top 5                # US, top 5
-    propicks-rotate --region EU            # SPDR UCITS su Xetra (ZPD*.DE)
-    propicks-rotate --region WORLD         # Xtrackers MSCI World sector (XDW*/XWTS) + IQQ6 RE proxy
+    propicks-rotate                        # WORLD (default, Xtrackers XDW*.DE/.MI + IQQ6 RE proxy), top 3
+    propicks-rotate --top 5                # WORLD, top 5
+    propicks-rotate --region US            # SPDR Select Sector (XL*) reference
     propicks-rotate --allocate             # include proposta allocazione
     propicks-rotate --validate             # validazione macro via Claude
     propicks-rotate --json                 # output JSON
