@@ -173,17 +173,79 @@ _fresh_cols[3].markdown(
     f"{_fmt_age(_freshness['ai_verdicts']['age_h'])}"
 )
 
+# Refresh buttons — warm cache + record_regime via scheduler.jobs
+_btn_cols = st.columns([1, 1, 1, 2])
+_refresh_done = False
+
+with _btn_cols[0]:
+    if st.button("🔄 OHLCV", help="Warm cache daily+weekly per portfolio+watchlist", key="btn_refresh_ohlcv"):
+        from propicks.scheduler.jobs import warm_cache as _wc
+        with st.spinner("Warm cache OHLCV…"):
+            try:
+                res = _wc()
+                st.toast(f"✓ OHLCV warmed: {res.get('notes', '')}", icon="✅")
+                _refresh_done = True
+            except Exception as exc:
+                st.error(f"Warm cache fallito: {exc}")
+
+with _btn_cols[1]:
+    if st.button("🔄 Regime", help="Recompute regime weekly classifier su ^GSPC", key="btn_refresh_regime"):
+        from propicks.scheduler.jobs import record_regime as _rr
+        with st.spinner("Computing regime…"):
+            try:
+                res = _rr()
+                st.toast(
+                    f"✓ Regime: {res.get('regime_label', '?')} "
+                    f"({res.get('regime_code', '?')}/5)",
+                    icon="✅",
+                )
+                _refresh_done = True
+            except Exception as exc:
+                st.error(f"Regime fallito: {exc}")
+
+with _btn_cols[2]:
+    if st.button("🔄 All", type="primary", help="Refresh OHLCV + Regime", key="btn_refresh_all"):
+        from propicks.scheduler.jobs import record_regime as _rr
+        from propicks.scheduler.jobs import warm_cache as _wc
+        with st.spinner("Refresh all…"):
+            errs = []
+            try:
+                _wc()
+            except Exception as exc:
+                errs.append(f"OHLCV: {exc}")
+            try:
+                _rr()
+            except Exception as exc:
+                errs.append(f"Regime: {exc}")
+            if errs:
+                for e in errs:
+                    st.error(e)
+            else:
+                st.toast("✓ All refreshed", icon="✅")
+                _refresh_done = True
+
+with _btn_cols[3]:
+    st.caption(
+        "Refresh manuale on-demand. Equivalente CLI: "
+        "`propicks-scheduler job warm` + `propicks-scheduler job regime`."
+    )
+
+# Auto-clear freshness cache + rerun se refresh eseguito
+if _refresh_done:
+    _data_freshness.clear()  # type: ignore[attr-defined]
+    st.rerun()
+
 # Show warning banner if any source is stale
 _warns = []
 if (_freshness['market_ohlcv_daily']['age_h'] or 99) > 24:
     _warns.append(
         f"📊 Daily OHLCV cache stale ({_fmt_age(_freshness['market_ohlcv_daily']['age_h'])}). "
-        "Lancia `propicks-cache warm <tickers>` o run discovery per refetch."
+        "Click **🔄 OHLCV** sopra o lancia discovery per refetch."
     )
 if (_freshness['regime_history']['age_h'] or 99) > 24*3:
     _warns.append(
         f"🌡 Regime classifier non aggiornato da {_fmt_age(_freshness['regime_history']['age_h'])}. "
-        "Run `propicks-scheduler job regime` o lancia uno scan per ricalcolarlo."
+        "Click **🔄 Regime** sopra per ricomputare."
     )
 if _warns:
     for _w in _warns:
