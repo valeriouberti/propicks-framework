@@ -260,7 +260,7 @@ fig_rs.update_layout(
     height=300, margin=dict(l=20, r=20, t=40, b=20),
     xaxis_title="trade index", yaxis_title="rolling SR",
 )
-st.plotly_chart(fig_rs, use_container_width=True)
+st.plotly_chart(fig_rs, width="stretch")
 
 
 # CUSUM
@@ -287,7 +287,7 @@ fig_cu.update_layout(
     height=300, margin=dict(l=20, r=20, t=40, b=20),
     xaxis_title="trade index", yaxis_title="CUSUM",
 )
-st.plotly_chart(fig_cu, use_container_width=True)
+st.plotly_chart(fig_cu, width="stretch")
 
 
 # SPRT
@@ -312,14 +312,14 @@ if "log_lr_series" in sprt_full:
         height=300, margin=dict(l=20, r=20, t=40, b=20),
         xaxis_title="trade index", yaxis_title="log-LR",
     )
-    st.plotly_chart(fig_sp, use_container_width=True)
+    st.plotly_chart(fig_sp, width="stretch")
 
 
 # Trade detail table
 st.divider()
 st.subheader("📋 Trade detail")
 df_trades = pd.DataFrame([dict(r) for r in rows])
-st.dataframe(df_trades, use_container_width=True, hide_index=True)
+st.dataframe(df_trades, width="stretch", hide_index=True)
 
 
 # Caveat

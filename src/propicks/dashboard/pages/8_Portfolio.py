@@ -37,6 +37,10 @@ from propicks.domain.exposure import (
     find_correlated_pairs,
 )
 from propicks.domain.sizing import (
+    is_etf_rotation_position,
+    is_thematic_position,
+)
+from propicks.domain.sizing import (
     calculate_position_size,
     portfolio_market_value,
     portfolio_value,
@@ -216,11 +220,7 @@ with tab_risk:
 
         st.divider()
 
-        # Sector exposure
-        st.subheader(
-            "Concentrazione settoriale",
-            help=INDICATOR_HELP_PORTFOLIO["sector_exposure"],
-        )
+        # Sector exposure (resolver + pie charts + tabella)
         with st.status("Analisi esposizione…", expanded=False) as _exp_status:
             st.write(f"Fetch settori GICS per {len(tickers)} ticker")
             sector_yf = cached_ticker_sectors(tuple(tickers))
@@ -237,7 +237,103 @@ with tab_risk:
         # (shares × current_price). Il `total` cost-basis resta corretto per
         # il % capitale a rischio nella sezione sopra.
         total_market = portfolio_market_value(portfolio, prices_map)
-        sector_exp = compute_sector_exposure(positions, prices_map, sector_key_map, total_market)
+
+        # ─── PIE 1: Allocation bucket (Stock / ETF rotation / Thematic / Cash)
+        # Vista cap-compliance: confronto immediato vs 40/60 policy.
+        st.subheader("📊 Allocation buckets")
+        cash_mtm = float(portfolio.get("cash") or 0)
+        stock_val = 0.0
+        etf_rot_val = 0.0
+        thematic_val = 0.0
+        for tk, pos in positions.items():
+            cur = prices_map.get(tk)
+            if cur is None:
+                cur = pos.get("entry_price", 0)
+            mv = float(pos.get("shares") or 0) * float(cur)
+            if is_thematic_position(pos, ticker=tk):
+                thematic_val += mv
+            elif is_etf_rotation_position(pos, ticker=tk):
+                etf_rot_val += mv
+            else:
+                stock_val += mv
+
+        bucket_data = [
+            ("📊 Stock (mom+contra)", stock_val, "#3b82f6"),  # blue
+            ("📈 ETF Rotation", etf_rot_val, "#10b981"),  # green
+            ("🎯 Thematic", thematic_val, "#a855f7"),  # purple
+            ("💰 Cash", cash_mtm, "#94a3b8"),  # slate
+        ]
+        bucket_data = [(l, v, c) for l, v, c in bucket_data if v > 0]
+
+        import plotly.graph_objects as go
+        col_pie1, col_pie2 = st.columns(2)
+        with col_pie1:
+            fig_b = go.Figure(data=[go.Pie(
+                labels=[d[0] for d in bucket_data],
+                values=[d[1] for d in bucket_data],
+                marker=dict(colors=[d[2] for d in bucket_data]),
+                hole=0.4,
+                textinfo="label+percent",
+                textposition="outside",
+                hovertemplate="<b>%{label}</b><br>€ %{value:.2f}<br>%{percent}<extra></extra>",
+            )])
+            fig_b.update_layout(
+                height=350, margin=dict(l=10, r=10, t=30, b=10),
+                showlegend=False,
+                title=dict(
+                    text=f"Bucket allocation (cap Stock 40% / ETF 60%)",
+                    x=0.5, xanchor="center", font=dict(size=13),
+                ),
+            )
+            st.plotly_chart(fig_b, width="stretch")
+            # Cap compliance row
+            stock_pct = stock_val / total_market * 100 if total_market else 0
+            etf_pct = (etf_rot_val + thematic_val) / total_market * 100 if total_market else 0
+            stock_status = "🟢" if stock_pct < 40 else "🔴"
+            etf_status = "🟢" if etf_pct < 60 else "🔴"
+            st.caption(
+                f"{stock_status} Stock {stock_pct:.1f}% / 40%  ·  "
+                f"{etf_status} ETF {etf_pct:.1f}% / 60%  ·  "
+                f"Cash {cash_mtm/total_market*100:.1f}% (min 20%)"
+            )
+
+        # ─── PIE 2: Sector concentration ───
+        sector_exp_for_pie = compute_sector_exposure(positions, prices_map, sector_key_map, total_market)
+        with col_pie2:
+            if sector_exp_for_pie:
+                # Sort biggest first
+                items = sorted(sector_exp_for_pie.items(), key=lambda x: x[1], reverse=True)
+                fig_s = go.Figure(data=[go.Pie(
+                    labels=[k for k, _ in items],
+                    values=[v * 100 for _, v in items],
+                    hole=0.4,
+                    textinfo="label+percent",
+                    textposition="outside",
+                    hovertemplate="<b>%{label}</b><br>%{value:.2f}%<extra></extra>",
+                )])
+                fig_s.update_layout(
+                    height=350, margin=dict(l=10, r=10, t=30, b=10),
+                    showlegend=False,
+                    title=dict(
+                        text="Concentrazione settoriale (cap 30%)",
+                        x=0.5, xanchor="center", font=dict(size=13),
+                    ),
+                )
+                st.plotly_chart(fig_s, width="stretch")
+                top_sector, top_pct = items[0]
+                st.caption(
+                    f"Top sector: **{top_sector}** ({top_pct*100:.1f}%) · "
+                    f"Settori coperti: {len(items)} / 11 GICS"
+                )
+            else:
+                st.caption("_Sector data non disponibile per pie chart._")
+
+        st.divider()
+        st.subheader(
+            "Concentrazione settoriale (tabella)",
+            help=INDICATOR_HELP_PORTFOLIO["sector_exposure"],
+        )
+        sector_exp = sector_exp_for_pie
         if sector_exp:
             sector_rows = sorted(
                 ([{"Settore": k, "Esposizione": v * 100}

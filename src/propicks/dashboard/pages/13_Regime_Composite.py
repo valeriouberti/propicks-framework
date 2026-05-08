@@ -217,7 +217,7 @@ fig.update_layout(
     xaxis_title="Date", yaxis_title="Composite z-score",
     margin=dict(l=20, r=20, t=20, b=20),
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 
 # Distribution
@@ -231,7 +231,7 @@ with col_a:
         "n_days": code_counts.values,
         "pct": (code_counts.values / code_counts.sum() * 100).round(1),
     })
-    st.dataframe(df_dist, use_container_width=True, hide_index=True)
+    st.dataframe(df_dist, width="stretch", hide_index=True)
 
 with col_b:
     st.subheader("🔍 Sub-features z-scores")
@@ -242,7 +242,7 @@ with col_b:
     ]:
         fig2.add_trace(go.Scatter(x=z_view.index, y=z_view[col], mode="lines", name=col, line=dict(color=color, width=1.2)))
     fig2.update_layout(height=300, hovermode="x unified", margin=dict(l=20, r=20, t=20, b=20))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 
 # Caveat
