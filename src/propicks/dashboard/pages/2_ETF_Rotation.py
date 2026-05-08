@@ -118,6 +118,119 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
+# Charts: composite score + sub-score breakdown
+# ---------------------------------------------------------------------------
+if len(ranked) >= 2:
+    import plotly.graph_objects as go
+
+    st.divider()
+    col_c, col_s = st.columns(2)
+
+    with col_c:
+        # Composite score bar chart (all ranked, colored by class)
+        sorted_by_score = sorted(ranked, key=lambda x: x["score_composite"], reverse=True)
+        tk_c = [r["ticker"] for r in sorted_by_score]
+        scores_c = [r["score_composite"] for r in sorted_by_score]
+        cls_c = [r["classification"].split(" ")[0] for r in sorted_by_score]
+        cap_c = [r.get("regime_cap_applied", False) for r in sorted_by_score]
+
+        # Color: A green / B lime / C amber / D red
+        cmap_c = {"A": "#16a34a", "B": "#10b981", "C": "#ca8a04", "D": "#dc2626"}
+        bar_colors = [cmap_c.get(c, "#94a3b8") for c in cls_c]
+        # Highlight cap with white border
+        line_widths = [2 if cap else 0 for cap in cap_c]
+        line_colors = ["#fef3c7" if cap else "white" for cap in cap_c]
+
+        fig_c = go.Figure()
+        fig_c.add_trace(go.Bar(
+            x=tk_c, y=scores_c,
+            marker=dict(
+                color=bar_colors,
+                line=dict(color=line_colors, width=line_widths),
+            ),
+            text=[f"{s:.0f}{' ⚠' if cap else ''}" for s, cap in zip(scores_c, cap_c, strict=True)],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Score %{y:.1f}<br>"
+                "Class %{customdata[0]}<br>"
+                "Regime cap %{customdata[1]}<extra></extra>"
+            ),
+            customdata=list(zip(cls_c, cap_c, strict=True)),
+        ))
+        # Class boundary hlines
+        for thr, lbl, c in [(70, "A", "#16a34a"), (55, "B", "#10b981"), (40, "C", "#ca8a04")]:
+            fig_c.add_hline(
+                y=thr, line_dash="dot", line_color=c, opacity=0.5,
+                annotation_text=lbl, annotation_position="right",
+            )
+        fig_c.update_layout(
+            title=dict(
+                text=f"Composite score (n={len(ranked)})",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            xaxis_title="", yaxis_title="Composite 0-100",
+            yaxis=dict(range=[0, 105]),
+            height=360, showlegend=False,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(fig_c, width="stretch")
+        st.caption(
+            "Bar color: 🟢 A (≥70) · 🟢 B (55-70) · 🟡 C (40-55) · 🔴 D (<40). "
+            "Border giallo + ⚠ = composite capped dal regime hard-gate."
+        )
+
+    with col_s:
+        # Sub-score grouped bar chart (top 5)
+        top_n_chart = min(5, len(ranked))
+        top_subset = sorted(ranked, key=lambda x: x["score_composite"], reverse=True)[:top_n_chart]
+        tk_s = [r["ticker"] for r in top_subset]
+        rs_s = [r.get("rs", {}).get("score", 0) for r in top_subset]
+        regime_s = [r.get("regime_fit_score", 0) for r in top_subset]
+        mom_s = [r.get("abs_momentum_score", 0) for r in top_subset]
+        trend_s = [r.get("trend", {}).get("score", 0) for r in top_subset]
+
+        fig_s = go.Figure()
+        fig_s.add_trace(go.Bar(
+            name="RS (40%)", x=tk_s, y=rs_s,
+            marker=dict(color="#3b82f6"),
+            hovertemplate="<b>%{x}</b><br>RS %{y:.0f}<extra></extra>",
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Regime fit (30%)", x=tk_s, y=regime_s,
+            marker=dict(color="#10b981"),
+            hovertemplate="<b>%{x}</b><br>Regime fit %{y:.0f}<extra></extra>",
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Abs mom (20%)", x=tk_s, y=mom_s,
+            marker=dict(color="#f59e0b"),
+            hovertemplate="<b>%{x}</b><br>Abs mom %{y:.0f}<extra></extra>",
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Trend (10%)", x=tk_s, y=trend_s,
+            marker=dict(color="#a855f7"),
+            hovertemplate="<b>%{x}</b><br>Trend %{y:.0f}<extra></extra>",
+        ))
+        fig_s.update_layout(
+            title=dict(
+                text=f"Sub-score breakdown (top {top_n_chart})",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            barmode="group",
+            xaxis_title="", yaxis_title="Sub-score 0-100",
+            yaxis=dict(range=[0, 105]),
+            height=360,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+        )
+        st.plotly_chart(fig_s, width="stretch")
+        st.caption(
+            "Grouped bar per pillar. ETF con RS=100 + Regime fit=100 = "
+            "leadership ottimale (top pick natural). RS basso ma Regime fit/Trend "
+            "alti = settore difensivo in regime adverse."
+        )
+
+# ---------------------------------------------------------------------------
 # Watchlist quick-add (manuale, nessun auto-add: la rotation è rank→alloc,
 # la watchlist serve solo per monitorare ETF che vuoi tenere d'occhio)
 # ---------------------------------------------------------------------------

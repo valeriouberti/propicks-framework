@@ -249,6 +249,110 @@ st.caption(
 )
 
 
+# ─── Charts: composite + sub-score breakdown ─────────────────────────────
+if len(results) >= 2:
+    import plotly.graph_objects as go
+
+    st.divider()
+    col_c, col_s = st.columns(2)
+
+    with col_c:
+        # Composite bar with corr-kill / regime-gate flags
+        sorted_r = sorted(results, key=lambda x: x["score_composite"], reverse=True)
+        tk_c = [r["ticker"] for r in sorted_r]
+        scores_c = [r["score_composite"] for r in sorted_r]
+        cls_c = [r["classification"].split(" ")[0] for r in sorted_r]
+        ck_c = [r.get("corr_kill_applied", False) for r in sorted_r]
+        rg_c = [r.get("regime_gate_applied", False) for r in sorted_r]
+        cmap = {"A": "#16a34a", "B": "#10b981", "C": "#ca8a04", "D": "#dc2626"}
+        bar_colors = [cmap.get(c, "#94a3b8") for c in cls_c]
+        flags = [
+            ("⚠C" if ck else "⚠R" if rg else "")
+            for ck, rg in zip(ck_c, rg_c, strict=True)
+        ]
+
+        fig_c = go.Figure()
+        fig_c.add_trace(go.Bar(
+            x=tk_c, y=scores_c,
+            marker=dict(color=bar_colors),
+            text=[f"{s:.0f}{f' {fl}' if fl else ''}" for s, fl in zip(scores_c, flags, strict=True)],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Score %{y:.1f}<br>"
+                "Class %{customdata[0]}<br>"
+                "Corr-kill %{customdata[1]} · Regime gate %{customdata[2]}<extra></extra>"
+            ),
+            customdata=list(zip(cls_c, ck_c, rg_c, strict=True)),
+        ))
+        # Class boundaries thematic: A≥70 / B≥55 / C≥40
+        for thr, lbl, c in [(70, "A", "#16a34a"), (55, "B", "#10b981"), (40, "C", "#ca8a04")]:
+            fig_c.add_hline(
+                y=thr, line_dash="dot", line_color=c, opacity=0.5,
+                annotation_text=lbl, annotation_position="right",
+            )
+        fig_c.update_layout(
+            title=dict(
+                text=f"Composite score (n={len(results)})",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            xaxis_title="", yaxis_title="Composite 0-100",
+            yaxis=dict(range=[0, 110]),
+            height=360, showlegend=False,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(fig_c, width="stretch")
+        st.caption(
+            "🟢 A (≥70) · 🟢 B (55-69) · 🟡 C (40-54) · 🔴 D (<40). "
+            "⚠C = corr-kill · ⚠R = regime gate (BEAR cap 40)."
+        )
+
+    with col_s:
+        # Sub-score breakdown thematic: RS-vs-parent / Abs mom / Trend / Parent regime fit
+        top_n_chart = min(5, len(results))
+        top_subset = sorted_r[:top_n_chart]
+        tk_s = [r["ticker"] for r in top_subset]
+        rs_s = [r.get("scores", {}).get("rs_vs_parent", 0) for r in top_subset]
+        mom_s = [r.get("scores", {}).get("abs_momentum", 0) for r in top_subset]
+        trend_s = [r.get("scores", {}).get("trend", 0) for r in top_subset]
+        preg_s = [r.get("scores", {}).get("parent_regime_fit", 0) for r in top_subset]
+
+        fig_s = go.Figure()
+        fig_s.add_trace(go.Bar(
+            name="RS-vs-parent (50%)", x=tk_s, y=rs_s,
+            marker=dict(color="#3b82f6"),
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Abs mom (25%)", x=tk_s, y=mom_s,
+            marker=dict(color="#f59e0b"),
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Trend (15%)", x=tk_s, y=trend_s,
+            marker=dict(color="#a855f7"),
+        ))
+        fig_s.add_trace(go.Bar(
+            name="Parent regime fit (10%)", x=tk_s, y=preg_s,
+            marker=dict(color="#10b981"),
+        ))
+        fig_s.update_layout(
+            title=dict(
+                text=f"Sub-score breakdown (top {top_n_chart})",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            barmode="group",
+            xaxis_title="", yaxis_title="Sub-score 0-100",
+            yaxis=dict(range=[0, 105]),
+            height=360,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+        )
+        st.plotly_chart(fig_s, width="stretch")
+        st.caption(
+            "RS-vs-parent dominante (50%) discrimina alfa tematico vs leveraged "
+            "sector bet. Se RS basso ma Trend alto → leveraged parent (corr-kill check)."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Watchlist quick-add
 # ---------------------------------------------------------------------------

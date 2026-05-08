@@ -30,11 +30,222 @@ st.info(
     icon="ℹ️",
 )
 
-tab_earn, tab_macro, tab_check = st.tabs([
+tab_timeline, tab_earn, tab_macro, tab_check = st.tabs([
+    "📅 Timeline",
     "📊 Earnings upcoming",
     "🏛️ Macro events",
     "🔍 Check ticker",
 ])
+
+# ---------------------------------------------------------------------------
+# Timeline — combined earnings + macro scatter chart
+# ---------------------------------------------------------------------------
+with tab_timeline:
+    from datetime import date as _date, timedelta as _td
+
+    from propicks.domain.calendar import (
+        earnings_gate_check as _eg_check,
+        upcoming_macro_events as _um_events,
+    )
+    from propicks.io.db import market_earnings_all_from_cache as _earn_all
+
+    col_w, col_t = st.columns([1, 1])
+    win_days = col_w.slider(
+        "Finestra forward (giorni)",
+        7, 90, 30,
+        key="tl_days_slider",
+        help="Quanti giorni in avanti includere nella timeline.",
+    )
+    types_tl = col_t.multiselect(
+        "Tipi macro",
+        options=["FOMC", "CPI", "NFP", "ECB"],
+        default=["FOMC", "CPI", "NFP", "ECB"],
+        key="tl_types",
+    )
+
+    # Carica events
+    from propicks.io.portfolio_store import load_portfolio as _lp
+    from propicks.io.watchlist_store import load_watchlist as _lw
+
+    _portfolio = _lp()
+    _watchlist = _lw()
+    _tickers_pf = set(_portfolio.get("positions", {}).keys())
+    _tickers_wl = set(_watchlist.get("tickers", {}).keys())
+    _tickers_all = sorted(_tickers_pf | _tickers_wl)
+
+    today_d = _date.today()
+    cutoff = today_d + _td(days=win_days)
+
+    events_tl: list[dict] = []
+
+    # Earnings events (portfolio + watchlist)
+    earn_meta = _earn_all()
+    for tk in _tickers_all:
+        ed = earn_meta.get(tk)
+        if ed is None:
+            continue
+        try:
+            ed_dt = _date.fromisoformat(ed)
+        except (ValueError, TypeError):
+            continue
+        if ed_dt < today_d or ed_dt > cutoff:
+            continue
+        check = _eg_check(tk, ed, days_threshold=EARNINGS_HARD_GATE_DAYS)
+        in_pf = tk in _tickers_pf
+        events_tl.append({
+            "date": ed_dt,
+            "type": "EARNINGS",
+            "label": tk,
+            "description": (
+                f"{tk} earnings"
+                + (" · IN PORTFOLIO" if in_pf else " · watchlist")
+                + (" · 🚨 HARD GATE" if check["blocked"] else "")
+            ),
+            "blocked": check["blocked"],
+            "in_portfolio": in_pf,
+            "row": "Earnings",
+        })
+
+    # Macro events
+    macro_evs = _um_events(
+        days_ahead=win_days,
+        event_types=tuple(types_tl) if types_tl else None,
+    )
+    for ev in macro_evs:
+        try:
+            ev_dt = _date.fromisoformat(ev["date"])
+        except (ValueError, TypeError):
+            continue
+        events_tl.append({
+            "date": ev_dt,
+            "type": ev["type"],
+            "label": ev["type"],
+            "description": ev["description"],
+            "blocked": False,
+            "in_portfolio": False,
+            "row": ev["type"],
+        })
+
+    if not events_tl:
+        st.info(
+            f"Nessun evento (earnings o macro) nei prossimi {win_days}gg "
+            "tra portfolio + watchlist + macro filtrati."
+        )
+    else:
+        import plotly.graph_objects as go
+
+        # Sort + group by row category
+        row_order = ["Earnings", "FOMC", "CPI", "NFP", "ECB"]
+        events_tl.sort(key=lambda e: (row_order.index(e["row"]) if e["row"] in row_order else 99, e["date"]))
+
+        # Color per type
+        color_map = {
+            "EARNINGS": "#dc2626",  # red default
+            "FOMC": "#7c3aed",       # purple
+            "CPI": "#0891b2",        # cyan
+            "NFP": "#ca8a04",        # amber
+            "ECB": "#2563eb",        # blue
+        }
+        symbol_map = {
+            "EARNINGS": "diamond",
+            "FOMC": "square",
+            "CPI": "circle",
+            "NFP": "triangle-up",
+            "ECB": "star",
+        }
+
+        fig = go.Figure()
+        for typ in ["EARNINGS", "FOMC", "CPI", "NFP", "ECB"]:
+            subset = [e for e in events_tl if e["type"] == typ]
+            if not subset:
+                continue
+            xs = [e["date"] for e in subset]
+            ys = [e["row"] for e in subset]
+            colors = [
+                "#7f1d1d" if e["blocked"]
+                else "#dc2626" if e["type"] == "EARNINGS" and e["in_portfolio"]
+                else color_map.get(e["type"], "#94a3b8")
+                for e in subset
+            ]
+            sizes = [
+                18 if e.get("blocked") else 14 if e.get("in_portfolio") else 11
+                for e in subset
+            ]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="markers+text",
+                marker=dict(
+                    color=colors,
+                    size=sizes,
+                    symbol=symbol_map.get(typ, "circle"),
+                    line=dict(color="white", width=1.5),
+                ),
+                text=[e["label"] for e in subset],
+                textposition="top center",
+                textfont=dict(size=10),
+                name=typ,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "%{x|%Y-%m-%d}<br>"
+                    "%{customdata[1]}<extra></extra>"
+                ),
+                customdata=[
+                    (e["label"], e["description"]) for e in subset
+                ],
+            ))
+
+        # Vertical line "today" + Vrect hard gate (plotly accetta solo stringhe
+        # ISO o pd.Timestamp per asse date, non datetime.date direttamente).
+        today_iso = today_d.isoformat()
+        gate_end_iso = (today_d + _td(days=EARNINGS_HARD_GATE_DAYS)).isoformat()
+        fig.add_vline(
+            x=today_iso, line_dash="solid", line_color="#16a34a", line_width=2,
+            annotation_text="TODAY", annotation_position="top",
+        )
+        fig.add_vrect(
+            x0=today_iso, x1=gate_end_iso,
+            fillcolor="#dc2626", opacity=0.10, line_width=0,
+            annotation_text=f"⚠ Earnings hard gate zone ({EARNINGS_HARD_GATE_DAYS}gg)",
+            annotation_position="top left",
+        )
+
+        # Height adattiva
+        n_rows = len({e["row"] for e in events_tl})
+        fig.update_layout(
+            title=dict(
+                text=f"Timeline {today_d} → {cutoff} ({win_days}gg) — "
+                     f"{len(events_tl)} eventi",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            xaxis_title="", yaxis_title="",
+            xaxis=dict(type="date"),
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=row_order,
+                autorange="reversed",
+            ),
+            height=max(280, n_rows * 70 + 100),
+            margin=dict(l=20, r=20, t=60, b=20),
+            hovermode="closest",
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
+        )
+        st.plotly_chart(fig, width="stretch")
+
+        # Quick stats
+        n_earn = sum(1 for e in events_tl if e["type"] == "EARNINGS")
+        n_blocked = sum(1 for e in events_tl if e.get("blocked"))
+        n_macro = len(events_tl) - n_earn
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Earnings", n_earn)
+        c2.metric("Hard gate blocked", n_blocked, help=f"Earnings entro {EARNINGS_HARD_GATE_DAYS}gg")
+        c3.metric("Macro events", n_macro)
+        c4.metric("Window", f"{win_days}gg")
+        st.caption(
+            "🔺 EARNINGS · ⬛ FOMC · ⬤ CPI · 🔼 NFP · ★ ECB. "
+            "Marker grande rosso scuro = ticker in portfolio + dentro hard gate "
+            "(blocco entry). Marker grande rosso = ticker in portfolio. "
+            "Vrect rosso = zona hard gate (5gg)."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Earnings upcoming
