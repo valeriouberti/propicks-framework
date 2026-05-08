@@ -148,6 +148,149 @@ with tab_stats:
         c.metric("Worst", f"{min(pnls_pct):+.2f}%")
         d.metric("Max DD cumulativo", f"{max_dd:.2f}%")
 
+        # ─── CHARTS (lazy import plotly) ──────────────────────────────────
+        import plotly.graph_objects as go
+
+        st.divider()
+
+        # ── Chart 1: Equity curve cumulativa (P&L compounded per exit_date)
+        # Aggrega trade chiusi per exit_date, applica compounding (1+r) e
+        # mostra growth-of-1 dell'equity strategy. Realized only.
+        from datetime import datetime as _dt
+
+        scope_sorted = sorted(
+            [t for t in scope if t.get("exit_date")],
+            key=lambda t: t["exit_date"],
+        )
+        if scope_sorted:
+            dates = []
+            equity = [1.0]
+            for t in scope_sorted:
+                try:
+                    d = _dt.strptime(t["exit_date"], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    continue
+                ret = float(t["pnl_pct"]) / 100.0
+                equity.append(equity[-1] * (1 + ret))
+                dates.append(d)
+            # First point = pre-trades baseline (equity 1.0)
+            if dates:
+                pre = [dates[0]]  # placeholder, we'll align series
+                eq_series = equity[1:]  # drop initial 1.0, align with dates
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(
+                    x=dates, y=eq_series, mode="lines+markers",
+                    name="Equity (growth-of-1)",
+                    line=dict(color="#3b82f6", width=2),
+                    marker=dict(size=6),
+                    hovertemplate="<b>%{x}</b><br>Equity %{y:.4f}<br>Cumulative %{customdata:+.2f}%<extra></extra>",
+                    customdata=[(e - 1) * 100 for e in eq_series],
+                ))
+                fig_eq.add_hline(y=1.0, line_dash="dot", line_color="#94a3b8", annotation_text="break-even")
+                final_eq = eq_series[-1]
+                fig_eq.update_layout(
+                    title=dict(
+                        text=f"Equity curve (realized) — final {final_eq:.4f} ({(final_eq - 1) * 100:+.2f}%)",
+                        x=0.5, xanchor="center", font=dict(size=13),
+                    ),
+                    xaxis_title="Exit date",
+                    yaxis_title="Growth of 1",
+                    height=340,
+                    hovermode="x unified",
+                    margin=dict(l=20, r=20, t=50, b=20),
+                )
+                st.plotly_chart(fig_eq, width="stretch")
+                st.caption(
+                    "Equity compounded sui closed trades, ordinato per exit_date. "
+                    "**Realized only** — non include unrealized P&L delle posizioni aperte."
+                )
+
+        # ── Chart 2 + 3 side-by-side: P&L histogram + Win rate per strategy
+        col_h, col_w = st.columns(2)
+
+        with col_h:
+            # P&L distribution histogram con vline su 0 + media
+            fig_h = go.Figure()
+            fig_h.add_trace(go.Histogram(
+                x=pnls_pct, nbinsx=15,
+                marker=dict(
+                    color=["#16a34a" if p > 0 else "#dc2626" for p in pnls_pct],
+                    line=dict(color="white", width=1),
+                ),
+                hovertemplate="P&L %{x:.1f}%<br>Count %{y}<extra></extra>",
+            ))
+            mean_pnl = statistics.mean(pnls_pct)
+            fig_h.add_vline(x=0, line_dash="dash", line_color="#64748b", annotation_text="break-even")
+            fig_h.add_vline(
+                x=mean_pnl, line_dash="dot", line_color="#3b82f6",
+                annotation_text=f"avg {mean_pnl:+.2f}%", annotation_position="top",
+            )
+            fig_h.update_layout(
+                title=dict(
+                    text=f"P&L distribution (n={len(pnls_pct)})",
+                    x=0.5, xanchor="center", font=dict(size=13),
+                ),
+                xaxis_title="P&L %", yaxis_title="N trades",
+                height=320, showlegend=False,
+                margin=dict(l=20, r=20, t=50, b=20), bargap=0.05,
+            )
+            st.plotly_chart(fig_h, width="stretch")
+            st.caption(
+                "Verde = win, rosso = loss. Skew destra = upside catturato. "
+                "Tail sinistra lunga = stop-loss che saltano oltre soglia."
+            )
+
+        with col_w:
+            # Win rate per strategy bar chart (solo se non filtrato)
+            if strat_filter == "(tutti)":
+                by_strat_pnl: dict[str, list[float]] = {}
+                for t in scope:
+                    by_strat_pnl.setdefault(t.get("strategy") or "—", []).append(t["pnl_pct"])
+                strats = sorted(by_strat_pnl.keys())
+                wr_per = [
+                    sum(1 for p in by_strat_pnl[s] if p > 0) / len(by_strat_pnl[s]) * 100
+                    for s in strats
+                ]
+                avg_per = [statistics.mean(by_strat_pnl[s]) for s in strats]
+                n_per = [len(by_strat_pnl[s]) for s in strats]
+
+                fig_w = go.Figure()
+                fig_w.add_trace(go.Bar(
+                    x=strats, y=wr_per,
+                    marker=dict(
+                        color=[
+                            "#16a34a" if wr >= 50 else "#ca8a04" if wr >= 40 else "#dc2626"
+                            for wr in wr_per
+                        ],
+                    ),
+                    text=[f"{wr:.0f}%<br>n={n}" for wr, n in zip(wr_per, n_per, strict=True)],
+                    textposition="auto",
+                    hovertemplate="<b>%{x}</b><br>Win rate %{y:.1f}%<br>Avg P&L %{customdata:+.2f}%<extra></extra>",
+                    customdata=avg_per,
+                ))
+                fig_w.add_hline(y=50, line_dash="dot", line_color="#64748b", annotation_text="50%")
+                fig_w.update_layout(
+                    title=dict(
+                        text="Win rate per strategy",
+                        x=0.5, xanchor="center", font=dict(size=13),
+                    ),
+                    xaxis_title="", yaxis_title="Win rate %",
+                    height=320, yaxis=dict(range=[0, 100]),
+                    margin=dict(l=20, r=20, t=50, b=20),
+                )
+                st.plotly_chart(fig_w, width="stretch")
+                st.caption(
+                    "Verde ≥ 50%, giallo 40-50%, rosso < 40%. Confronto edge per "
+                    "strategia. Sotto 15 trade per strategy = stat signal debole."
+                )
+            else:
+                st.info(
+                    f"Win-rate per strategy disponibile solo con filtro **'(tutti)'**. "
+                    f"Filtro corrente: {strat_filter}."
+                )
+
+        st.divider()
+
         # Breakdown per strategy (solo se non filtrato)
         if strat_filter == "(tutti)":
             st.subheader("Breakdown per strategy")
