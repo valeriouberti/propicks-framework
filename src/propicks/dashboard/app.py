@@ -337,6 +337,92 @@ else:
     )
 
 # ---------------------------------------------------------------------------
+# Allocation glance (mini-pie buckets) — quick view senza click su page 8
+# ---------------------------------------------------------------------------
+if positions:
+    from propicks.domain.sizing import (
+        is_etf_rotation_position,
+        is_thematic_position,
+    )
+
+    cash_mtm = float(portfolio.get("cash") or 0)
+    stock_val = 0.0
+    etf_rot_val = 0.0
+    thematic_val = 0.0
+    for tk, pos in positions.items():
+        cur = prices.get(tk)
+        if cur is None:
+            cur = pos.get("entry_price", 0)
+        mv_pos = float(pos.get("shares") or 0) * float(cur)
+        if is_thematic_position(pos, ticker=tk):
+            thematic_val += mv_pos
+        elif is_etf_rotation_position(pos, ticker=tk):
+            etf_rot_val += mv_pos
+        else:
+            stock_val += mv_pos
+
+    bucket_data = [
+        ("📊 Stock", stock_val, "#3b82f6"),
+        ("📈 ETF Rotation", etf_rot_val, "#10b981"),
+        ("🎯 Thematic", thematic_val, "#a855f7"),
+        ("💰 Cash", cash_mtm, "#94a3b8"),
+    ]
+    bucket_data = [(l, v, c) for l, v, c in bucket_data if v > 0]
+
+    total_mtm = stock_val + etf_rot_val + thematic_val + cash_mtm
+    if total_mtm > 0:
+        import plotly.graph_objects as go
+
+        col_pie, col_caps = st.columns([1, 1])
+        with col_pie:
+            fig = go.Figure(data=[go.Pie(
+                labels=[d[0] for d in bucket_data],
+                values=[d[1] for d in bucket_data],
+                marker=dict(colors=[d[2] for d in bucket_data]),
+                hole=0.5,
+                textinfo="label+percent",
+                textposition="outside",
+                hovertemplate="<b>%{label}</b><br>€ %{value:.2f}<br>%{percent}<extra></extra>",
+            )])
+            fig.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=20, b=10),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        with col_caps:
+            stock_pct = stock_val / total_mtm * 100
+            etf_pct = (etf_rot_val + thematic_val) / total_mtm * 100
+            cash_pct = cash_mtm / total_mtm * 100
+            stock_status = "🟢" if stock_pct < 40 else "🔴"
+            etf_status = "🟢" if etf_pct < 60 else "🔴"
+            cash_status = "🟢" if cash_pct >= 20 else "🔴"
+
+            st.markdown("##### Bucket allocation vs cap")
+            st.markdown(
+                f"{stock_status} **Stock** {stock_pct:.1f}% / 40%  "
+                f"<span style='color:#94a3b8'>headroom {max(0, 40 - stock_pct):.1f}%</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"{etf_status} **ETF** {etf_pct:.1f}% / 60%  "
+                f"<span style='color:#94a3b8'>headroom {max(0, 60 - etf_pct):.1f}%</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"{cash_status} **Cash** {cash_pct:.1f}% (min 20%)  "
+                f"<span style='color:#94a3b8'>investible {max(0, cash_pct - 20):.1f}%</span>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Stock = momentum + contrarian merged. ETF = rotation + thematic merged. "
+                "Per breakdown sector + correlation vai a **Portfolio → Rischio & esposizione**."
+            )
+
+    st.divider()
+
+# ---------------------------------------------------------------------------
 # Recent journal entries
 # ---------------------------------------------------------------------------
 st.subheader("Ultime chiusure")
