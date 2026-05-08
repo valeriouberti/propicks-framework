@@ -62,6 +62,7 @@ propicks-calibrate = "propicks.cli.calibrate:main"
 propicks-themes    = "propicks.cli.themes:main"
 propicks-regime    = "propicks.cli.regime:main"
 propicks-decay     = "propicks.cli.decay:main"
+propicks-sync      = "propicks.cli.sync:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
