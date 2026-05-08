@@ -290,7 +290,14 @@ def warm_cache() -> dict:
 
     Scopo: il prossimo scan EOD trova cache fresh, scan = 0.4s invece di 3s.
     Non fallisce sul singolo ticker degenere — logga e prosegue.
+
+    **Rate-limit handling**: yfinance hammered burst → 429. Sleep configurabile
+    tra ticker via env ``PROPICKS_YF_BATCH_SLEEP_S`` (default 0.15s = 6.6 req/s).
+    Streamlit Cloud shared IP rate-limit hit frequente → consider bumping a 0.5s.
     """
+    import os
+    import time as _time
+
     portfolio = load_portfolio()
     watchlist = load_watchlist()
 
@@ -300,15 +307,20 @@ def warm_cache() -> dict:
     # Aggiungi benchmarks comuni per ETF rotation e regime
     tickers.update([ETF_BENCHMARK, "FTSEMIB.MI", "URTH"])
 
+    sleep_s = float(os.environ.get("PROPICKS_YF_BATCH_SLEEP_S", "0.15"))
+
     ok = 0
     failed: list[str] = []
-    for t in sorted(tickers):
+    for i, t in enumerate(sorted(tickers)):
         try:
             download_history(t)
             download_weekly_history(t)
             ok += 1
         except DataUnavailable as exc:
             failed.append(f"{t}:{exc.message[:40]}")
+        # Sleep tra ticker per evitare rate-limit yfinance burst
+        if sleep_s > 0 and i < len(tickers) - 1:
+            _time.sleep(sleep_s)
 
     notes = f"ok={ok}/{len(tickers)}"
     if failed:

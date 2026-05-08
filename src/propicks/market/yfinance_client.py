@@ -27,6 +27,7 @@ settimanale stabile post-Fri close. Meta TTL 7gg è conservativo per beta
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import pandas as pd
@@ -64,6 +65,63 @@ class DataUnavailable(Exception):
 
     def __str__(self) -> str:
         return f"{self.ticker}: {self.message}"
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit handling — yfinance via Yahoo public API è IP-rate-limited.
+# Su Streamlit Cloud (shared IP) il rate limit hit frequente. Retry con
+# exponential backoff su errori "Too Many Requests" / 429.
+# ---------------------------------------------------------------------------
+import time as _time
+
+# Configurabili via env per stress test / scheduler. Default conservative.
+_RATE_LIMIT_RETRIES = int(os.environ.get("PROPICKS_YF_RETRIES", "3"))
+_RATE_LIMIT_BASE_SLEEP = float(os.environ.get("PROPICKS_YF_BACKOFF_S", "1.5"))
+_BATCH_INTER_REQUEST_SLEEP = float(os.environ.get("PROPICKS_YF_BATCH_SLEEP_S", "0.15"))
+
+_RATE_LIMIT_MARKERS = (
+    "too many requests",
+    "rate limit",
+    "429",
+)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Heuristic: error message contiene marker rate-limit."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _RATE_LIMIT_MARKERS)
+
+
+def _yf_call_with_retry(fn, ticker: str, *args, **kwargs):
+    """Wrapper retry-with-exponential-backoff per call yfinance.
+
+    Retries: ``_RATE_LIMIT_RETRIES`` volte (default 3) con sleep
+    ``base × 2^attempt`` (1.5s → 3s → 6s). Solo su rate-limit error
+    detection. Altri exceptions propagano immediatamente.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_RATE_LIMIT_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_rate_limit_error(exc) or attempt == _RATE_LIMIT_RETRIES:
+                raise
+            sleep_s = _RATE_LIMIT_BASE_SLEEP * (2 ** attempt)
+            _log.info(
+                "yf_rate_limit_retry",
+                extra={
+                    "ctx": {
+                        "ticker": ticker,
+                        "attempt": attempt + 1,
+                        "max_attempts": _RATE_LIMIT_RETRIES,
+                        "sleep_s": round(sleep_s, 2),
+                    }
+                },
+            )
+            _time.sleep(sleep_s)
+    if last_exc:
+        raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +203,15 @@ def _cache_rows_to_yf_df(rows: list[dict]) -> pd.DataFrame:
 # Daily history
 # ---------------------------------------------------------------------------
 def _yf_fetch_daily(ticker: str, period: str) -> pd.DataFrame:
-    """Fetch diretto da yfinance (no cache). Raw call per fallback/refresh."""
+    """Fetch diretto da yfinance (no cache). Raw call per fallback/refresh.
+
+    Retry su rate-limit (Streamlit Cloud shared IP).
+    """
     try:
-        hist = yf.Ticker(ticker).history(period=period, auto_adjust=False)
+        hist = _yf_call_with_retry(
+            lambda: yf.Ticker(ticker).history(period=period, auto_adjust=False),
+            ticker,
+        )
     except Exception as exc:
         raise DataUnavailable(ticker, f"errore yfinance: {exc}") from exc
     if hist is None or hist.empty:
@@ -194,8 +258,14 @@ def download_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 # Weekly history
 # ---------------------------------------------------------------------------
 def _yf_fetch_weekly(ticker: str, period: str) -> pd.DataFrame:
+    """Fetch weekly history. Retry su rate-limit."""
     try:
-        hist = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=False)
+        hist = _yf_call_with_retry(
+            lambda: yf.Ticker(ticker).history(
+                period=period, interval="1wk", auto_adjust=False,
+            ),
+            ticker,
+        )
     except Exception as exc:
         raise DataUnavailable(ticker, f"errore yfinance (weekly): {exc}") from exc
     if hist is None or hist.empty:
@@ -250,10 +320,13 @@ def download_benchmark(ticker: str, days: int) -> pd.Series | None:
     except Exception as exc:
         _log.warning("benchmark_cache_read_fail", extra={"ctx": {"ticker": ticker, "error": str(exc)}})
 
-    # Fallback / cache miss: fetch diretto con buffer
+    # Fallback / cache miss: fetch diretto con buffer (retry su rate-limit)
     try:
         buffer = max(days + 10, 30)
-        hist = yf.Ticker(ticker).history(period=f"{buffer}d", auto_adjust=False)
+        hist = _yf_call_with_retry(
+            lambda: yf.Ticker(ticker).history(period=f"{buffer}d", auto_adjust=False),
+            ticker,
+        )
     except Exception as exc:
         _log.warning(
             "yf_benchmark_unavailable",
@@ -288,7 +361,12 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | No
         _log.warning("benchmark_weekly_cache_fail", extra={"ctx": {"ticker": ticker, "error": str(exc)}})
 
     try:
-        hist = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=False)
+        hist = _yf_call_with_retry(
+            lambda: yf.Ticker(ticker).history(
+                period=period, interval="1wk", auto_adjust=False,
+            ),
+            ticker,
+        )
     except Exception as exc:
         _log.warning(
             "yf_benchmark_weekly_unavailable",
@@ -309,9 +387,14 @@ def download_benchmark_weekly(ticker: str, period: str = "3y") -> pd.Series | No
 # Ticker meta (sector, beta, name)
 # ---------------------------------------------------------------------------
 def _yf_fetch_info(ticker: str) -> dict | None:
-    """Raw yfinance info call. Lento (~500ms) → aggressivamente cachato."""
+    """Raw yfinance info call. Lento (~500ms) → aggressivamente cachato.
+
+    Retry su rate-limit (Streamlit Cloud shared IP) via ``_yf_call_with_retry``.
+    """
     try:
-        info = yf.Ticker(ticker).info
+        info = _yf_call_with_retry(
+            lambda: yf.Ticker(ticker).info, ticker,
+        )
     except Exception as exc:
         _log.warning(
             "yf_info_unavailable",
@@ -388,10 +471,10 @@ def get_next_earnings_date(ticker: str, *, force_refresh: bool = False) -> str |
         if cached is not None:
             return cached
 
-    # Fetch from yfinance
+    # Fetch from yfinance — wrap creation in retry to handle rate-limit
     earnings_iso: str | None = None
     try:
-        tk = yf.Ticker(ticker)
+        tk = _yf_call_with_retry(lambda: yf.Ticker(ticker), ticker)
         # Pattern 1: .calendar (new API)
         cal = getattr(tk, "calendar", None)
         if isinstance(cal, dict):
