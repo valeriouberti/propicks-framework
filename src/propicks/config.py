@@ -592,6 +592,29 @@ THEMATIC_ETFS: dict[str, dict] = {
         "parent_sector_key": "materials",
         "region": "WORLD",
     },
+    # ─── COMMUNICATION SERVICES sub-industries (parent: XWTS.MI) ─────
+    "ESPO.MI": {
+        "name": "VanEck Video Gaming and eSports UCITS ETF",
+        "theme_label": "video_gaming_esports",
+        "parent_ticker": "XWTS.MI",
+        "parent_sector_key": "communications",
+        "region": "WORLD",
+    },
+    # ─── CONSUMER DISCRETIONARY sub-industries (parent: XDWC.MI) ─────
+    "GLUX.MI": {
+        "name": "Amundi Global Luxury UCITS ETF",
+        "theme_label": "global_luxury",
+        "parent_ticker": "XDWC.MI",
+        "parent_sector_key": "consumer_discretionary",
+        "region": "WORLD",
+    },
+    "ECOM.MI": {
+        "name": "L&G Ecommerce Logistics UCITS ETF",
+        "theme_label": "ecommerce_logistics",
+        "parent_ticker": "XDWC.MI",
+        "parent_sector_key": "consumer_discretionary",
+        "region": "WORLD",
+    },
 }
 
 
