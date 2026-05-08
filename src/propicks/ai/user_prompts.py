@@ -1404,3 +1404,162 @@ def perplexity_thematic_validate_full(
 
 
 claude_thematic_validate_fallback = perplexity_thematic_validate_full
+
+
+# ---------------------------------------------------------------------------
+# Weekly portfolio review (Phase 2 time-series) — 3 variants
+# ---------------------------------------------------------------------------
+def perplexity_weekly_review_full(
+    portfolio_data: dict,
+    prior_weeks: list[dict] | None = None,
+    *,
+    as_of_date: str | None = None,
+) -> str:
+    """Prompt completo weekly review per Perplexity Pro fallback.
+
+    Stesso pattern di altri ``perplexity_*_validate_full``: rimuove la
+    sezione web search dal system prompt + concatena user template.
+    Schema JSON tollerante con ``---JSON---`` separator.
+    """
+    from propicks.ai.claude_client import _WEEKLY_REVIEW_JSON_SCHEMA
+    from propicks.ai.weekly_review_prompts import (
+        WEEKLY_REVIEW_SYSTEM_PROMPT,
+        render_weekly_review_user_prompt,
+    )
+
+    today = _today_iso(as_of_date)
+    system = _strip_web_search_section(WEEKLY_REVIEW_SYSTEM_PROMPT)
+    user = render_weekly_review_user_prompt(
+        portfolio_data, prior_weeks, as_of_date=today,
+    )
+    schema_block = _SCHEMA_INSTRUCTION_PERPLEXITY.format(
+        schema=_format_schema_block(_WEEKLY_REVIEW_JSON_SCHEMA)
+    )
+    return (
+        _PERPLEXITY_HEADER
+        + "# SYSTEM\n\n" + system.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
+    )
+
+
+def llm_generic_weekly_review_full(
+    portfolio_data: dict,
+    prior_weeks: list[dict] | None = None,
+    *,
+    as_of_date: str | None = None,
+) -> str:
+    """Weekly review per Claude.ai / ChatGPT / Gemini diretto.
+
+    System prompt byte-per-byte + schema strict.
+    """
+    from propicks.ai.claude_client import _WEEKLY_REVIEW_JSON_SCHEMA
+    from propicks.ai.weekly_review_prompts import (
+        WEEKLY_REVIEW_SYSTEM_PROMPT,
+        render_weekly_review_user_prompt,
+    )
+
+    today = _today_iso(as_of_date)
+    user = render_weekly_review_user_prompt(
+        portfolio_data, prior_weeks, as_of_date=today,
+    )
+    schema_block = _SCHEMA_INSTRUCTION_STRICT.format(
+        schema=_format_schema_block(_WEEKLY_REVIEW_JSON_SCHEMA)
+    )
+    return (
+        _LLM_GENERIC_HEADER
+        + "# SYSTEM\n\n" + WEEKLY_REVIEW_SYSTEM_PROMPT.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
+    )
+
+
+# Sonar variant — schema reduced + retrieval-first
+_SONAR_WEEKLY_REVIEW_SCHEMA = {
+    "_model": "sonar",
+    "_schema_version": "1.0",
+    "health_verdict": "HEALTHY | REBALANCE | CONCERN | CRITICAL",
+    "conviction_score": "integer 0-10",
+    "executive_summary": "string, 2-3 sentences plain English",
+    "strengths": ["list of 3-5 strings, specific findings"],
+    "weaknesses": ["list of 3-5 strings, specific findings"],
+    "concentration_risks": ["list 2-4 risks: sector / single-name / strategy-mix"],
+    "stage_assessment": {
+        "portfolio_phase": "BUILDING | BALANCED | OVER_INVESTED | UNDER_INVESTED",
+        "regime_alignment": "STRONG | MIXED | CONTRADICTORY",
+        "strategy_mix": "balanced | over_momentum | over_thematic | over_etf | over_defensive",
+    },
+    "time_series_trend": {
+        "pnl_trend": "IMPROVING | STABLE | DETERIORATING | INSUFFICIENT_DATA",
+        "drawdown_evolution": "string, 1-2 sentences",
+        "strategy_mix_shift": "string, describe shift or 'no shift'",
+        "ai_accuracy_trend": "IMPROVING | STABLE | DETERIORATING | INSUFFICIENT_DATA",
+    },
+    "action_items": [
+        {
+            "priority": "HIGH | MEDIUM | LOW",
+            "action": "concrete actionable, imperative",
+            "rationale": "why — anchor to data shown",
+            "deadline": "this_week | this_month | nice_to_have",
+        }
+    ],
+    "ai_accuracy_view": "string, comment trend or 'no data'",
+    "next_review_focus": "string, 1-2 specific things to monitor",
+}
+
+
+_SONAR_WEEKLY_REVIEW_SYSTEM = """You are a senior portfolio manager and risk
+consultant (20+ years multi-asset book). Weekly meta-review of retail trader
+portfolio — NOT per-ticker entry validation. Focus: portfolio HEALTH not trade timing.
+
+# Hard computable rules:
+- IF stock_bucket > 35% AND regime in {BEAR, STRONG_BEAR} → HIGH "reduce stock exposure"
+- IF cash < 25% AND regime in {BEAR, STRONG_BEAR} → HIGH "increase cash buffer"
+- IF any_position > 12% mtm → MEDIUM "trim concentration on TICKER"
+- IF weekly_pnl < -4% AND cap = 5% → health_verdict CRITICAL
+- IF n_positions ≥ 9/10 → MEDIUM "review marginal positions"
+- IF top_sector > 30% → HIGH "diversify sector exposure"
+- IF same_strategy > 60% invested → LOW "consider strategy diversification"
+- IF n_thematic = 2/2 cap AND parent_aggregate ≥ 22% → MEDIUM "thematic bucket near cap"
+- HEALTHY requires 0 HIGH + bucket caps OK + cash ≥ 20%
+- CRITICAL requires ≥2 HIGH + breach (weekly_dd > 4% OR cap saturation)
+
+# Anti-fluff:
+- "diversify portfolio" → say "trim TKR1 from 14% to ≤10%, redirect to cash"
+- "monitor closely" → say "if TKR1 closes below STOP this week, exit"
+- Specific tickers, percentages, deadlines.
+
+# Time-series Phase 2:
+- Compare current vs prior_weeks (most recent in tail)
+- pnl_trend = IMPROVING/STABLE/DETERIORATING based on equity curve trend
+- drawdown_evolution = describe peak-to-trough evolution
+- strategy_mix_shift = detect drift over weeks
+- IF prior_weeks empty → "INSUFFICIENT_DATA — first baseline review"
+
+# Web search (use sparingly, 1-2 max):
+- Macro context if regime change relevant
+- DO NOT search for individual stock fundamentals (per-ticker validation different prompt).
+
+# Output: schema at top of message. Prosa breve (max 200 words) + ---JSON--- + JSON."""
+
+
+def sonar_weekly_review_full(
+    portfolio_data: dict,
+    prior_weeks: list[dict] | None = None,
+    *,
+    as_of_date: str | None = None,
+) -> str:
+    """Sonar-native weekly review."""
+    from propicks.ai.weekly_review_prompts import render_weekly_review_user_prompt
+
+    today = _today_iso(as_of_date)
+    user_body = render_weekly_review_user_prompt(
+        portfolio_data, prior_weeks, as_of_date=today,
+    )
+    return (
+        _sonar_schema_block(_SONAR_WEEKLY_REVIEW_SCHEMA)
+        + _SONAR_HEADER
+        + "# SYSTEM\n\n" + _SONAR_WEEKLY_REVIEW_SYSTEM.rstrip() + "\n\n"
+        + "---\n\n"
+        + "# USER\n\n"
+        + f"Today is {today}.\n\n"
+        + user_body.rstrip() + "\n"
+    )

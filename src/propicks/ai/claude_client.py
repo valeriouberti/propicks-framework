@@ -180,6 +180,44 @@ class ThematicVerdict(BaseModel):
     confidence_by_dimension: ThematicConfidenceByDimension
 
 
+class WeeklyReviewActionItem(BaseModel):
+    """Action item con priorità + rationale + deadline."""
+    priority: str = Field(description="HIGH | MEDIUM | LOW")
+    action: str = Field(description="Concrete actionable, imperative form")
+    rationale: str = Field(description="Why this action — anchor su data observed")
+    deadline: str = Field(description="this_week | this_month | nice_to_have")
+
+
+class WeeklyReviewStageAssessment(BaseModel):
+    """Assessment macro fase portfolio."""
+    portfolio_phase: str = Field(description="BUILDING | BALANCED | OVER_INVESTED | UNDER_INVESTED")
+    regime_alignment: str = Field(description="STRONG | MIXED | CONTRADICTORY")
+    strategy_mix: str = Field(description="balanced | over_momentum | over_thematic | over_defensive | over_etf")
+
+
+class WeeklyReviewTimeSeriesTrend(BaseModel):
+    """Trend comparison settimana N vs N-1 / N-4 (Phase 2)."""
+    pnl_trend: str = Field(description="IMPROVING | STABLE | DETERIORATING")
+    drawdown_evolution: str = Field(description="Description 1-2 sentences")
+    strategy_mix_shift: str = Field(description="Description shift over weeks, or 'no shift'")
+    ai_accuracy_trend: str = Field(description="IMPROVING | STABLE | DETERIORATING | INSUFFICIENT_DATA")
+
+
+class WeeklyReviewVerdict(BaseModel):
+    """Verdict strutturato portfolio review settimanale (Phase 2 time-series)."""
+    health_verdict: str = Field(description="HEALTHY | REBALANCE | CONCERN | CRITICAL")
+    conviction_score: int = Field(ge=0, le=10)
+    executive_summary: str = Field(description="2-3 sentences synthesis")
+    strengths: list[str]
+    weaknesses: list[str]
+    concentration_risks: list[str]
+    stage_assessment: WeeklyReviewStageAssessment
+    time_series_trend: WeeklyReviewTimeSeriesTrend
+    action_items: list[WeeklyReviewActionItem]
+    ai_accuracy_view: str = Field(description="Comment on AI verdict accuracy trend, or 'no data'")
+    next_review_focus: str = Field(description="What to monitor next week — 1-2 specific items")
+
+
 class AIValidationError(RuntimeError):
     """Errore applicativo di alto livello per la validazione AI."""
 
@@ -476,6 +514,78 @@ _THEMATIC_JSON_SCHEMA = {
         "time_horizon_weeks",
         "alignment_with_parent",
         "confidence_by_dimension",
+    ],
+    "additionalProperties": False,
+}
+
+
+_WEEKLY_REVIEW_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "health_verdict": {
+            "type": "string",
+            "enum": ["HEALTHY", "REBALANCE", "CONCERN", "CRITICAL"],
+        },
+        "conviction_score": {"type": "integer"},
+        "executive_summary": {"type": "string"},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "weaknesses": {"type": "array", "items": {"type": "string"}},
+        "concentration_risks": {"type": "array", "items": {"type": "string"}},
+        "stage_assessment": {
+            "type": "object",
+            "properties": {
+                "portfolio_phase": {
+                    "type": "string",
+                    "enum": ["BUILDING", "BALANCED", "OVER_INVESTED", "UNDER_INVESTED"],
+                },
+                "regime_alignment": {
+                    "type": "string",
+                    "enum": ["STRONG", "MIXED", "CONTRADICTORY"],
+                },
+                "strategy_mix": {"type": "string"},
+            },
+            "required": ["portfolio_phase", "regime_alignment", "strategy_mix"],
+            "additionalProperties": False,
+        },
+        "time_series_trend": {
+            "type": "object",
+            "properties": {
+                "pnl_trend": {"type": "string"},
+                "drawdown_evolution": {"type": "string"},
+                "strategy_mix_shift": {"type": "string"},
+                "ai_accuracy_trend": {"type": "string"},
+            },
+            "required": [
+                "pnl_trend", "drawdown_evolution",
+                "strategy_mix_shift", "ai_accuracy_trend",
+            ],
+            "additionalProperties": False,
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "priority": {
+                        "type": "string",
+                        "enum": ["HIGH", "MEDIUM", "LOW"],
+                    },
+                    "action": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "deadline": {"type": "string"},
+                },
+                "required": ["priority", "action", "rationale", "deadline"],
+                "additionalProperties": False,
+            },
+        },
+        "ai_accuracy_view": {"type": "string"},
+        "next_review_focus": {"type": "string"},
+    },
+    "required": [
+        "health_verdict", "conviction_score", "executive_summary",
+        "strengths", "weaknesses", "concentration_risks",
+        "stage_assessment", "time_series_trend", "action_items",
+        "ai_accuracy_view", "next_review_focus",
     ],
     "additionalProperties": False,
 }
