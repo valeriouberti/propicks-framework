@@ -96,6 +96,8 @@ with tab_attiva:
         rows_stock: list[dict] = []
         rows_etf: list[dict] = []
         ready = []
+        # Chart data: ticker → (dist_pct, abs_dist_pct, score, bucket, ready)
+        chart_data: list[dict] = []
         with st.spinner(f"Scanning {len(tickers)} ticker…"):
             for t, e in sorted(tickers.items()):
                 bucket = _bucket(t)
@@ -124,6 +126,11 @@ with tab_attiva:
                         dist = (price - target) / target
                         dist_str = f"{dist * 100:+.2f}%"
                         is_ready = score >= READY_SCORE_MIN and abs(dist) <= READY_DISTANCE_PCT
+                        chart_data.append({
+                            "ticker": t, "dist_pct": dist * 100, "abs_dist": abs(dist) * 100,
+                            "score": score, "bucket": bucket, "ready": is_ready,
+                            "price": price, "target": target,
+                        })
                     else:
                         dist_str = "—"
                         is_ready = False
@@ -146,6 +153,83 @@ with tab_attiva:
                     rows_stock.append(row)
                 else:
                     rows_etf.append(row)
+
+        # ─── Distance-to-target priority bar chart ───────────────────────
+        # Solo entry con target valorizzato. Ordinato abs(dist) asc (più vicini
+        # in alto = priorità entry imminenti). Bar signed = sopra/sotto target.
+        if chart_data:
+            import plotly.graph_objects as go
+
+            sorted_chart = sorted(chart_data, key=lambda x: x["abs_dist"])
+            tickers_c = [d["ticker"] for d in sorted_chart]
+            dist_c = [d["dist_pct"] for d in sorted_chart]
+            scores_c = [d["score"] for d in sorted_chart]
+
+            # Color: verde READY, giallo near-target (abs<=2%) score basso,
+            # arancio score alto ma lontano (>2%), grigio score basso lontano
+            colors = []
+            for d in sorted_chart:
+                if d["ready"]:
+                    colors.append("#16a34a")  # green ready
+                elif d["abs_dist"] <= 2.0:
+                    colors.append("#ca8a04")  # yellow near + score low
+                elif d["score"] >= READY_SCORE_MIN:
+                    colors.append("#f97316")  # orange high score far
+                else:
+                    colors.append("#94a3b8")  # gray low priority
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=tickers_c,
+                x=dist_c,
+                orientation="h",
+                marker=dict(color=colors),
+                text=[
+                    f"{d['dist_pct']:+.1f}% (score {d['score']:.0f}{'  ✓' if d['ready'] else ''})"
+                    for d in sorted_chart
+                ],
+                textposition="outside",
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Price → Target: %{customdata[0]:.2f} → %{customdata[1]:.2f}<br>"
+                    "Distance %{x:+.2f}%<br>"
+                    "Score %{customdata[2]:.1f}<br>"
+                    "<extra></extra>"
+                ),
+                customdata=[
+                    (d["price"], d["target"], d["score"]) for d in sorted_chart
+                ],
+            ))
+            fig.add_vline(x=0, line_dash="dash", line_color="#64748b", annotation_text="target")
+            fig.add_vrect(
+                x0=-READY_DISTANCE_PCT * 100, x1=READY_DISTANCE_PCT * 100,
+                fillcolor="#16a34a", opacity=0.08, line_width=0,
+                annotation_text=f"READY zone ±{READY_DISTANCE_PCT * 100:.0f}%",
+                annotation_position="top left",
+            )
+            # Height adattiva: 22px per riga, min 250px
+            fig_h = max(250, len(sorted_chart) * 28 + 80)
+            fig.update_layout(
+                title=dict(
+                    text="🎯 Distance-to-target priority (closest first)",
+                    x=0.5, xanchor="center", font=dict(size=13),
+                ),
+                xaxis_title="Distance from target %",
+                yaxis_title="",
+                height=fig_h,
+                margin=dict(l=20, r=20, t=50, b=20),
+                yaxis=dict(autorange="reversed"),  # closest in alto
+                showlegend=False,
+            )
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "🟢 READY (score≥{} + within ±{:.0f}%) · "
+                "🟡 entro target ma score basso · "
+                "🟠 score alto ma fuori zona · "
+                "⚪ no priority. Negative = sotto target (entry su pullback)."
+                .format(READY_SCORE_MIN, READY_DISTANCE_PCT * 100)
+            )
+            st.divider()
 
         st.markdown(f"#### 📊 Stock — {len(rows_stock)} entry")
         if rows_stock:

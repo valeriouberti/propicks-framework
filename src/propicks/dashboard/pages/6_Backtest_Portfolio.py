@@ -436,18 +436,136 @@ cols2[3].metric(
     f"{metrics.get('calmar_ratio') or 0:.2f}" if metrics.get("calmar_ratio") else "—",
 )
 
-# Equity curve chart
+# Equity curve + Drawdown underwater + Monthly heatmap (Plotly)
 if state.equity_curve:
     import pandas as pd
+    import plotly.graph_objects as go
+
     eq_df = pd.DataFrame(state.equity_curve, columns=["date", "equity"])
     eq_df["date"] = pd.to_datetime(eq_df["date"])
-    eq_df = eq_df.set_index("date")
-    eq_df["drawdown"] = (eq_df["equity"] - eq_df["equity"].cummax()) / eq_df["equity"].cummax() * 100
+    eq_df = eq_df.set_index("date").sort_index()
+    cummax = eq_df["equity"].cummax()
+    eq_df["drawdown"] = (eq_df["equity"] - cummax) / cummax * 100
+    eq_df["peak"] = cummax
 
+    # Max DD info
+    dd_min = float(eq_df["drawdown"].min())
+    dd_min_date = eq_df["drawdown"].idxmin()
+    # Recovery date: primo timestamp post-trough con equity ≥ peak al trough
+    peak_at_trough = float(eq_df.loc[dd_min_date, "peak"])
+    recovery = eq_df.loc[dd_min_date:].query("equity >= @peak_at_trough")
+    recovery_date = recovery.index[0] if not recovery.empty else None
+
+    # ─── Equity curve ───
     st.subheader("📈 Equity curve")
-    st.line_chart(eq_df["equity"])
-    st.subheader("📉 Drawdown")
-    st.area_chart(eq_df["drawdown"])
+    fig_eq = go.Figure()
+    fig_eq.add_trace(go.Scatter(
+        x=eq_df.index, y=eq_df["equity"],
+        mode="lines", name="Equity",
+        line=dict(color="#3b82f6", width=2),
+        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Equity € %{y:,.2f}<extra></extra>",
+    ))
+    fig_eq.add_trace(go.Scatter(
+        x=eq_df.index, y=eq_df["peak"],
+        mode="lines", name="Peak",
+        line=dict(color="#94a3b8", width=1, dash="dot"),
+        hovertemplate="Peak € %{y:,.2f}<extra></extra>",
+    ))
+    fig_eq.update_layout(
+        height=320, hovermode="x unified",
+        xaxis_title="", yaxis_title="Equity €",
+        margin=dict(l=20, r=20, t=20, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+    )
+    st.plotly_chart(fig_eq, width="stretch")
+
+    # ─── Drawdown underwater ───
+    st.subheader("📉 Drawdown (underwater)")
+    fig_dd = go.Figure()
+    fig_dd.add_trace(go.Scatter(
+        x=eq_df.index, y=eq_df["drawdown"],
+        mode="lines", name="Drawdown",
+        line=dict(color="#dc2626", width=1.5),
+        fill="tozeroy", fillcolor="rgba(220,38,38,0.25)",
+        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>DD %{y:+.2f}%<extra></extra>",
+    ))
+    # Mark peak DD
+    fig_dd.add_trace(go.Scatter(
+        x=[dd_min_date], y=[dd_min],
+        mode="markers+text",
+        marker=dict(color="#7f1d1d", size=10, symbol="x"),
+        text=[f"max {dd_min:+.2f}%"],
+        textposition="bottom center",
+        showlegend=False,
+        hovertemplate=f"Max DD {dd_min:+.2f}%<br>%{{x|%Y-%m-%d}}<extra></extra>",
+    ))
+    fig_dd.add_hline(y=0, line_color="#94a3b8", line_width=1)
+    fig_dd.update_layout(
+        height=260, hovermode="x unified",
+        xaxis_title="", yaxis_title="Drawdown %",
+        margin=dict(l=20, r=20, t=20, b=20),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_dd, width="stretch")
+
+    # DD info caption
+    if recovery_date is not None:
+        recovery_days = (recovery_date - dd_min_date).days
+        st.caption(
+            f"Max DD **{dd_min:+.2f}%** @ {dd_min_date.date()} · "
+            f"Recovery to peak in **{recovery_days} giorni** ({recovery_date.date()})."
+        )
+    else:
+        from_today = (eq_df.index[-1] - dd_min_date).days
+        st.caption(
+            f"Max DD **{dd_min:+.2f}%** @ {dd_min_date.date()} · "
+            f"⚠️ NOT recovered yet — {from_today} giorni from trough."
+        )
+
+    # ─── Monthly returns heatmap ───
+    if len(eq_df) >= 30:
+        st.subheader("🗓️ Monthly returns heatmap")
+        monthly = eq_df["equity"].resample("ME").last().pct_change().dropna() * 100
+        if len(monthly) >= 2:
+            mdf = monthly.to_frame("ret")
+            mdf["year"] = mdf.index.year
+            mdf["month"] = mdf.index.month
+            pivot = mdf.pivot_table(index="year", columns="month", values="ret", aggfunc="first")
+            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            cols_present = [c for c in range(1, 13) if c in pivot.columns]
+
+            fig_hm = go.Figure(data=go.Heatmap(
+                z=pivot[cols_present].values,
+                x=[month_names[c - 1] for c in cols_present],
+                y=[str(y) for y in pivot.index],
+                colorscale=[
+                    [0.0, "#7f1d1d"], [0.4, "#dc2626"], [0.5, "#f3f4f6"],
+                    [0.6, "#16a34a"], [1.0, "#14532d"],
+                ],
+                zmid=0,
+                text=[[f"{v:+.1f}%" if pd.notna(v) else "" for v in row] for row in pivot[cols_present].values],
+                texttemplate="%{text}",
+                textfont=dict(size=11),
+                hovertemplate="<b>%{y} %{x}</b><br>%{z:+.2f}%<extra></extra>",
+                colorbar=dict(title="Return %"),
+            ))
+            fig_hm.update_layout(
+                height=max(180, len(pivot) * 50 + 60),
+                margin=dict(l=20, r=20, t=20, b=20),
+                xaxis=dict(side="top"),
+                yaxis=dict(autorange="reversed"),  # year più recente in alto
+            )
+            st.plotly_chart(fig_hm, width="stretch")
+            # Quick stats
+            best_m = monthly.idxmax()
+            worst_m = monthly.idxmin()
+            n_pos = (monthly > 0).sum()
+            st.caption(
+                f"Best month **{monthly.max():+.2f}%** ({best_m.strftime('%Y-%m')}) · "
+                f"Worst **{monthly.min():+.2f}%** ({worst_m.strftime('%Y-%m')}) · "
+                f"Positive months **{n_pos}/{len(monthly)}** ({n_pos / len(monthly) * 100:.0f}%)"
+            )
 
 # Exit reasons breakdown
 if metrics.get("exit_reasons"):
