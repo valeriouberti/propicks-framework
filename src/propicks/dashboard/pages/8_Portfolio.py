@@ -167,14 +167,22 @@ with tab_risk:
             entry = p["entry_price"]
             stop = p["stop_loss"]
             shares = p["shares"]
+            last = prices_map.get(ticker)
             risk_eur = (entry - stop) * shares
             risk_pct = risk_eur / total if total else 0.0
             risk_sum += risk_eur
+            # P&L% vs entry; buffer = (last - stop) / last → quanto resta prima
+            # di toccare stop (negativo = già sotto stop, da gestire)
+            pnl_pct = ((last - entry) / entry * 100) if (last and entry > 0) else None
+            buffer_pct = ((last - stop) / last * 100) if (last and last > 0) else None
             risk_rows.append({
                 "Ticker": ticker,
                 "Shares": shares,
                 "Entry": entry,
+                "Last": last if last is not None else float("nan"),
+                "P&L%": pnl_pct if pnl_pct is not None else float("nan"),
                 "Stop": stop,
+                "Buffer %": buffer_pct if buffer_pct is not None else float("nan"),
                 "Rischio €": risk_eur,
                 "% capitale": risk_pct * 100,
             })
@@ -185,7 +193,19 @@ with tab_risk:
             hide_index=True,
             column_config={
                 "Entry": st.column_config.NumberColumn(format="%.2f"),
+                "Last": st.column_config.NumberColumn(
+                    format="%.2f",
+                    help="Prezzo corrente (cached). NaN se quote yfinance non disponibile.",
+                ),
+                "P&L%": st.column_config.NumberColumn(
+                    format="%+.2f%%",
+                    help="(last − entry) / entry. Drift mark-to-market vs ingresso.",
+                ),
                 "Stop": st.column_config.NumberColumn(format="%.2f"),
+                "Buffer %": st.column_config.NumberColumn(
+                    format="%+.2f%%",
+                    help="(last − stop) / last. Quanto può scendere prima dello stop. Negativo = sotto stop.",
+                ),
                 "Rischio €": st.column_config.NumberColumn(format="€ %.2f"),
                 "% capitale": st.column_config.ProgressColumn(
                     format="%.2f%%", min_value=0.0, max_value=2.0,
@@ -194,9 +214,9 @@ with tab_risk:
             },
         )
         st.caption(
-            "**Rischio €** = `(entry - stop) x shares` · "
-            "**% capitale** = rischio / portfolio_value. "
-            "Apri la legenda in fondo per il dettaglio."
+            "**Last** = prezzo corrente · **P&L%** = drift vs entry · "
+            "**Buffer %** = distanza al stop · **Rischio €** = `(entry − stop) × shares` · "
+            "**% capitale** = rischio / portfolio_value."
         )
 
         weekly_limit = total * MAX_LOSS_WEEKLY_PCT
