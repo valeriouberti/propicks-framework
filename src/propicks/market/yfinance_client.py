@@ -372,6 +372,17 @@ def get_next_earnings_date(ticker: str, *, force_refresh: bool = False) -> str |
     """
     ticker = ticker.upper()
 
+    # Short-circuit per ETF/thematic: non hanno earnings — yfinance ritorna
+    # 404 fundamentals + warning. Skip cache + fetch entirely.
+    # Detection: ticker registrato in SECTOR_ETFS_*/THEMATIC_ETFS via
+    # get_asset_type. Lazy import per evitare ciclo a load time.
+    try:
+        from propicks.domain.etf_universe import get_asset_type as _gat
+        if _gat(ticker) in ("SECTOR_ETF", "THEMATIC_ETF"):
+            return None
+    except ImportError:
+        pass  # fallback: lascia che yfinance fallisca silenzioso
+
     if not force_refresh:
         cached = market_earnings_read(ticker, EARNINGS_CACHE_TTL_HOURS)
         if cached is not None:
