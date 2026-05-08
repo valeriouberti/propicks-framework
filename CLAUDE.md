@@ -363,6 +363,7 @@ pytest                                            # tutti senza rete
 | `propicks-scheduler` | *(CLI-only, no dashboard page)* |
 | `propicks-regime composite` / `check` | `pages/13_Regime_Composite.py` |
 | `propicks-decay monitor` | `pages/14_Decay_Monitor.py` |
+| *(dashboard-only)* — stress test scenario-based | `pages/15_Stress_Test.py` |
 
 ---
 
