@@ -91,6 +91,104 @@ if regime is not None:
         f"RSI(w) {regime.get('rsi_weekly', 0):.1f} · "
         f"entry long {'allowed' if regime.get('entry_allowed') else 'NOT allowed'}"
     )
+
+# ─── Data freshness banner ─────────────────────────────────────────────
+# Mostra last-update timestamp per le 4 source critiche + warning se stale.
+# Soglie: daily 8h, weekly 7d, regime 24h, ai_verdict 7d (storico).
+@st.cache_data(ttl=60, show_spinner=False)
+def _data_freshness() -> dict:
+    """Pull last-update timestamps per cache key sources."""
+    from datetime import datetime, timezone
+    from propicks.io.db import connect
+
+    out: dict = {}
+    conn = connect()
+    try:
+        for table, col in [
+            ("market_ohlcv_daily", "fetched_at"),
+            ("market_ohlcv_weekly", "fetched_at"),
+            ("regime_history", "recorded_at"),
+            ("ai_verdicts", "run_timestamp"),
+        ]:
+            try:
+                row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
+                ts_str = row[0] if row else None
+                if ts_str:
+                    # SQLite timestamps sono "YYYY-MM-DD HH:MM:SS" (no tz)
+                    dt = datetime.fromisoformat(ts_str.replace(" ", "T"))
+                    age_hours = (datetime.now() - dt).total_seconds() / 3600
+                    out[table] = {"ts": ts_str, "age_h": age_hours}
+                else:
+                    out[table] = {"ts": None, "age_h": None}
+            except Exception:
+                out[table] = {"ts": None, "age_h": None}
+    finally:
+        conn.close()
+    return out
+
+
+_freshness = _data_freshness()
+
+
+def _fmt_age(age_h: float | None) -> str:
+    if age_h is None:
+        return "—"
+    if age_h < 1:
+        return f"{int(age_h * 60)}min ago"
+    if age_h < 24:
+        return f"{age_h:.1f}h ago"
+    return f"{age_h / 24:.1f}d ago"
+
+
+def _status(age_h: float | None, fresh_h: float, stale_h: float) -> str:
+    """🟢 fresh, 🟡 stale, 🔴 very stale, ⚪ unknown."""
+    if age_h is None:
+        return "⚪"
+    if age_h <= fresh_h:
+        return "🟢"
+    if age_h <= stale_h:
+        return "🟡"
+    return "🔴"
+
+
+_fresh_cols = st.columns(4)
+_fresh_cols[0].markdown(
+    f"**📊 Daily OHLCV**  \n"
+    f"{_status(_freshness['market_ohlcv_daily']['age_h'], 8, 24)} "
+    f"{_fmt_age(_freshness['market_ohlcv_daily']['age_h'])}"
+)
+_fresh_cols[1].markdown(
+    f"**📈 Weekly OHLCV**  \n"
+    f"{_status(_freshness['market_ohlcv_weekly']['age_h'], 24*7, 24*14)} "
+    f"{_fmt_age(_freshness['market_ohlcv_weekly']['age_h'])}"
+)
+_fresh_cols[2].markdown(
+    f"**🌡 Regime classifier**  \n"
+    f"{_status(_freshness['regime_history']['age_h'], 24, 24*3)} "
+    f"{_fmt_age(_freshness['regime_history']['age_h'])}"
+)
+_fresh_cols[3].markdown(
+    f"**🤖 AI verdict latest**  \n"
+    f"{_status(_freshness['ai_verdicts']['age_h'], 24*7, 24*30)} "
+    f"{_fmt_age(_freshness['ai_verdicts']['age_h'])}"
+)
+
+# Show warning banner if any source is stale
+_warns = []
+if (_freshness['market_ohlcv_daily']['age_h'] or 99) > 24:
+    _warns.append(
+        f"📊 Daily OHLCV cache stale ({_fmt_age(_freshness['market_ohlcv_daily']['age_h'])}). "
+        "Lancia `propicks-cache warm <tickers>` o run discovery per refetch."
+    )
+if (_freshness['regime_history']['age_h'] or 99) > 24*3:
+    _warns.append(
+        f"🌡 Regime classifier non aggiornato da {_fmt_age(_freshness['regime_history']['age_h'])}. "
+        "Run `propicks-scheduler job regime` o lancia uno scan per ricalcolarlo."
+    )
+if _warns:
+    for _w in _warns:
+        st.warning(_w)
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -419,6 +517,109 @@ if positions:
                 "Stock = momentum + contrarian merged. ETF = rotation + thematic merged. "
                 "Per breakdown sector + correlation vai a **Portfolio → Rischio & esposizione**."
             )
+
+    # ─── Risk dashboard widget ─────────────────────────────────────────
+    # Per-position rischio a stop + bucket headroom + weekly risk used.
+    from propicks.config import MAX_LOSS_WEEKLY_PCT
+
+    st.subheader("⚠️ Risk dashboard")
+
+    # Calcola rischio per posizione
+    risk_rows = []
+    risk_total = 0.0
+    for tk, p in positions.items():
+        entry = float(p.get("entry_price", 0))
+        stop = float(p.get("stop_loss", 0))
+        shares = float(p.get("shares") or 0)
+        if entry > 0 and stop > 0 and entry > stop:
+            r_eur = (entry - stop) * shares
+            r_pct = r_eur / total * 100 if total else 0
+            risk_total += r_eur
+            risk_rows.append({"ticker": tk, "risk_eur": r_eur, "risk_pct": r_pct})
+
+    weekly_limit_eur = total * MAX_LOSS_WEEKLY_PCT
+    weekly_used_pct = risk_total / weekly_limit_eur * 100 if weekly_limit_eur else 0
+
+    risk_col1, risk_col2 = st.columns([1, 1])
+
+    # Risk per-position bar chart
+    with risk_col1:
+        if risk_rows:
+            import plotly.graph_objects as go
+
+            risk_rows.sort(key=lambda r: r["risk_pct"], reverse=True)
+            tk_r = [r["ticker"] for r in risk_rows]
+            pct_r = [r["risk_pct"] for r in risk_rows]
+            # Color per soglia: <1% verde, 1-2% giallo, >2% rosso
+            colors_r = [
+                "#16a34a" if p < 1.0
+                else "#ca8a04" if p < 2.0
+                else "#dc2626"
+                for p in pct_r
+            ]
+            fig_r = go.Figure()
+            fig_r.add_trace(go.Bar(
+                x=pct_r, y=tk_r, orientation="h",
+                marker=dict(color=colors_r),
+                text=[f"{p:.2f}%" for p in pct_r],
+                textposition="outside",
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Rischio €%{customdata:.2f}<br>"
+                    "%{x:.2f}% capitale<extra></extra>"
+                ),
+                customdata=[r["risk_eur"] for r in risk_rows],
+            ))
+            # Vline 2% reference
+            fig_r.add_vline(
+                x=2.0, line_dash="dot", line_color="#dc2626", opacity=0.5,
+                annotation_text="2% per-trade", annotation_position="top",
+            )
+            fig_r.update_layout(
+                title=dict(
+                    text="Rischio per posizione (a stop)",
+                    x=0.5, xanchor="center", font=dict(size=13),
+                ),
+                xaxis_title="% capitale", yaxis_title="",
+                yaxis=dict(autorange="reversed"),
+                height=max(220, len(risk_rows) * 32 + 80),
+                margin=dict(l=20, r=20, t=50, b=20),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_r, width="stretch")
+        else:
+            st.caption("_Nessuna posizione con stop valido per calcolo rischio._")
+
+    # Weekly risk + bucket caps progress
+    with risk_col2:
+        st.markdown("##### Weekly risk used")
+        weekly_color = (
+            "#16a34a" if weekly_used_pct < 50
+            else "#ca8a04" if weekly_used_pct < 80
+            else "#dc2626"
+        )
+        st.markdown(
+            f"<div style='font-size:28px;font-weight:700;color:{weekly_color};'>"
+            f"{weekly_used_pct:.0f}%</div>"
+            f"<div style='color:#64748b;font-size:13px;'>"
+            f"€{risk_total:.2f} su €{weekly_limit_eur:.2f} cap "
+            f"({MAX_LOSS_WEEKLY_PCT*100:.0f}% portfolio)</div>",
+            unsafe_allow_html=True,
+        )
+        st.progress(min(1.0, weekly_used_pct / 100), text=None)
+        st.caption(
+            f"Worst-case se TUTTI gli stop saltano insieme. Soglia warning 80%, "
+            f"hard stop trading sopra 100%."
+        )
+
+        # Bucket caps progress
+        st.markdown("##### Bucket caps")
+        st.progress(min(1.0, stock_pct / 40), text=f"📊 Stock {stock_pct:.1f}% / 40%")
+        st.progress(min(1.0, etf_pct / 60), text=f"📈 ETF {etf_pct:.1f}% / 60%")
+        st.progress(
+            min(1.0, max(0, (20 - cash_pct)) / 20) if cash_pct < 20 else 0.0,
+            text=f"💰 Cash {cash_pct:.1f}% (min 20% — {'⚠ sotto' if cash_pct < 20 else 'OK'})",
+        )
 
     st.divider()
 
