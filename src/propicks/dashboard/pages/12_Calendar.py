@@ -193,19 +193,40 @@ with tab_timeline:
                 ],
             ))
 
-        # Vertical line "today" + Vrect hard gate (plotly accetta solo stringhe
-        # ISO o pd.Timestamp per asse date, non datetime.date direttamente).
-        today_iso = today_d.isoformat()
-        gate_end_iso = (today_d + _td(days=EARNINGS_HARD_GATE_DAYS)).isoformat()
-        fig.add_vline(
-            x=today_iso, line_dash="solid", line_color="#16a34a", line_width=2,
-            annotation_text="TODAY", annotation_position="top",
+        # Vertical line "today" + Vrect hard gate. Plotly internamente fa
+        # _mean(x) per posizionare l'annotation: con string date fallisce
+        # (sum di str). Workaround: usa add_shape (no annotation auto) +
+        # add_annotation manuale. Coordinate come pd.Timestamp.
+        import pandas as _pd
+        today_ts = _pd.Timestamp(today_d)
+        gate_end_ts = _pd.Timestamp(today_d + _td(days=EARNINGS_HARD_GATE_DAYS))
+
+        fig.add_shape(
+            type="line",
+            x0=today_ts, x1=today_ts, xref="x",
+            y0=0, y1=1, yref="paper",
+            line=dict(color="#16a34a", width=2),
         )
-        fig.add_vrect(
-            x0=today_iso, x1=gate_end_iso,
-            fillcolor="#dc2626", opacity=0.10, line_width=0,
-            annotation_text=f"⚠ Earnings hard gate zone ({EARNINGS_HARD_GATE_DAYS}gg)",
-            annotation_position="top left",
+        fig.add_annotation(
+            x=today_ts, y=1.0, xref="x", yref="paper",
+            text="TODAY", showarrow=False,
+            font=dict(color="#16a34a", size=11),
+            yanchor="bottom",
+        )
+        fig.add_shape(
+            type="rect",
+            x0=today_ts, x1=gate_end_ts, xref="x",
+            y0=0, y1=1, yref="paper",
+            fillcolor="#dc2626", opacity=0.10,
+            line=dict(width=0),
+            layer="below",
+        )
+        fig.add_annotation(
+            x=today_ts, y=1.0, xref="x", yref="paper",
+            text=f"⚠ Earnings hard gate zone ({EARNINGS_HARD_GATE_DAYS}gg)",
+            showarrow=False,
+            font=dict(color="#dc2626", size=10),
+            xanchor="left", yanchor="top",
         )
 
         # Height adattiva
