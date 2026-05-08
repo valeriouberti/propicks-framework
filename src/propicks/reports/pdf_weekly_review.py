@@ -77,8 +77,12 @@ def _build_data() -> dict[str, Any]:
     sector_map = {
         t: resolve_sector_key(t, yahoo_sector_raw=s) for t, s in sector_yf.items()
     }
+    currency_map = {t: (p.get("currency") or "EUR") for t, p in positions.items()}
     sector_exp = (
-        compute_sector_exposure(positions, prices, sector_map, total_market)
+        compute_sector_exposure(
+            positions, prices, sector_map, total_market,
+            currency_map=currency_map,
+        )
         if positions else {}
     )
 

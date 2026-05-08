@@ -198,7 +198,11 @@ def _show_exposure(portfolio: dict, positions: dict) -> None:
     sector_key_map = {
         t: resolve_sector_key(t, yahoo_sector_raw=s) for t, s in sector_map.items()
     }
-    sector_exp = compute_sector_exposure(positions, prices, sector_key_map, total_capital)
+    currency_map = {t: (p.get("currency") or "EUR") for t, p in positions.items()}
+    sector_exp = compute_sector_exposure(
+        positions, prices, sector_key_map, total_capital,
+        currency_map=currency_map,
+    )
 
     if sector_exp:
         rows = sorted(
@@ -213,7 +217,10 @@ def _show_exposure(portfolio: dict, positions: dict) -> None:
             print(f"[warning] concentrazione: {w}")
 
     betas = {t: get_ticker_beta(t) for t in tickers}
-    beta_info = compute_beta_weighted_exposure(positions, prices, betas, total_capital)
+    beta_info = compute_beta_weighted_exposure(
+        positions, prices, betas, total_capital,
+        currency_map=currency_map,
+    )
     print()
     print("Beta-weighted gross long exposure (vs SPX):")
     print(f"  Gross long:           {beta_info['gross_long'] * 100:.1f}% del capitale")

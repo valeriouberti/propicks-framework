@@ -26,16 +26,39 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _mv_to_eur(amount: float, currency: str | None) -> float:
+    """Lazy FX conversion. Identity se EUR/None/error.
+
+    Mirror di ``sizing._fx_to_eur`` ma evita ciclo import (sizing → exposure
+    non esiste, ma manteniamo helper locale per disaccoppiamento layer).
+    """
+    cur = (currency or "EUR").upper()
+    if cur == "EUR":
+        return float(amount)
+    try:
+        from propicks.domain.currency import convert_to_eur
+        return convert_to_eur(amount, cur)
+    except Exception:
+        return float(amount)
+
+
 def compute_sector_exposure(
     positions: dict[str, dict],
     current_prices: dict[str, float],
     sector_map: dict[str, str | None],
     total_capital: float,
+    currency_map: dict[str, str] | None = None,
 ) -> dict[str, float]:
     """Mappa sector_key -> % del capitale totale.
 
     Posizioni con sector ignoto finiscono in chiave ``"unknown"``. Cash
     NON è incluso (è esposizione zero per definizione).
+
+    Multi-currency: se ``currency_map`` passato, numeratore convertito a EUR
+    via FX corrente per match con denominatore ``portfolio_market_value``
+    (anch'esso EUR). Senza ``currency_map`` mantiene comportamento legacy
+    (raw shares×price). Critical: passare currency_map se denominatore è EUR
+    e portfolio ha posizioni non-EUR — altrimenti slices sotto-stimate.
 
     Esempio: {"technology": 0.30, "financials": 0.12, "unknown": 0.05}
     """
@@ -48,6 +71,8 @@ def compute_sector_exposure(
         if cur is None:
             continue
         market_value = pos["shares"] * cur
+        if currency_map is not None:
+            market_value = _mv_to_eur(market_value, currency_map.get(ticker))
         sector = sector_map.get(ticker) or "unknown"
         exposure[sector] = exposure.get(sector, 0.0) + market_value / total_capital
 
@@ -79,6 +104,7 @@ def compute_beta_weighted_exposure(
     betas: dict[str, float | None],
     total_capital: float,
     default_beta: float = 1.0,
+    currency_map: dict[str, str] | None = None,
 ) -> dict:
     """Beta-weighted gross long exposure vs SPX.
 
@@ -108,7 +134,10 @@ def compute_beta_weighted_exposure(
         cur = current_prices.get(ticker)
         if cur is None:
             continue
-        weight = (pos["shares"] * cur) / total_capital
+        mv = pos["shares"] * cur
+        if currency_map is not None:
+            mv = _mv_to_eur(mv, currency_map.get(ticker))
+        weight = mv / total_capital
         gross_long += weight
         beta = betas.get(ticker)
         if beta is None:

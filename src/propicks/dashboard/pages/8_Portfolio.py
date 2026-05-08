@@ -234,10 +234,16 @@ with tab_risk:
             t: resolve_sector_key(t, yahoo_sector_raw=s)
             for t, s in sector_yf.items()
         }
-        # Esposizione: denominatore mark-to-market per match coi numeratori
-        # (shares × current_price). Il `total` cost-basis resta corretto per
-        # il % capitale a rischio nella sezione sopra.
+        # Esposizione: denominatore mark-to-market in EUR per match coi
+        # numeratori. Multi-currency: passiamo currency_map a sector/beta
+        # affinché numeratore venga FX-converted (denominatore già EUR).
+        # Senza currency_map → bug visivo: posizione USD mostrava slice
+        # sotto-stimata di ~FX_USD_EUR.
         total_market = portfolio_market_value(portfolio, prices_map)
+        currency_map = {
+            t: (p.get("currency") or "EUR")
+            for t, p in positions.items()
+        }
 
         # ─── PIE 1: Allocation bucket (Stock / ETF rotation / Thematic / Cash)
         # Vista cap-compliance: confronto immediato vs 40/60 policy.
@@ -246,11 +252,13 @@ with tab_risk:
         stock_val = 0.0
         etf_rot_val = 0.0
         thematic_val = 0.0
+        from propicks.domain.sizing import _fx_to_eur as _fxe
         for tk, pos in positions.items():
             cur = prices_map.get(tk)
             if cur is None:
                 cur = pos.get("entry_price", 0)
-            mv = float(pos.get("shares") or 0) * float(cur)
+            mv_raw = float(pos.get("shares") or 0) * float(cur)
+            mv = _fxe(mv_raw, pos.get("currency"))
             if is_thematic_position(pos, ticker=tk):
                 thematic_val += mv
             elif is_etf_rotation_position(pos, ticker=tk):
@@ -299,7 +307,10 @@ with tab_risk:
             )
 
         # ─── PIE 2: Sector concentration ───
-        sector_exp_for_pie = compute_sector_exposure(positions, prices_map, sector_key_map, total_market)
+        sector_exp_for_pie = compute_sector_exposure(
+            positions, prices_map, sector_key_map, total_market,
+            currency_map=currency_map,
+        )
         with col_pie2:
             if sector_exp_for_pie:
                 # Sort biggest first
@@ -367,7 +378,10 @@ with tab_risk:
 
         # Beta-weighted gross long
         st.subheader("Beta-weighted gross long (vs SPX)")
-        beta_info = compute_beta_weighted_exposure(positions, prices_map, betas, total_market)
+        beta_info = compute_beta_weighted_exposure(
+            positions, prices_map, betas, total_market,
+            currency_map=currency_map,
+        )
         b1, b2, b3 = st.columns(3)
         b1.metric(
             "Gross long",
