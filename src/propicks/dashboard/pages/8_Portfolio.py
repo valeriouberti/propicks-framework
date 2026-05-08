@@ -134,13 +134,14 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Tabs: Risk | Mgmt | Size | Add | Update | Remove
 # ---------------------------------------------------------------------------
-tab_risk, tab_mgmt, tab_size, tab_add, tab_update, tab_remove = st.tabs([
+tab_risk, tab_mgmt, tab_size, tab_add, tab_update, tab_remove, tab_broker = st.tabs([
     "Rischio & esposizione",
     "Trade management",
     "Size calculator",
     "Apri posizione",
     "Aggiorna stop/target",
     "Chiudi posizione",
+    "📥 Broker import",
 ])
 
 # ---------------------------------------------------------------------------
@@ -1145,3 +1146,198 @@ with tab_remove:
                 st.rerun()
             except ValueError as err:
                 st.error(str(err))
+
+# ---------------------------------------------------------------------------
+# Tab: Broker import (riconciliazione CSV/paste vs portfolio)
+# ---------------------------------------------------------------------------
+with tab_broker:
+    from propicks.io.broker_import import (
+        apply_broker_position,
+        apply_drift_update,
+        parse_broker_paste,
+        reconcile_with_portfolio,
+        remove_orphan_position,
+    )
+
+    st.caption(
+        "Incolla qui l'export del broker (Fineco / Directa / Degiro EU "
+        "'Portafoglio di sintesi'). Il sistema parsa, confronta col portfolio "
+        "e propone azioni per ogni discrepanza."
+    )
+
+    bi_raw = st.text_area(
+        "Paste broker statement (TSV / Excel paste)",
+        height=200,
+        placeholder=(
+            "Titolo\tISIN\tSimbolo\tMercato\tStrumento\tValuta\tQuantità\t"
+            "P.zo medio di carico\t..."
+        ),
+        key="broker_raw",
+    )
+
+    if bi_raw and bi_raw.strip():
+        broker_positions, warns = parse_broker_paste(bi_raw)
+
+        if warns:
+            for w in warns:
+                st.caption(f"⚠ {w}")
+
+        if not broker_positions:
+            st.error("Nessuna posizione parsata. Verifica il formato.")
+        else:
+            st.success(
+                f"✓ Parsate **{len(broker_positions)}** posizioni dal broker."
+            )
+
+            # Reconcile
+            diff = reconcile_with_portfolio(broker_positions, portfolio)
+
+            # KPI counts
+            kc1, kc2, kc3, kc4 = st.columns(4)
+            kc1.metric("✅ In sync", len(diff["in_sync"]))
+            kc2.metric("⚠ Drift", len(diff["drift"]))
+            kc3.metric("📥 Solo broker", len(diff["only_broker"]))
+            kc4.metric("📤 Solo portfolio", len(diff["only_portfolio"]))
+
+            st.divider()
+
+            # ── In sync (read-only) ─────────────────────────────────────
+            if diff["in_sync"]:
+                with st.expander(
+                    f"✅ In sync ({len(diff['in_sync'])}) — niente da fare",
+                    expanded=False,
+                ):
+                    rows_sync = [
+                        {
+                            "Ticker": tk,
+                            "Shares": d["broker"].shares,
+                            "Entry": d["broker"].entry_price,
+                            "ISIN": d["broker"].isin or "—",
+                        }
+                        for tk, d in diff["in_sync"].items()
+                    ]
+                    st.dataframe(rows_sync, width="stretch", hide_index=True)
+
+            # ── Drift (action required) ─────────────────────────────────
+            if diff["drift"]:
+                st.subheader(f"⚠ Drift ({len(diff['drift'])}) — shares/entry mismatch")
+                for tk, d in diff["drift"].items():
+                    b = d["broker"]
+                    p = d["portfolio"]
+                    cc1, cc2, cc3 = st.columns([2, 4, 1])
+                    cc1.markdown(f"**{tk}**")
+                    cc2.caption(d["drift_msg"])
+                    if cc3.button(
+                        "Apply drift",
+                        key=f"bi_drift_{tk}",
+                        type="primary",
+                    ):
+                        try:
+                            apply_drift_update(tk, b.shares, b.entry_price)
+                            st.toast(
+                                f"✓ {tk}: {p['shares']} → {b.shares} shares · "
+                                f"{p['entry_price']} → {b.entry_price} entry",
+                                icon="✅",
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+
+            # ── Only broker (import as new) ─────────────────────────────
+            if diff["only_broker"]:
+                st.subheader(
+                    f"📥 Solo broker ({len(diff['only_broker'])}) — "
+                    "presenti nel broker ma NON in portfolio"
+                )
+                bi_strategy_default = st.text_input(
+                    "Strategy tag default (override per ogni import)",
+                    value="BrokerImport",
+                    key="bi_strat_default",
+                    help="Lascia 'BrokerImport' per inferire automaticamente "
+                         "(Thematic se in THEMATIC_ETFS, ETF_Rotation se ETF, "
+                         "Altro per stock).",
+                )
+                bi_stop_pct = st.slider(
+                    "Default stop loss % (entry × (1 - X))",
+                    min_value=0.05, max_value=0.20, value=0.10, step=0.01,
+                    key="bi_stop_pct",
+                    help="10% = conservativo per ETF/long-term holding. "
+                         "Per momentum stock 8% standard.",
+                )
+
+                for b in diff["only_broker"]:
+                    bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 1])
+                    bcol1.markdown(f"**{b.ticker}**")
+                    bcol2.caption(
+                        f"qty {b.shares:.0f} @ {b.entry_price:.4f} · "
+                        f"{b.strumento or 'n/a'}"
+                    )
+                    bcol3.caption(b.titolo[:40] if b.titolo else "—")
+                    if bcol4.button(
+                        "Import",
+                        key=f"bi_import_{b.ticker}",
+                        type="primary",
+                    ):
+                        try:
+                            override_strat = (
+                                None if bi_strategy_default == "BrokerImport"
+                                else bi_strategy_default
+                            )
+                            res = apply_broker_position(
+                                b,
+                                strategy=override_strat,
+                                stop_loss_pct=bi_stop_pct,
+                            )
+                            st.toast(
+                                f"✓ {b.ticker} importato — trade #{res['trade'].get('id')}",
+                                icon="✅",
+                            )
+                            for w in res.get("warnings", []):
+                                st.warning(w)
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(f"{b.ticker}: {exc}")
+
+            # ── Only portfolio (orphan, propose remove) ─────────────────
+            if diff["only_portfolio"]:
+                st.subheader(
+                    f"📤 Solo portfolio ({len(diff['only_portfolio'])}) — "
+                    "in portfolio ma NON nel broker (probabile chiusa)"
+                )
+                st.caption(
+                    "⚠ **Remove non chiude il trade journal**: solo data-entry "
+                    "correction. Se la trade è realmente chiusa (broker l'ha "
+                    "venduta), apri Page 9 Journal → tab Close trade per "
+                    "registrare exit_price + exit_date corretti, poi torna "
+                    "qui per cleanup."
+                )
+                for tk, p in diff["only_portfolio"]:
+                    rcol1, rcol2, rcol3 = st.columns([2, 3, 1])
+                    rcol1.markdown(f"**{tk}**")
+                    rcol2.caption(
+                        f"qty {p['shares']} @ {p['entry_price']:.2f} · "
+                        f"strategy {p.get('strategy') or '—'}"
+                    )
+                    if rcol3.button(
+                        "🗑 Remove",
+                        key=f"bi_orphan_{tk}",
+                        type="secondary",
+                    ):
+                        try:
+                            remove_orphan_position(tk)
+                            st.toast(
+                                f"✓ {tk} rimosso da portfolio "
+                                "(journal NON chiuso — chiudi manual via Page 9)",
+                                icon="🗑",
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+            elif not diff["drift"] and not diff["only_broker"]:
+                st.success("🎯 Portfolio perfettamente allineato col broker.")
+    else:
+        st.info(
+            "Incolla l'export broker per iniziare. **Formato atteso**: tab-separated "
+            "con header `Titolo / ISIN / Simbolo / Mercato / Strumento / Valuta / "
+            "Quantità / P.zo medio di carico / ...`"
+        )
