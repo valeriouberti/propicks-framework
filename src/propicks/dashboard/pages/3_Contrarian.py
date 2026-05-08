@@ -812,6 +812,9 @@ for r in results:
                     _fv = _preview.get("verdict") if _v_ovr == "(auto)" else _v_ovr
                     _fc = _preview.get("conviction") if _c_ovr == 0 else _c_ovr
                     try:
+                        from propicks.io.manual_verdicts_store import (
+                            auto_link_to_trade as _pp_autolink,
+                        )
                         _vid = _pp_save(
                             ticker=r["ticker"], source=_src, raw_paste=_raw,
                             verdict=_fv, conviction=_fc,
@@ -821,6 +824,11 @@ for r in results:
                             f"Salvato verdict #{_vid} · {r['ticker']} · "
                             f"{_fv or 'no-verdict'} · conviction {_fc or '—'}/10"
                         )
+                        _tid, _msg = _pp_autolink(_vid, max_days=7)
+                        if _tid is not None:
+                            st.success(f"🔗 Auto-link: {_msg}")
+                        else:
+                            st.caption(f"_Auto-link: {_msg}._")
                     except ValueError as exc:
                         st.error(str(exc))
 

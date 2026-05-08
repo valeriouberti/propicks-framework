@@ -251,6 +251,121 @@ def link_to_trade(verdict_id: int, trade_id: int) -> None:
         conn.close()
 
 
+def auto_link_to_trade(
+    verdict_id: int, *, max_days: int = 7
+) -> tuple[int | None, str]:
+    """Tenta auto-link verdict → trade by ticker + date proximity.
+
+    Match logic:
+    - Stesso ticker (case-insensitive)
+    - Trade.entry_date entro ±``max_days`` da verdict.pasted_at
+    - Priorità: trade ``open`` più recente, fallback closed
+    - Se multiple match: pick closest by abs date diff
+
+    Returns:
+        (trade_id_linked, message). Se nessun match → (None, reason).
+    """
+    from datetime import datetime, timedelta
+
+    conn = connect()
+    try:
+        v = conn.execute(
+            "SELECT id, ticker, trade_id, pasted_at FROM manual_ai_verdicts WHERE id = ?",
+            (verdict_id,),
+        ).fetchone()
+        if v is None:
+            return (None, f"Verdict #{verdict_id} non trovato")
+        if v["trade_id"] is not None:
+            return (None, f"Verdict #{verdict_id} già linkato a trade #{v['trade_id']}")
+
+        ticker = v["ticker"].upper()
+        try:
+            pasted_dt = datetime.fromisoformat(v["pasted_at"].replace(" ", "T"))
+        except (ValueError, AttributeError):
+            return (None, f"pasted_at invalida: {v['pasted_at']}")
+
+        date_lo = (pasted_dt - timedelta(days=max_days)).date().isoformat()
+        date_hi = (pasted_dt + timedelta(days=max_days)).date().isoformat()
+
+        # Prefer open trades, then closed
+        for status_filter in ("open", "closed"):
+            rows = conn.execute(
+                """SELECT id, entry_date, status
+                   FROM trades
+                   WHERE ticker = ? AND status = ?
+                     AND entry_date BETWEEN ? AND ?
+                   ORDER BY entry_date DESC""",
+                (ticker, status_filter, date_lo, date_hi),
+            ).fetchall()
+            if rows:
+                # Pick closest by date diff
+                best = None
+                best_diff = None
+                for r in rows:
+                    try:
+                        ent_dt = datetime.fromisoformat(r["entry_date"])
+                    except ValueError:
+                        continue
+                    diff = abs((ent_dt - pasted_dt).total_seconds())
+                    if best_diff is None or diff < best_diff:
+                        best = r
+                        best_diff = diff
+                if best is None:
+                    continue
+                conn.execute(
+                    "UPDATE manual_ai_verdicts SET trade_id = ? WHERE id = ?",
+                    (best["id"], verdict_id),
+                )
+                conn.commit()
+                days_diff = (best_diff or 0) / 86400
+                return (
+                    int(best["id"]),
+                    f"Linked → trade #{best['id']} ({status_filter}, "
+                    f"entry {best['entry_date']}, Δ {days_diff:.1f}gg)",
+                )
+
+        return (
+            None,
+            f"Nessun trade {ticker} trovato entro ±{max_days}gg da {pasted_dt.date()}",
+        )
+    finally:
+        conn.close()
+
+
+def auto_link_all_orphans(max_days: int = 7) -> dict:
+    """Bulk auto-link tutti i verdict orphan (trade_id IS NULL).
+
+    Returns:
+        Dict con counts: linked, skipped, total_orphan, details list.
+    """
+    conn = connect()
+    try:
+        orphans = conn.execute(
+            "SELECT id, ticker FROM manual_ai_verdicts WHERE trade_id IS NULL ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    linked = 0
+    skipped = 0
+    details: list[dict] = []
+    for o in orphans:
+        tid, msg = auto_link_to_trade(int(o["id"]), max_days=max_days)
+        if tid is not None:
+            linked += 1
+            details.append({"verdict_id": int(o["id"]), "ticker": o["ticker"], "result": "linked", "trade_id": tid, "msg": msg})
+        else:
+            skipped += 1
+            details.append({"verdict_id": int(o["id"]), "ticker": o["ticker"], "result": "skipped", "trade_id": None, "msg": msg})
+
+    return {
+        "linked": linked,
+        "skipped": skipped,
+        "total_orphan": len(orphans),
+        "details": details,
+    }
+
+
 def delete_verdict(verdict_id: int) -> None:
     """Rimuove un verdict (per cleanup paste errati)."""
     conn = connect()

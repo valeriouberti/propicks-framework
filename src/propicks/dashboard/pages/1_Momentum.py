@@ -732,6 +732,7 @@ for r in results:
                     final_v = preview.get("verdict") if v_override == "(auto)" else v_override
                     final_c = preview.get("conviction") if c_override == 0 else c_override
                     try:
+                        from propicks.io.manual_verdicts_store import auto_link_to_trade
                         vid = save_manual_verdict(
                             ticker=r["ticker"],
                             source=paste_source,
@@ -746,11 +747,12 @@ for r in results:
                             f"{final_v or 'no-verdict'} · "
                             f"conviction {final_c if final_c else '—'}/10"
                         )
-                        st.caption(
-                            "Apri Page 9 Journal → Stats per tracciare accuracy "
-                            "quando il trade chiude (auto-link via ticker se "
-                            "trade aperto entro 7gg)."
-                        )
+                        # Auto-link attempt: cerca trade open su stesso ticker entro ±7gg
+                        tid, msg = auto_link_to_trade(vid, max_days=7)
+                        if tid is not None:
+                            st.success(f"🔗 Auto-link: {msg}")
+                        else:
+                            st.caption(f"_Auto-link: {msg}. Linka manualmente da Page 9 Stats quando apri trade._")
                     except ValueError as exc:
                         st.error(str(exc))
 

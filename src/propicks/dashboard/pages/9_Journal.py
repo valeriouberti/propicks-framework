@@ -411,11 +411,51 @@ with tab_stats:
                 "P(CONFIRM)=0.8, P(CAUTION)=0.5, P(REJECT)=0.2."
             )
 
-        # ─── Link verdict ⇄ trade (manual) ─────────────────────────────────
-        with st.expander("🔗 Link manuali verdict ⇄ trade", expanded=False):
+        # ─── Link verdict ⇄ trade (manual + auto bulk) ──────────────────────
+        with st.expander("🔗 Link verdict ⇄ trade (auto + manuale)", expanded=False):
             from propicks.io.manual_verdicts_store import (
-                link_to_trade, delete_verdict,
+                auto_link_all_orphans, delete_verdict, link_to_trade,
             )
+
+            # ─ Auto-link bulk button ─
+            auto_col1, auto_col2 = st.columns([1, 2])
+            _max_days = auto_col1.number_input(
+                "Match window (gg)",
+                min_value=1, max_value=30, value=7, step=1,
+                key="autolink_max_days",
+                help="Cerca trade con entry_date entro ±N gg dal pasted_at del verdict.",
+            )
+            if auto_col1.button(
+                "🔗 Auto-link orphans",
+                type="primary",
+                key="btn_autolink_all",
+                help="Tenta link automatico per TUTTI i verdict senza trade_id",
+            ):
+                res = auto_link_all_orphans(max_days=int(_max_days))
+                if res["total_orphan"] == 0:
+                    auto_col2.info("Nessun verdict orphan da linkare.")
+                else:
+                    auto_col2.success(
+                        f"Auto-link completato: **{res['linked']}** linkati · "
+                        f"**{res['skipped']}** skipped (su {res['total_orphan']} orphan)"
+                    )
+                    # Show details
+                    if res["details"]:
+                        det_rows = [
+                            {
+                                "Verdict ID": d["verdict_id"],
+                                "Ticker": d["ticker"],
+                                "Result": d["result"],
+                                "Trade ID": d.get("trade_id") or "—",
+                                "Detail": d["msg"][:60],
+                            }
+                            for d in res["details"]
+                        ]
+                        st.dataframe(det_rows, width="stretch", hide_index=True)
+                st.rerun()
+
+            st.divider()
+            st.markdown("##### Link manuale (override)")
 
             all_v = list_all_verdicts(strategy=_strat_arg, source=_src_arg)
             if not all_v:
