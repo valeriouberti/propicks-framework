@@ -7,8 +7,12 @@ from propicks.domain.sizing import (
     contrarian_aggregate_exposure,
     contrarian_position_count,
     is_contrarian_position,
+    is_etf_rotation_position,
+    is_thematic_position,
     portfolio_market_value,
     portfolio_value,
+    thematic_parent_aggregate,
+    thematic_position_count,
 )
 
 
@@ -309,3 +313,111 @@ def test_sizing_etf_cap_larger_than_stock_under_pressure():
     assert r_stock["shares"] == 24
     assert r_etf["shares"] == 24
     assert r_etf["max_value"] > r_stock["max_value"]
+
+
+# ---------------------------------------------------------------------------
+# Thematic + ETF rotation bucket helpers
+# ---------------------------------------------------------------------------
+def test_is_thematic_position_via_strategy_tag():
+    assert is_thematic_position({"strategy": "Thematic"}) is True
+    assert is_thematic_position({"strategy": "thematic-cybersec"}) is True
+    assert is_thematic_position({"strategy": "TechTitans"}) is False
+
+
+def test_is_thematic_position_via_ticker_lookup():
+    """Fallback: ticker registrato in THEMATIC_ETFS anche senza tag esplicito."""
+    assert is_thematic_position({"strategy": "Altro"}, ticker="LOCK.MI") is True
+    assert is_thematic_position({"strategy": None}, ticker="SMH") is True
+    assert is_thematic_position({"strategy": None}, ticker="AAPL") is False
+    # XDWT.MI è parent sector, non thematic
+    assert is_thematic_position({"strategy": None}, ticker="XDWT.MI") is False
+
+
+def test_thematic_position_count():
+    pf = {
+        "positions": {
+            "LOCK.MI": {"shares": 10, "entry_price": 10.0, "strategy": "Thematic"},
+            "SMH": {"shares": 1, "entry_price": 100.0, "strategy": "Altro"},  # detected via ticker
+            "AAPL": {"shares": 1, "entry_price": 200.0, "strategy": "TechTitans"},
+        },
+        "cash": 100.0,
+    }
+    assert thematic_position_count(pf) == 2
+
+
+def test_thematic_parent_aggregate_includes_parent_and_themes():
+    """weight(parent_ETF) + weight(theme con stesso parent) sommati."""
+    pf = {
+        "positions": {
+            "XDWT.MI": {"shares": 10, "entry_price": 80.0, "strategy": "ETF_Rotation"},  # 800
+            "LOCK.MI": {"shares": 50, "entry_price": 12.0, "strategy": "Thematic"},  # 600 (parent XDWT.MI)
+            "AAPL": {"shares": 1, "entry_price": 100.0, "strategy": "TechTitans"},  # 100
+        },
+        "cash": 500.0,
+    }
+    # total = 500 + 800 + 600 + 100 = 2000
+    # parent XDWT.MI aggregate = 800 + 600 = 1400 → 0.70
+    agg = thematic_parent_aggregate(pf, "XDWT.MI")
+    assert abs(agg - 0.70) < 1e-9
+
+
+def test_thematic_parent_aggregate_zero_for_no_match():
+    pf = {
+        "positions": {
+            "AAPL": {"shares": 1, "entry_price": 100.0, "strategy": "TechTitans"},
+        },
+        "cash": 900.0,
+    }
+    assert thematic_parent_aggregate(pf, "XDWT.MI") == 0.0
+
+
+def test_is_etf_rotation_position_via_ticker():
+    """Sector ETF non-thematic detected as etf_rotation."""
+    assert is_etf_rotation_position({"strategy": None}, ticker="XLK") is True
+    assert is_etf_rotation_position({"strategy": None}, ticker="XDWT.MI") is True
+    # Thematic listing NON è etf_rotation
+    assert is_etf_rotation_position({"strategy": None}, ticker="LOCK.MI") is False
+    # Stock NON è etf_rotation
+    assert is_etf_rotation_position({"strategy": None}, ticker="AAPL") is False
+
+
+def test_calculate_position_size_thematic_bucket_caps():
+    """Thematic bucket: cap 15% + max 2 enforced."""
+    portfolio = {"cash": 10000.0, "positions": {}}
+    res = calculate_position_size(
+        entry_price=10.0,
+        stop_price=9.0,  # 10% loss = soglia thematic
+        score_claude=8,
+        score_tech=80,
+        portfolio=portfolio,
+        asset_type="THEMATIC_ETF",
+        strategy_bucket="thematic",
+    )
+    assert res["ok"] is True
+    assert res["position_cap_pct"] == 0.15
+    assert res["strategy_bucket"] == "thematic"
+
+
+def test_calculate_position_size_thematic_max_positions_blocks():
+    """3a posizione thematic → bloccata (max 2)."""
+    portfolio = {
+        "cash": 8000.0,
+        "positions": {
+            "LOCK.MI": {"shares": 50, "entry_price": 10.0, "strategy": "Thematic"},
+            "SMH.MI": {"shares": 5, "entry_price": 100.0, "strategy": "Thematic"},
+        },
+    }
+    res = calculate_position_size(
+        entry_price=10.0,
+        stop_price=9.0,
+        score_claude=8,
+        score_tech=80,
+        portfolio=portfolio,
+        asset_type="THEMATIC_ETF",
+        strategy_bucket="thematic",
+    )
+    assert res["ok"] is False
+    assert "thematic pieno" in res["error"].lower()
+
+
+# Add imports for new helpers

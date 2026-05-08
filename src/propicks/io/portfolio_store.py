@@ -30,6 +30,12 @@ from propicks.config import (
     CONTRA_MAX_LOSS_PER_TRADE_PCT,
     CONTRA_MAX_POSITION_SIZE_PCT,
     CONTRA_MAX_POSITIONS,
+    ETF_MAX_POSITION_SIZE_PCT,
+    THEMATIC_ETFS,
+    THEMATIC_MAX_POSITION_SIZE_PCT,
+    THEMATIC_MAX_POSITIONS,
+    THEMATIC_PARENT_AGGREGATE_CAP_PCT,
+    THEMATIC_STOP_LOSS_PCT,
     DATE_FMT,
     EARNINGS_HARD_GATE_DAYS,
     MAX_LOSS_PER_TRADE_PCT,
@@ -43,6 +49,10 @@ from propicks.domain.sizing import (
     contrarian_aggregate_exposure,
     contrarian_position_count,
     is_contrarian_position,
+    is_etf_rotation_position,
+    is_thematic_position,
+    thematic_parent_aggregate,
+    thematic_position_count,
     portfolio_value,
 )
 from propicks.domain.validation import validate_scores
@@ -300,16 +310,39 @@ def add_position(
 
     total = portfolio_value(portfolio)
 
+    # Bucket detection — precedenza: contrarian (tag) > thematic (ticker o tag)
+    # > etf_rotation (ticker o tag) > standard.
     is_contra = isinstance(strategy, str) and strategy.lower().startswith("contra")
+    is_thematic = (not is_contra) and (
+        ticker in THEMATIC_ETFS
+        or (isinstance(strategy, str) and "themat" in strategy.lower())
+    )
+    is_etf_rot = (
+        (not is_contra)
+        and (not is_thematic)
+        and is_etf_rotation_position(
+            {"strategy": strategy}, ticker=ticker
+        )
+    )
+
     if is_contra:
         size_cap_pct = CONTRA_MAX_POSITION_SIZE_PCT
         loss_cap_pct = CONTRA_MAX_LOSS_PER_TRADE_PCT
+        bucket_label = "contrarian"
+    elif is_thematic:
+        size_cap_pct = THEMATIC_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = THEMATIC_STOP_LOSS_PCT
+        bucket_label = "thematic"
+    elif is_etf_rot:
+        size_cap_pct = ETF_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = MAX_LOSS_PER_TRADE_PCT  # ETF stop fisso 5% gestito a portfolio_engine
+        bucket_label = "etf_rotation"
     else:
         size_cap_pct = MAX_POSITION_SIZE_PCT
         loss_cap_pct = MAX_LOSS_PER_TRADE_PCT
+        bucket_label = "standard"
 
     if cost > total * size_cap_pct:
-        bucket_label = "contrarian" if is_contra else "standard"
         raise ValueError(
             f"Size {cost/total*100:.1f}% supera il limite "
             f"{size_cap_pct*100:.0f}% per posizione ({bucket_label})."
@@ -336,6 +369,26 @@ def add_position(
                 f"sopra il cap {CONTRA_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
             )
 
+    if is_thematic:
+        thematic_n = thematic_position_count(portfolio)
+        if thematic_n >= THEMATIC_MAX_POSITIONS:
+            raise ValueError(
+                f"Bucket thematic pieno: {thematic_n}/{THEMATIC_MAX_POSITIONS} "
+                f"posizioni thematic aperte."
+            )
+        # Parent aggregate cap: weight(theme) + weight(parent_ETF) ≤ 25%
+        parent_ticker = THEMATIC_ETFS.get(ticker, {}).get("parent_ticker")
+        if parent_ticker:
+            current_parent_pct = thematic_parent_aggregate(portfolio, parent_ticker)
+            new_parent_pct = current_parent_pct + (cost / total if total > 0 else 0)
+            if new_parent_pct > THEMATIC_PARENT_AGGREGATE_CAP_PCT:
+                raise ValueError(
+                    f"Aggiungere {ticker} porterebbe l'esposizione "
+                    f"theme + parent({parent_ticker}) a "
+                    f"{new_parent_pct*100:.1f}% (da {current_parent_pct*100:.1f}%), "
+                    f"sopra il cap {THEMATIC_PARENT_AGGREGATE_CAP_PCT*100:.0f}%."
+                )
+
     new_cash = cash - cost
     if new_cash < total * MIN_CASH_RESERVE_PCT:
         raise ValueError(
@@ -345,7 +398,6 @@ def add_position(
         )
     risk_pct_trade = (entry_price - stop_loss) / entry_price
     if risk_pct_trade > loss_cap_pct:
-        bucket_label = "contrarian" if is_contra else "standard"
         raise ValueError(
             f"Stop distante {risk_pct_trade*100:.2f}% > limite "
             f"{loss_cap_pct*100:.0f}% per trade ({bucket_label})."

@@ -646,15 +646,19 @@ with tab_size:
         score_claude = cols[3].slider("Score Claude", 0, 10, 7)
         score_tech = cols[4].slider("Score tech", 0, 100, 70)
         asset_override = cols[5].selectbox(
-            "Asset type", options=("auto", "STOCK", "SECTOR_ETF"), index=0
+            "Asset type",
+            options=("auto", "STOCK", "SECTOR_ETF", "THEMATIC_ETF"),
+            index=0,
         )
         bucket_choice = cols[6].selectbox(
             "Bucket",
-            options=("momentum", "contrarian"),
+            options=("momentum", "contrarian", "etf_rotation", "thematic"),
             index=0,
             help=(
-                "Contrarian → cap 8%, loss 12%, max 3 pos, 20% aggregate. "
-                "Override il cap asset-type."
+                "momentum → 15% / 8% loss · "
+                "contrarian → 8% / 12% loss / max 3 pos / 20% aggregate · "
+                "etf_rotation → 20% / 8% loss · "
+                "thematic → 15% / 10% loss / max 2 pos / 25% parent-aggregate cap."
             ),
         )
         submitted = st.form_submit_button("Calcola", type="primary")
@@ -694,7 +698,14 @@ with tab_size:
 # ---------------------------------------------------------------------------
 # Add position
 # ---------------------------------------------------------------------------
-STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Contrarian", "Altro")
+STRATEGIES = (
+    "",
+    "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane",  # momentum
+    "ETF_Rotation",
+    "Contrarian",
+    "Thematic",
+    "Altro",
+)
 
 with tab_add:
     st.caption(

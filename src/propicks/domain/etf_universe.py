@@ -18,6 +18,7 @@ from propicks.config import (
     SECTOR_ETFS_EU,
     SECTOR_ETFS_US,
     SECTOR_ETFS_WORLD,
+    THEMATIC_ETFS,
     AssetType,
 )
 
@@ -25,12 +26,18 @@ Region = Literal["US", "EU", "WORLD", "ALL"]
 
 
 def get_asset_type(ticker: str) -> AssetType:
-    """Classifica il ticker come STOCK o SECTOR_ETF.
+    """Classifica il ticker come STOCK / SECTOR_ETF / THEMATIC_ETF.
+
+    Precedenza: THEMATIC_ETFS prima di SECTOR_ETFS_*. Mai un thematic dovrebbe
+    essere registrato anche come sector parent (validato da test_thematic_universe),
+    ma controllo prima per safety.
 
     Commodity ETF non sono ancora registrati — ritornano ``STOCK`` finché
     non viene aggiunto ``COMMODITY_ETFS`` in config (Fase commodity).
     """
     t = ticker.upper()
+    if t in THEMATIC_ETFS:
+        return "THEMATIC_ETF"
     if t in SECTOR_ETFS_US or t in SECTOR_ETFS_EU or t in SECTOR_ETFS_WORLD:
         return "SECTOR_ETF"
     return "STOCK"

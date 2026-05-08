@@ -56,7 +56,14 @@ tab_list, tab_stats, tab_add, tab_close = st.tabs([
     "Trades", "Stats", "Add trade", "Close trade",
 ])
 
-STRATEGIES_FILTER = ["(tutti)", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Altro"]
+STRATEGIES_FILTER = [
+    "(tutti)",
+    "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane",
+    "ETF_Rotation",
+    "Contrarian",
+    "Thematic",
+    "Altro",
+]
 
 # ---------------------------------------------------------------------------
 # List trades
@@ -192,7 +199,14 @@ with tab_stats:
 # ---------------------------------------------------------------------------
 # Add trade
 # ---------------------------------------------------------------------------
-STRATEGIES = ("", "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane", "ETF_Rotation", "Contrarian", "Altro")
+STRATEGIES = (
+    "",
+    "TechTitans", "DominaDow", "BattiSP500", "MiglioriItaliane",
+    "ETF_Rotation",
+    "Contrarian",
+    "Thematic",
+    "Altro",
+)
 
 with tab_add:
     with st.form("add_trade_form", border=True):

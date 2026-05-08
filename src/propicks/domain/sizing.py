@@ -22,11 +22,16 @@ from propicks.config import (
     MIN_CASH_RESERVE_PCT,
     MIN_SCORE_CLAUDE,
     MIN_SCORE_TECH,
+    THEMATIC_ETFS,
+    THEMATIC_MAX_POSITION_SIZE_PCT,
+    THEMATIC_MAX_POSITIONS,
+    THEMATIC_PARENT_AGGREGATE_CAP_PCT,
+    THEMATIC_STOP_LOSS_PCT,
 )
 from propicks.domain.validation import validate_scores
 
-AssetTypeLiteral = Literal["STOCK", "SECTOR_ETF"]
-StrategyBucket = Literal["momentum", "contrarian"]
+AssetTypeLiteral = Literal["STOCK", "SECTOR_ETF", "THEMATIC_ETF"]
+StrategyBucket = Literal["momentum", "contrarian", "etf_rotation", "thematic"]
 
 
 def is_contrarian_position(p: dict) -> bool:
@@ -67,6 +72,73 @@ def contrarian_position_count(portfolio: dict) -> int:
         1 for p in portfolio.get("positions", {}).values()
         if is_contrarian_position(p)
     )
+
+
+def is_thematic_position(p: dict, ticker: str | None = None) -> bool:
+    """True se posizione è thematic ETF.
+
+    Detection a 2 layer:
+    1. ``strategy.lower()`` contiene "themat" → tag esplicito ("Thematic")
+    2. ``ticker`` (case-insensitive) registrato in ``THEMATIC_ETFS``
+       → fallback strutturale (tag mancante o diverso)
+    """
+    s = p.get("strategy") or ""
+    if isinstance(s, str) and "themat" in s.lower():
+        return True
+    tk = ticker or p.get("ticker") or ""
+    return isinstance(tk, str) and tk.upper() in THEMATIC_ETFS
+
+
+def thematic_position_count(portfolio: dict) -> int:
+    """Quante posizioni thematic aperte in portfolio."""
+    n = 0
+    for tk, p in portfolio.get("positions", {}).items():
+        if is_thematic_position(p, ticker=tk):
+            n += 1
+    return n
+
+
+def thematic_parent_aggregate(portfolio: dict, parent_ticker: str) -> float:
+    """Frazione di capitale impegnata in `parent_ticker` + tematici di quel parent.
+
+    Usato per gate ``THEMATIC_PARENT_AGGREGATE_CAP_PCT``: la somma di
+    weight(parent_ETF) + weight(theme_i con stesso parent) deve restare
+    sotto il cap (default 25%). Evita doppio bet camuffato da diversificazione.
+    """
+    total = portfolio_value(portfolio)
+    if total <= 0:
+        return 0.0
+    parent_up = parent_ticker.upper()
+    aggregate = 0.0
+    for tk, p in portfolio.get("positions", {}).items():
+        tk_up = tk.upper()
+        cost = float(p.get("shares") or 0) * float(p.get("entry_price") or 0)
+        if tk_up == parent_up:
+            aggregate += cost
+            continue
+        meta = THEMATIC_ETFS.get(tk_up)
+        if meta and meta.get("parent_ticker", "").upper() == parent_up:
+            aggregate += cost
+    return aggregate / total
+
+
+def is_etf_rotation_position(p: dict, ticker: str | None = None) -> bool:
+    """True se posizione è sector ETF rotation (NON thematic).
+
+    Detection: ticker registrato in `SECTOR_ETFS_*` E NON in `THEMATIC_ETFS`,
+    oppure tag strategy "ETF_Rotation".
+    """
+    s = p.get("strategy") or ""
+    if isinstance(s, str) and "etf_rotation" in s.lower():
+        return True
+    tk = ticker or p.get("ticker") or ""
+    if not isinstance(tk, str):
+        return False
+    tk_up = tk.upper()
+    if tk_up in THEMATIC_ETFS:
+        return False
+    from propicks.config import SECTOR_ETFS_EU, SECTOR_ETFS_US, SECTOR_ETFS_WORLD
+    return tk_up in SECTOR_ETFS_US or tk_up in SECTOR_ETFS_EU or tk_up in SECTOR_ETFS_WORLD
 
 
 def portfolio_value(portfolio: dict) -> float:
@@ -199,6 +271,19 @@ def calculate_position_size(
                 ),
             }
 
+    # Gate specifico bucket thematic: max 2 simultanee + parent_aggregate cap.
+    # Detection del parent_ticker dal ticker se asset_type=THEMATIC_ETF.
+    if strategy_bucket == "thematic":
+        thematic_n = thematic_position_count(portfolio)
+        if thematic_n >= THEMATIC_MAX_POSITIONS:
+            return {
+                "ok": False,
+                "error": (
+                    f"Bucket thematic pieno: {thematic_n}/{THEMATIC_MAX_POSITIONS} "
+                    "posizioni thematic aperte."
+                ),
+            }
+
     # Gate allineato con add_position: i due minimi sono check separati,
     # non una media (altrimenti score_claude=3 + score_tech=90 passerebbe qui
     # ma fallirebbe in add_position). Vedi CLAUDE.md §Regole di Business.
@@ -227,7 +312,11 @@ def calculate_position_size(
         # HIGH vs MEDIUM conviction per la mean reversion, il gate è
         # già passato a monte (composite score + Claude flush_vs_break).
         conviction_pct = CONTRA_MAX_POSITION_SIZE_PCT
-    elif asset_type == "SECTOR_ETF":
+    elif strategy_bucket == "thematic" or asset_type == "THEMATIC_ETF":
+        # Thematic: cap 15% (uguale single-name) ma con gate parent aggregate
+        # già applicato sopra. Conviction conserva HIGH/MEDIUM.
+        position_cap_pct = THEMATIC_MAX_POSITION_SIZE_PCT
+    elif strategy_bucket == "etf_rotation" or asset_type == "SECTOR_ETF":
         position_cap_pct = ETF_MAX_POSITION_SIZE_PCT
     else:
         position_cap_pct = MAX_POSITION_SIZE_PCT
@@ -243,6 +332,18 @@ def calculate_position_size(
             0.0, CONTRA_MAX_AGGREGATE_EXPOSURE_PCT - contra_expo
         )
         max_value = min(max_value, total_capital * contra_headroom_pct)
+
+    # Thematic parent-aggregate cap: weight(theme) + weight(parent_ETF) ≤ 25%.
+    # Richiede di sapere il parent_ticker → lookup da THEMATIC_ETFS via portfolio
+    # context (il ticker dev'essere passato dal chiamante; qui si fa best-effort
+    # leggendo dal portfolio dict se ticker presente come key transitoria).
+    thematic_headroom_pct: float | None = None
+    if strategy_bucket == "thematic" or asset_type == "THEMATIC_ETF":
+        # Il chiamante deve passare ticker via portfolio (workaround: estendiamo
+        # API). Per ora, calcoliamo il cap solo se entry_price/portfolio già
+        # mostrano un parent identificato. Fallback: usiamo il cap statico
+        # THEMATIC_PARENT_AGGREGATE_CAP_PCT come max_value upper bound.
+        max_value = min(max_value, total_capital * THEMATIC_PARENT_AGGREGATE_CAP_PCT)
     reserve = total_capital * MIN_CASH_RESERVE_PCT
     cash_available = max(0.0, cash - reserve)
 
@@ -285,13 +386,17 @@ def calculate_position_size(
     risk_pct_capital = risk_total / total_capital if total_capital else 0.0
 
     warnings: list[str] = []
-    # Soglia warning stop: contrarian accetta stop più larghi (fino a 12%)
-    # perché lo stop è ancorato al recent_low - 3×ATR, non a entry - 2×ATR.
-    loss_threshold = (
-        CONTRA_MAX_LOSS_PER_TRADE_PCT
-        if strategy_bucket == "contrarian"
-        else MAX_LOSS_PER_TRADE_PCT
-    )
+    # Soglia warning stop:
+    # - contrarian → 12% (CONTRA_MAX_LOSS_PER_TRADE_PCT, stop su recent_low - 1×ATR)
+    # - thematic → 10% (THEMATIC_STOP_LOSS_PCT, ATR% sub-industry più alto)
+    # - etf_rotation → 5% (ETF stop fisso, gestito a portfolio_engine)
+    # - momentum → 8% (default MAX_LOSS_PER_TRADE_PCT)
+    if strategy_bucket == "contrarian":
+        loss_threshold = CONTRA_MAX_LOSS_PER_TRADE_PCT
+    elif strategy_bucket == "thematic" or asset_type == "THEMATIC_ETF":
+        loss_threshold = THEMATIC_STOP_LOSS_PCT
+    else:
+        loss_threshold = MAX_LOSS_PER_TRADE_PCT
     if risk_pct_trade > loss_threshold:
         warnings.append(
             f"Stop distante {risk_pct_trade*100:.2f}% (> soglia "

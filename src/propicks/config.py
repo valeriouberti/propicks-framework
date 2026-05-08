@@ -27,7 +27,7 @@ except ImportError:
 # Il framework supporta strategie parallele su stock e ETF settoriali. Il tipo
 # viene derivato dal ticker via ``domain.etf_universe.get_asset_type`` e pilota
 # lo scoring engine (stock = tesi aziendale, ETF settoriale = regime + RS).
-AssetType = Literal["STOCK", "SECTOR_ETF", "COMMODITY_ETF"]
+AssetType = Literal["STOCK", "SECTOR_ETF", "THEMATIC_ETF", "COMMODITY_ETF"]
 
 SectorKey = Literal[
     "technology",
