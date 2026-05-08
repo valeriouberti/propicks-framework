@@ -14,13 +14,12 @@ from __future__ import annotations
 from typing import Literal
 
 from propicks.config import (
-    SECTOR_ETFS_EU,
     SECTOR_ETFS_US,
     SECTOR_ETFS_WORLD,
     THEMATIC_ETFS,
 )
 
-ThemeRegion = Literal["US", "EU", "WORLD", "ALL"]
+ThemeRegion = Literal["US", "WORLD", "ALL"]
 
 
 def is_thematic(ticker: str) -> bool:
@@ -107,8 +106,4 @@ def parent_exists_in_universe(ticker: str) -> bool:
     parent = get_parent_ticker(ticker)
     if parent is None:
         return False
-    return (
-        parent in SECTOR_ETFS_US
-        or parent in SECTOR_ETFS_EU
-        or parent in SECTOR_ETFS_WORLD
-    )
+    return parent in SECTOR_ETFS_US or parent in SECTOR_ETFS_WORLD

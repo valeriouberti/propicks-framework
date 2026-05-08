@@ -51,12 +51,13 @@ with st.form("thematic_form", border=True):
     )
     region = col2.radio(
         "Region (filtro listing tematico)",
-        options=("ALL", "US", "WORLD"),
+        options=("ALL", "WORLD", "US"),
         horizontal=True,
         help=(
-            "US: SPDR-parent listing (SMH/XBI/CIBR/...) · "
             "WORLD: Borsa Italiana .MI con parent Xtrackers MSCI World "
-            "(LOCK.MI/SMH.MI/XAIX.MI/...) · ALL: unione."
+            "(LOCK.MI/SMH.MI/XAIX.MI/...) — operativo retail EU. "
+            "US: SPDR-parent listing (SMH/XBI/CIBR/...) — reference. "
+            "ALL: unione US + WORLD."
         ),
     )
 

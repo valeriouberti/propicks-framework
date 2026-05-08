@@ -63,7 +63,7 @@ from propicks.market.yfinance_client import (
     download_weekly_history,
 )
 
-Region = Literal["US", "EU", "WORLD", "ALL"]
+Region = Literal["US", "WORLD", "ALL"]
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +433,7 @@ def analyze_etf(
 
 
 def rank_universe(
-    region: Region = "US",
+    region: Region = "WORLD",
     regime_code: int | None = None,
     benchmark_weekly: pd.Series | None = None,
 ) -> list[dict]:

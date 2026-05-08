@@ -163,139 +163,67 @@ STRATEGIES = (
 
 
 # ---------------------------------------------------------------------------
-# UNIVERSO ETF SETTORIALI (US SPDR + UCITS wrapper su stesso indice)
+# UNIVERSO ETF SETTORIALI (US SPDR + WORLD Xtrackers + .MI listings)
 # ---------------------------------------------------------------------------
 # Strategia parallela a quella single-stock: quando il ticker è qui dentro,
 # lo scoring usa RS vs benchmark + regime fit invece della tesi aziendale.
 #
 # US: Select Sector SPDR (11 settori GICS) — replicano i Select Sector
-# indices di S&P.
+# indices di S&P. Mantenuti come reference: storia yfinance più lunga
+# (2007+) per backtest, parent universo dei thematic US (SMH/XBI/CIBR/
+# IBB/ROBO/ICLN/XAR/ITA/KWEB).
 #
-# EU: SPDR S&P U.S. Select Sector UCITS (tickers ZPD*.DE su Xetra). Tracciano
-# lo STESSO Select Sector Index dei SPDR US — esposizione identica, solo
-# wrapper UCITS domiciliato in Irlanda, accumulating (ISIN IE00B*). La tesi
-# di rotazione è unica: se XLK è favorito, anche ZPDT.DE lo è. Il trader
-# sceglie il listing in base a fiscalità (UCITS = no W8-BEN, tax drag minore
-# su dividendi tramite accumulo) e liquidità del proprio broker.
+# WORLD: Xtrackers MSCI World Sector UCITS (.DE Xetra + .MI Borsa Italiana).
+# Universe operativo per trader retail EU. Vedi SECTOR_ETFS_WORLD sotto.
 #
-# XLRE non ha un SPDR US Real Estate Select Sector UCITS equivalente. Campo
-# ``eu_equivalent`` lasciato None — se serve esposizione REIT US in formato
-# UCITS, valutare alternative esterne all'universo (es. IUSP.L iShares US
-# Property Yield, che però traccia un indice diverso).
-#
-# IMPORTANTE: verificare ticker e ISIN sul proprio broker prima dell'uso.
-# Distribuzione: varianti distributing/UCITS su LSE (SXR*, SXLK etc) esistono
-# ma hanno ticker e tax treatment diversi — qui non registrate.
+# Wrapper UCITS EU dei Select Sector SPDR (ZPD*.DE) — RIMOSSI: erano duplicati
+# zero-info dell'universo US (stesso Select Sector Index, solo wrapper IE).
+# Il trader EU usa direttamente i listing .MI nel blocco WORLD.
 
 SECTOR_ETFS_US: dict[str, dict] = {
     "XLK": {
         "name": "Technology Select Sector SPDR",
         "sector_key": "technology",
-        "eu_equivalent": "ZPDT.DE",
     },
     "XLF": {
         "name": "Financial Select Sector SPDR",
         "sector_key": "financials",
-        "eu_equivalent": "ZPDF.DE",
     },
     "XLE": {
         "name": "Energy Select Sector SPDR",
         "sector_key": "energy",
-        "eu_equivalent": "ZPDE.DE",
     },
     "XLV": {
         "name": "Health Care Select Sector SPDR",
         "sector_key": "healthcare",
-        "eu_equivalent": "ZPDH.DE",
     },
     "XLI": {
         "name": "Industrial Select Sector SPDR",
         "sector_key": "industrials",
-        "eu_equivalent": "ZPDI.DE",
     },
     "XLY": {
         "name": "Consumer Discretionary Select Sector SPDR",
         "sector_key": "consumer_discretionary",
-        "eu_equivalent": "ZPDD.DE",
     },
     "XLP": {
         "name": "Consumer Staples Select Sector SPDR",
         "sector_key": "consumer_staples",
-        "eu_equivalent": "ZPDS.DE",
     },
     "XLU": {
         "name": "Utilities Select Sector SPDR",
         "sector_key": "utilities",
-        "eu_equivalent": "ZPDU.DE",
     },
     "XLRE": {
         "name": "Real Estate Select Sector SPDR",
         "sector_key": "real_estate",
-        "eu_equivalent": None,
-        "eu_equivalent_note": "Nessun SPDR US Real Estate Select Sector UCITS — alternativa esterna: IUSP.L (iShares US Property Yield, indice diverso)",
     },
     "XLB": {
         "name": "Materials Select Sector SPDR",
         "sector_key": "materials",
-        "eu_equivalent": "ZPDM.DE",
     },
     "XLC": {
         "name": "Communication Services Select Sector SPDR",
         "sector_key": "communications",
-        "eu_equivalent": "ZPDX.DE",
-    },
-}
-
-SECTOR_ETFS_EU: dict[str, dict] = {
-    "ZPDT.DE": {
-        "name": "SPDR S&P U.S. Technology Select Sector UCITS",
-        "sector_key": "technology",
-        "us_equivalent": "XLK",
-    },
-    "ZPDF.DE": {
-        "name": "SPDR S&P U.S. Financials Select Sector UCITS",
-        "sector_key": "financials",
-        "us_equivalent": "XLF",
-    },
-    "ZPDE.DE": {
-        "name": "SPDR S&P U.S. Energy Select Sector UCITS",
-        "sector_key": "energy",
-        "us_equivalent": "XLE",
-    },
-    "ZPDH.DE": {
-        "name": "SPDR S&P U.S. Health Care Select Sector UCITS",
-        "sector_key": "healthcare",
-        "us_equivalent": "XLV",
-    },
-    "ZPDI.DE": {
-        "name": "SPDR S&P U.S. Industrials Select Sector UCITS",
-        "sector_key": "industrials",
-        "us_equivalent": "XLI",
-    },
-    "ZPDD.DE": {
-        "name": "SPDR S&P U.S. Consumer Discretionary Select Sector UCITS",
-        "sector_key": "consumer_discretionary",
-        "us_equivalent": "XLY",
-    },
-    "ZPDS.DE": {
-        "name": "SPDR S&P U.S. Consumer Staples Select Sector UCITS",
-        "sector_key": "consumer_staples",
-        "us_equivalent": "XLP",
-    },
-    "ZPDU.DE": {
-        "name": "SPDR S&P U.S. Utilities Select Sector UCITS",
-        "sector_key": "utilities",
-        "us_equivalent": "XLU",
-    },
-    "ZPDM.DE": {
-        "name": "SPDR S&P U.S. Materials Select Sector UCITS",
-        "sector_key": "materials",
-        "us_equivalent": "XLB",
-    },
-    "ZPDX.DE": {
-        "name": "SPDR S&P U.S. Communication Services Select Sector UCITS",
-        "sector_key": "communications",
-        "us_equivalent": "XLC",
     },
 }
 
@@ -759,9 +687,8 @@ ETF_BENCHMARK_WORLD: str = "URTH"
 
 _ETF_BENCHMARK_BY_REGION: dict[str, str] = {
     "US": ETF_BENCHMARK,
-    "EU": ETF_BENCHMARK,  # UCITS SPDR tracciano stesso Select Sector Index
     "WORLD": ETF_BENCHMARK_WORLD,
-    "ALL": ETF_BENCHMARK,  # mixing → default US-centric (edge case, evitare)
+    "ALL": ETF_BENCHMARK_WORLD,  # default WORLD-centric (operational reality)
 }
 
 

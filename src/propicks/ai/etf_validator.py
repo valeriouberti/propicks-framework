@@ -119,7 +119,7 @@ def validate_rotation(
     Args:
         ranked: output di ``domain.etf_scoring.rank_universe``, ordinato.
         allocation: output di ``suggest_allocation`` (opzionale ma consigliato).
-        region: "US" | "EU" | "WORLD" | "ALL" — va in prompt per context.
+        region: "US" | "WORLD" | "ALL" — va in prompt per context.
         force: ignora cache + skip in STRONG_BEAR.
         skip_in_strong_bear: in regime 1 la risposta è ovvia (flat). Default
             skippa per non spendere. ``force=True`` o questo flag = False

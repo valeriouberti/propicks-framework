@@ -192,9 +192,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--region",
-        choices=("US", "EU", "WORLD", "ALL"),
+        choices=("US", "WORLD", "ALL"),
         default="ALL",
-        help="Filtra per region del listing tematico (default ALL).",
+        help="Filtra per region del listing tematico (default ALL = US + WORLD).",
     )
     parser.add_argument(
         "--theme",

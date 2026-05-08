@@ -332,3 +332,81 @@ def test_explicit_max_days_flat_overrides_bucket_default():
     )
     # 16gg < 20 → no trigger
     assert result["time_stop_triggered"] is False
+
+
+# ---------------------------------------------------------------------------
+# Bucket-aware time stop (contrarian → 15gg, momentum → 30gg default)
+# ---------------------------------------------------------------------------
+def test_contrarian_uses_15d_default_time_stop():
+    """Posizione contrarian: time_stop scatta a 15gg (CONTRA_TIME_STOP_DAYS)."""
+    from datetime import date, timedelta
+
+    from propicks.domain.trade_mgmt import suggest_stop_update
+
+    # Trade aperto 16gg fa, flat (entry = current). Default 30gg sarebbe NO,
+    # ma contrarian → 15gg → SI.
+    entry_date = (date.today() - timedelta(days=16)).isoformat()
+    pos = {
+        "ticker": "AAPL",
+        "entry_price": 100.0,
+        "stop_loss": 95.0,
+        "entry_date": entry_date,
+        "strategy": "Contrarian",
+        "trailing_enabled": False,
+    }
+    out = suggest_stop_update(
+        position=pos,
+        current_price=100.5,  # +0.5% flat
+        current_atr=2.0,
+    )
+    assert out["time_stop_triggered"] is True
+    # Rationale should mention 15 days
+    assert any("15" in r for r in out["rationale"])
+
+
+def test_momentum_default_30d_time_stop_not_triggered_at_16d():
+    """Momentum a 16gg flat: NON scatta (default 30gg)."""
+    from datetime import date, timedelta
+
+    from propicks.domain.trade_mgmt import suggest_stop_update
+
+    entry_date = (date.today() - timedelta(days=16)).isoformat()
+    pos = {
+        "ticker": "AAPL",
+        "entry_price": 100.0,
+        "stop_loss": 95.0,
+        "entry_date": entry_date,
+        "strategy": "TechTitans",
+        "trailing_enabled": False,
+    }
+    out = suggest_stop_update(
+        position=pos,
+        current_price=100.5,
+        current_atr=2.0,
+    )
+    assert out["time_stop_triggered"] is False
+
+
+def test_explicit_max_days_flat_overrides_contrarian_default():
+    """Caller passa max_days_flat=20 → override del 15gg contrarian default."""
+    from datetime import date, timedelta
+
+    from propicks.domain.trade_mgmt import suggest_stop_update
+
+    entry_date = (date.today() - timedelta(days=16)).isoformat()
+    pos = {
+        "ticker": "AAPL",
+        "entry_price": 100.0,
+        "stop_loss": 95.0,
+        "entry_date": entry_date,
+        "strategy": "Contrarian",
+        "trailing_enabled": False,
+    }
+    # max_days_flat=20 esplicito → 16gg < 20gg → no time stop
+    out = suggest_stop_update(
+        position=pos,
+        current_price=100.5,
+        current_atr=2.0,
+        max_days_flat=20,
+    )
+    assert out["time_stop_triggered"] is False

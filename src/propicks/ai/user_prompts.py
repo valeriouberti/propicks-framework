@@ -734,8 +734,7 @@ def perplexity_etf_rotation(
 
     region_label = {
         "US": "US (SPDR Select Sector — XL*)",
-        "EU": "EU (SPDR UCITS on Xetra — ZPD*.DE, identical Select Sector index)",
-        "WORLD": "WORLD (Xtrackers MSCI World — XDW*/XWTS — plus IQQ6.DE as Real Estate proxy)",
+        "WORLD": "WORLD (Xtrackers MSCI World — XDW*/XWTS .DE + .MI Borsa Italiana — plus IQQ6 Real Estate proxy)",
         "ALL": "mixed US + WORLD",
     }.get(region.upper(), region)
 

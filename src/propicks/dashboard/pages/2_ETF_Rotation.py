@@ -37,13 +37,14 @@ with st.form("rotate_form", border=True):
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     region = col1.radio(
         "Region",
-        options=("US", "EU", "WORLD", "ALL"),
+        options=("WORLD", "US", "ALL"),
         horizontal=True,
+        index=0,
         help=(
-            "US: SPDR Select Sector (XL*) · "
-            "EU: SPDR UCITS (ZPD*.DE) · "
-            "WORLD: Xtrackers MSCI World (XDW*/XWTS/XZRE) · "
-            "ALL: unione — ranking misto, rumoroso"
+            "WORLD (default): Xtrackers MSCI World (XDW*/XWTS .DE + .MI Borsa "
+            "Italiana + IQQ6 Real Estate proxy) — operativo retail EU. "
+            "US: SPDR Select Sector (XL*) — reference, lunga storia. "
+            "ALL: unione (sconsigliato, benchmark non uniforme)."
         ),
     )
     top_n = col2.slider("Top N", min_value=1, max_value=11, value=3)

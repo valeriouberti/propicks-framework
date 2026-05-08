@@ -137,8 +137,8 @@ def is_etf_rotation_position(p: dict, ticker: str | None = None) -> bool:
     tk_up = tk.upper()
     if tk_up in THEMATIC_ETFS:
         return False
-    from propicks.config import SECTOR_ETFS_EU, SECTOR_ETFS_US, SECTOR_ETFS_WORLD
-    return tk_up in SECTOR_ETFS_US or tk_up in SECTOR_ETFS_EU or tk_up in SECTOR_ETFS_WORLD
+    from propicks.config import SECTOR_ETFS_US, SECTOR_ETFS_WORLD
+    return tk_up in SECTOR_ETFS_US or tk_up in SECTOR_ETFS_WORLD
 
 
 def portfolio_value(portfolio: dict) -> float:

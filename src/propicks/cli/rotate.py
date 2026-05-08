@@ -197,12 +197,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--region",
-        choices=("US", "EU", "WORLD", "ALL"),
-        default="US",
+        choices=("US", "WORLD", "ALL"),
+        default="WORLD",
         help=(
-            "Universo: SPDR US (XL*), SPDR UCITS (ZPD*.DE), "
-            "Xtrackers MSCI World 10 settori (XDW*/XWTS) + IQQ6.DE come "
-            "proxy Real Estate (no Xtrackers RE world esistente), o ALL."
+            "Universo: WORLD (default, Xtrackers MSCI World .DE/.MI + IQQ6 "
+            "Real Estate proxy) — operativo retail EU. US (SPDR XL*) — "
+            "reference, lunga storia. ALL = mix, sconsigliato (benchmark RS "
+            "non uniforme)."
         ),
     )
     parser.add_argument(
