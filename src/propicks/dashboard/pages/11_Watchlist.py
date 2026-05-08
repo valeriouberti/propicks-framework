@@ -19,6 +19,7 @@ from propicks.dashboard._shared import (
     page_header,
     score_badge,
 )
+from propicks.domain.etf_universe import get_asset_type
 from propicks.io.watchlist_store import (
     add_to_watchlist,
     is_stale,
@@ -26,6 +27,11 @@ from propicks.io.watchlist_store import (
     remove_from_watchlist,
     update_watchlist_entry,
 )
+
+
+def _bucket(ticker: str) -> str:
+    """Return 'stock' or 'etf' (rotation + thematic merged)."""
+    return "etf" if get_asset_type(ticker) in ("SECTOR_ETF", "THEMATIC_ETF") else "stock"
 
 st.set_page_config(page_title="Watchlist · Propicks", layout="wide")
 page_header(
@@ -59,12 +65,15 @@ tickers = wl.get("tickers", {})
 n_total = len(tickers)
 n_auto = sum(1 for e in tickers.values() if e.get("source") == "auto_scan")
 n_stale = sum(1 for e in tickers.values() if is_stale(e, days=STALE_DAYS))
+n_stock = sum(1 for t in tickers if _bucket(t) == "stock")
+n_etf = n_total - n_stock
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("In watchlist", n_total)
-col2.metric("Auto (scanner B)", n_auto)
-col3.metric("Manuali", n_total - n_auto)
-col4.metric(f"Stale (>{STALE_DAYS}gg)", n_stale)
+col2.metric("📊 Stock", n_stock, help="Single-name (momentum + contrarian)")
+col3.metric("📈 ETF", n_etf, help="Sector rotation + thematic")
+col4.metric("Auto (scanner B)", n_auto)
+col5.metric(f"Stale (>{STALE_DAYS}gg)", n_stale)
 
 st.divider()
 
@@ -84,13 +93,15 @@ with tab_attiva:
         if refresh:
             cached_analyze.clear()  # type: ignore[attr-defined]
 
-        rows = []
+        rows_stock: list[dict] = []
+        rows_etf: list[dict] = []
         ready = []
         with st.spinner(f"Scanning {len(tickers)} ticker…"):
             for t, e in sorted(tickers.items()):
+                bucket = _bucket(t)
                 r = cached_analyze(t, None)
                 if r is None:
-                    rows.append({
+                    row = {
                         "Ticker": t,
                         "Price": "—",
                         "Target": f"{e['target_entry']:.2f}" if e.get("target_entry") else "—",
@@ -102,39 +113,55 @@ with tab_attiva:
                         "Added": e.get("added_date") or "—",
                         "Source": e.get("source") or "manual",
                         "Note": e.get("note") or "",
-                    })
-                    continue
-                price = r["price"]
-                score = r["score_composite"]
-                classification = r["classification"].split(" — ")[0]
-                regime = (r.get("regime") or {}).get("regime", "N/D")
-                target = e.get("target_entry")
-                if target:
-                    dist = (price - target) / target
-                    dist_str = f"{dist * 100:+.2f}%"
-                    is_ready = score >= READY_SCORE_MIN and abs(dist) <= READY_DISTANCE_PCT
+                    }
                 else:
-                    dist_str = "—"
-                    is_ready = False
-                if is_ready:
-                    ready.append(t)
-                rows.append({
-                    "Ticker": t,
-                    "Price": f"{price:.2f}",
-                    "Target": f"{target:.2f}" if target else "—",
-                    "Dist%": dist_str,
-                    "Score": f"{score:.1f}",
-                    "Class": classification,
-                    "Regime": regime,
-                    "Flag": "READY ✓" if is_ready else "",
-                    "Added": e.get("added_date") or "—",
-                    "Source": e.get("source") or "manual",
-                    "Note": (e.get("note") or "")[:60],
-                })
-        st.dataframe(rows, width="stretch", hide_index=True)
+                    price = r["price"]
+                    score = r["score_composite"]
+                    classification = r["classification"].split(" — ")[0]
+                    regime = (r.get("regime") or {}).get("regime", "N/D")
+                    target = e.get("target_entry")
+                    if target:
+                        dist = (price - target) / target
+                        dist_str = f"{dist * 100:+.2f}%"
+                        is_ready = score >= READY_SCORE_MIN and abs(dist) <= READY_DISTANCE_PCT
+                    else:
+                        dist_str = "—"
+                        is_ready = False
+                    if is_ready:
+                        ready.append(t)
+                    row = {
+                        "Ticker": t,
+                        "Price": f"{price:.2f}",
+                        "Target": f"{target:.2f}" if target else "—",
+                        "Dist%": dist_str,
+                        "Score": f"{score:.1f}",
+                        "Class": classification,
+                        "Regime": regime,
+                        "Flag": "READY ✓" if is_ready else "",
+                        "Added": e.get("added_date") or "—",
+                        "Source": e.get("source") or "manual",
+                        "Note": (e.get("note") or "")[:60],
+                    }
+                if bucket == "stock":
+                    rows_stock.append(row)
+                else:
+                    rows_etf.append(row)
+
+        st.markdown(f"#### 📊 Stock — {len(rows_stock)} entry")
+        if rows_stock:
+            st.dataframe(rows_stock, width="stretch", hide_index=True)
+        else:
+            st.caption("_Nessuno stock in watchlist._")
+
+        st.markdown(f"#### 📈 ETF (sector rotation + thematic) — {len(rows_etf)} entry")
+        if rows_etf:
+            st.dataframe(rows_etf, width="stretch", hide_index=True)
+        else:
+            st.caption("_Nessun ETF in watchlist._")
+
         st.caption(
             f"**READY** = score ≥{READY_SCORE_MIN} + entro {READY_DISTANCE_PCT * 100:.0f}% dal target. "
-            "Prossimo step: vai su Momentum per re-analisi completa, poi Portfolio → Size."
+            "Prossimo step: vai su Momentum/Thematic per re-analisi, poi Portfolio → Size."
         )
 
         if ready:
@@ -230,9 +257,10 @@ with tab_stale:
             f"Entry in watchlist da più di **{STALE_DAYS} giorni**. "
             "Probabilmente il setup non si è materializzato — valuta rimozione."
         )
-        rows = []
+        stale_stock: list[dict] = []
+        stale_etf: list[dict] = []
         for t, e in sorted(stale_entries, key=lambda x: x[1].get("added_date") or ""):
-            rows.append({
+            row = {
                 "Ticker": t,
                 "Added": e.get("added_date") or "—",
                 "Age (gg)": _days_since(e.get("added_date")) or "—",
@@ -241,8 +269,23 @@ with tab_stale:
                 "Regime@add": e.get("regime_at_add") or "—",
                 "Source": e.get("source") or "manual",
                 "Note": (e.get("note") or "")[:60],
-            })
-        st.dataframe(rows, width="stretch", hide_index=True)
+            }
+            if _bucket(t) == "stock":
+                stale_stock.append(row)
+            else:
+                stale_etf.append(row)
+
+        st.markdown(f"#### 📊 Stock stale — {len(stale_stock)} entry")
+        if stale_stock:
+            st.dataframe(stale_stock, width="stretch", hide_index=True)
+        else:
+            st.caption("_Nessuno stock stale._")
+
+        st.markdown(f"#### 📈 ETF stale — {len(stale_etf)} entry")
+        if stale_etf:
+            st.dataframe(stale_etf, width="stretch", hide_index=True)
+        else:
+            st.caption("_Nessun ETF stale._")
 
         st.divider()
         to_purge = st.multiselect(

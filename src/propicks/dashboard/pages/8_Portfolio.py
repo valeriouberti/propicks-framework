@@ -28,7 +28,7 @@ from propicks.dashboard._shared import (
     page_header,
     render_indicator_legend,
 )
-from propicks.domain.etf_universe import get_asset_type
+from propicks.domain.etf_universe import get_asset_type, resolve_sector_key
 from propicks.domain.exposure import (
     compute_beta_weighted_exposure,
     compute_concentration_warnings,
@@ -227,8 +227,11 @@ with tab_risk:
             st.write("Fetch beta vs SPX")
             betas = cached_ticker_betas(tuple(tickers))
             _exp_status.update(label="Esposizione pronta", state="complete")
+        # Risoluzione sector con priorità config-first (sector ETF + thematic
+        # da SECTOR_ETFS_*/THEMATIC_ETFS), fallback Yahoo per stock single-name.
         sector_key_map = {
-            t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_yf.items()
+            t: resolve_sector_key(t, yahoo_sector_raw=s)
+            for t, s in sector_yf.items()
         }
         # Esposizione: denominatore mark-to-market per match coi numeratori
         # (shares × current_price). Il `total` cost-basis resta corretto per

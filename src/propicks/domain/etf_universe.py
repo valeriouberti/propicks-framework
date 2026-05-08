@@ -62,6 +62,56 @@ def get_etf_info(ticker: str) -> dict | None:
     return None
 
 
+def resolve_sector_key(
+    ticker: str,
+    yahoo_sector_raw: str | None = None,
+) -> str | None:
+    """Risolve il ``sector_key`` GICS-normalizzato del ticker con priorità.
+
+    Order of resolution (config-first, Yahoo fallback):
+
+    1. **Thematic ETF** registrato in ``THEMATIC_ETFS``: eredita
+       ``parent_sector_key`` dal parent. Coerente col regime fit lookup
+       (tematico LOCK.MI → tech come parent XDWT.MI).
+    2. **Sector ETF** registrato in ``SECTOR_ETFS_US/WORLD``: usa
+       ``sector_key`` autoritativo dal config (es. XLK → technology).
+    3. **Stock** o ticker non registrato: usa il mapping Yahoo
+       (``yahoo_sector_raw`` passato dal chiamante via ``get_ticker_sector``)
+       attraverso ``YF_SECTOR_TO_KEY``.
+
+    Args:
+        ticker: ticker (case-insensitive).
+        yahoo_sector_raw: stringa sector raw da yfinance (es. "Technology",
+            "Financial Services", "Consumer Cyclical"). Passare None se non
+            disponibile — il resolver usa solo i lookup config.
+
+    Returns:
+        ``sector_key`` GICS-normalizzato, o None se non risolvibile.
+
+    Razionale: Yahoo restituisce "Financial Services" per ETF UCITS
+    (mismatch con tassonomia interna "financials") e null per molti
+    thematic .MI. La risoluzione config-first garantisce coerenza
+    con ``REGIME_FAVORED_SECTORS`` e gli scoring engine.
+    """
+    t = ticker.upper()
+
+    # 1. Thematic — eredita dal parent
+    if t in THEMATIC_ETFS:
+        return THEMATIC_ETFS[t].get("parent_sector_key")
+
+    # 2. Sector ETF — sector_key da config
+    if t in SECTOR_ETFS_US:
+        return SECTOR_ETFS_US[t]["sector_key"]
+    if t in SECTOR_ETFS_WORLD:
+        return SECTOR_ETFS_WORLD[t]["sector_key"]
+
+    # 3. Stock — Yahoo mapping (chiamante deve aver fetchato yahoo_sector_raw)
+    if yahoo_sector_raw is None:
+        return None
+    from propicks.domain.stock_rs import YF_SECTOR_TO_KEY
+    return YF_SECTOR_TO_KEY.get(yahoo_sector_raw)
+
+
 def favored_sectors_for_regime(regime_code: int) -> tuple[str, ...]:
     """Lista dei ``sector_key`` favoriti per il regime weekly dato.
 

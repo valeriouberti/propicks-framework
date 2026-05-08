@@ -189,9 +189,14 @@ def _show_exposure(portfolio: dict, positions: dict) -> None:
 
     prices = get_current_prices(tickers)
     total_capital = portfolio_market_value(portfolio, prices)
+    # Sector resolver: config-first (SECTOR_ETFS_*/THEMATIC_ETFS) per ETF,
+    # fallback Yahoo via YF_SECTOR_TO_KEY per stock. Yahoo non ritorna sector
+    # GICS coerente per UCITS — la priorità config evita "Financial Services"
+    # generici e null su tematici .MI.
+    from propicks.domain.etf_universe import resolve_sector_key
     sector_map = {t: get_ticker_sector(t) for t in tickers}
     sector_key_map = {
-        t: (YF_SECTOR_TO_KEY.get(s) if s else None) for t, s in sector_map.items()
+        t: resolve_sector_key(t, yahoo_sector_raw=s) for t, s in sector_map.items()
     }
     sector_exp = compute_sector_exposure(positions, prices, sector_key_map, total_capital)
 

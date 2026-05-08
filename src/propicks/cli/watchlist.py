@@ -82,6 +82,16 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ticker_bucket(ticker: str) -> str:
+    """Classifica ticker watchlist come 'stock' o 'etf'.
+
+    ETF = SECTOR_ETF (rotation) o THEMATIC_ETF. Stock = tutto il resto.
+    """
+    from propicks.domain.etf_universe import get_asset_type
+    at = get_asset_type(ticker)
+    return "etf" if at in ("SECTOR_ETF", "THEMATIC_ETF") else "stock"
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     wl = load_watchlist()
     tickers = wl.get("tickers", {})
@@ -89,12 +99,18 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("Watchlist vuota.")
         return 0
 
-    rows = []
+    bucket_filter = (args.bucket or "all").lower()
+
+    rows_stock = []
+    rows_etf = []
     for t, e in tickers.items():
         if args.stale and not is_stale(e, days=STALE_DAYS):
             continue
+        bucket = _ticker_bucket(t)
+        if bucket_filter != "all" and bucket != bucket_filter:
+            continue
         age = _days_since(e.get("added_date"))
-        rows.append([
+        row = [
             t,
             e.get("added_date") or "-",
             f"{age}gg" if age is not None else "-",
@@ -104,19 +120,39 @@ def cmd_list(args: argparse.Namespace) -> int:
             e.get("regime_at_add") or "-",
             e.get("source") or "manual",
             (e.get("note") or "")[:50],
-        ])
+        ]
+        if bucket == "stock":
+            rows_stock.append(row)
+        else:
+            rows_etf.append(row)
 
-    if not rows:
-        label = "stale" if args.stale else ""
-        print(f"Nessuna entry {label}in watchlist.")
+    if not rows_stock and not rows_etf:
+        label = "stale " if args.stale else ""
+        bf_label = f" bucket={bucket_filter}" if bucket_filter != "all" else ""
+        print(f"Nessuna entry {label}in watchlist{bf_label}.")
         return 0
 
-    print(tabulate(
-        rows,
-        headers=["Ticker", "Added", "Age", "Target", "Class@add", "Score@add", "Regime@add", "Source", "Note"],
-        tablefmt="github",
-    ))
-    print(f"\n{len(rows)} entry{'  (stale)' if args.stale else ''}.")
+    headers = ["Ticker", "Added", "Age", "Target", "Class@add", "Score@add", "Regime@add", "Source", "Note"]
+
+    if rows_stock and bucket_filter in ("all", "stock"):
+        print()
+        print(f"📊 STOCK bucket — {len(rows_stock)} entry")
+        print("=" * 70)
+        print(tabulate(sorted(rows_stock), headers=headers, tablefmt="github"))
+
+    if rows_etf and bucket_filter in ("all", "etf"):
+        print()
+        print(f"📈 ETF bucket (rotation + thematic) — {len(rows_etf)} entry")
+        print("=" * 70)
+        print(tabulate(sorted(rows_etf), headers=headers, tablefmt="github"))
+
+    print()
+    total = len(rows_stock) + len(rows_etf)
+    print(
+        f"Totale: {total} entry"
+        f"{'  (stale)' if args.stale else ''}"
+        f" — Stock: {len(rows_stock)} · ETF: {len(rows_etf)}"
+    )
     return 0
 
 
@@ -128,9 +164,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("Watchlist vuota.")
         return 0
 
+    bucket_filter = (args.bucket or "all").lower()
+
     rows = []
     ready_tickers = []
     for t, e in tickers.items():
+        if bucket_filter != "all" and _ticker_bucket(t) != bucket_filter:
+            continue
         r = analyze_ticker(t, strategy=None)
         if r is None:
             rows.append([t, "-", "-", "-", "-", "-", "-", "skip (no data)"])
@@ -152,6 +192,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         regime = r.get("regime") or {}
         rows.append([
             t,
+            _ticker_bucket(t),
             f"{price:.2f}",
             f"{target:.2f}" if target else "-",
             dist_str,
@@ -161,9 +202,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             flag,
         ])
 
+    rows.sort(key=lambda r: (r[1], r[0]))  # bucket then ticker
     print(tabulate(
         rows,
-        headers=["Ticker", "Price", "Target", "Dist%", "Score", "Class", "Regime", "Flag"],
+        headers=["Ticker", "Bucket", "Price", "Target", "Dist%", "Score", "Class", "Regime", "Flag"],
         tablefmt="github",
     ))
     if ready_tickers:
@@ -199,9 +241,21 @@ def main() -> int:
 
     p_list = sub.add_parser("list", help="Elenca la watchlist")
     p_list.add_argument("--stale", action="store_true", help=f"Solo entry > {STALE_DAYS} giorni")
+    p_list.add_argument(
+        "--bucket",
+        choices=("all", "stock", "etf"),
+        default="all",
+        help="Filtra per bucket: stock (single-name) / etf (rotation+thematic) / all (default)",
+    )
     p_list.set_defaults(func=cmd_list)
 
     p_status = sub.add_parser("status", help="Score live + distanza target + flag READY")
+    p_status.add_argument(
+        "--bucket",
+        choices=("all", "stock", "etf"),
+        default="all",
+        help="Filtra per bucket: stock / etf / all (default)",
+    )
     p_status.set_defaults(func=cmd_status)
 
     args = parser.parse_args()
