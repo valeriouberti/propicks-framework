@@ -45,7 +45,7 @@ tab_gen, tab_view = st.tabs(["Genera nuovo", "Sfoglia archivio"])
 with tab_gen:
     st.caption("La generazione scarica i prezzi correnti per l'unrealized P&L — può richiedere qualche secondo.")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("Genera weekly report", type="primary", width="stretch"):
             with st.spinner("Genero report settimanale…"):
@@ -80,6 +80,25 @@ with tab_gen:
                 file_name=os.path.basename(path),
                 mime="text/markdown",
                 key="download_monthly_generated",
+            )
+
+    with col4:
+        if st.button(
+            "📄 PDF Weekly Review",
+            width="stretch",
+            help="PDF stampa-friendly: equity curve + bucket pie + sector + top positions + recent closings",
+            key="btn_pdf_weekly",
+        ):
+            from propicks.reports.pdf_weekly_review import generate_weekly_pdf
+            with st.spinner("Generating PDF weekly review…"):
+                pdf_bytes, pdf_path = generate_weekly_pdf()
+            st.success(f"PDF salvato: `{pdf_path}`")
+            st.download_button(
+                "📄 Download PDF",
+                data=pdf_bytes,
+                file_name=os.path.basename(pdf_path),
+                mime="application/pdf",
+                key="download_pdf_weekly",
             )
 
     with col3:

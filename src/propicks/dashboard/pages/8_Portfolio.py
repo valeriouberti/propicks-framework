@@ -726,6 +726,136 @@ with tab_mgmt:
                     "Valuta chiusura manuale (tab **Chiudi posizione** + Journal close)."
                 )
 
+        # ─── Trailing alert preview — checking required ─────────────────
+        # Lista posizioni dove trailing-recon è vicino al prezzo corrente
+        # (entro 1xATR). Priority "tomorrow check": se prezzo continua il
+        # trend, trailing scatterà entro 1-3gg trading.
+        st.divider()
+        st.subheader("🚨 Trailing watch — checking required")
+        st.caption(
+            "Posizioni dove trailing-stop ricostruito è entro 1×ATR dal prezzo "
+            "corrente. Sono i candidati più probabili a stop-out nei prossimi "
+            "1-3gg trading se il trend si inverte. Sort by distance asc."
+        )
+
+        from propicks.config import ATR_PERIOD
+        from propicks.domain.indicators import compute_atr
+        from propicks.domain.trade_mgmt import compute_trailing_stop
+        from propicks.market.yfinance_client import (
+            DataUnavailable as _Du, download_history as _dh,
+        )
+
+        atr_mult_watch = float(st.session_state.get("mgmt_atr_mult") or DEFAULT_TRAILING_ATR_MULT)
+
+        watch_rows: list[dict] = []
+        with st.spinner(f"Compute trailing stops per {len(positions)} posizioni…"):
+            for tk_w, pos_w in positions.items():
+                cur_p = prices_map.get(tk_w) if 'prices_map' in dir() else None
+                if cur_p is None:
+                    cur_p = cached_current_prices((tk_w,)).get(tk_w)
+                if cur_p is None:
+                    continue
+                try:
+                    hist_w = _dh(tk_w)
+                except _Du:
+                    continue
+                if hist_w is None or len(hist_w) < ATR_PERIOD + 5:
+                    continue
+                atr_series = compute_atr(
+                    hist_w["High"], hist_w["Low"], hist_w["Close"], ATR_PERIOD,
+                )
+                cur_atr_w = float(atr_series.iloc[-1]) if len(atr_series) else 0
+                if cur_atr_w <= 0:
+                    continue
+
+                entry_w = float(pos_w.get("entry_price", 0))
+                stop_w = float(pos_w.get("stop_loss", 0))
+                highest_w = float(
+                    pos_w.get("highest_price_since_entry") or max(entry_w, cur_p)
+                )
+                # Compute proposed trailing
+                proposed_trail = compute_trailing_stop(
+                    entry_price=entry_w,
+                    highest_price_since_entry=max(highest_w, cur_p),
+                    current_atr=cur_atr_w,
+                    current_stop=stop_w,
+                    atr_mult=atr_mult_watch,
+                )
+                # Distance current → trailing recon, in ATR multiples
+                dist_eur = cur_p - proposed_trail
+                dist_atr = dist_eur / cur_atr_w if cur_atr_w > 0 else 99
+                dist_pct = dist_eur / cur_p * 100 if cur_p > 0 else 0
+                trailing_active = bool(pos_w.get("trailing_enabled"))
+
+                watch_rows.append({
+                    "ticker": tk_w,
+                    "current": cur_p,
+                    "trailing_recon": proposed_trail,
+                    "current_stop": stop_w,
+                    "dist_eur": dist_eur,
+                    "dist_atr": dist_atr,
+                    "dist_pct": dist_pct,
+                    "trailing_active": trailing_active,
+                    "entry": entry_w,
+                    "atr": cur_atr_w,
+                })
+
+        if not watch_rows:
+            st.caption("_Nessuna posizione analizzabile (storia / ATR insufficienti)._")
+        else:
+            # Sort distance asc — closest first
+            watch_rows.sort(key=lambda r: r["dist_atr"])
+
+            # Build table
+            display_rows = [
+                {
+                    "Ticker": r["ticker"],
+                    "Trail?": "✅" if r["trailing_active"] else "—",
+                    "Current": f"{r['current']:.2f}",
+                    "Trail recon": f"{r['trailing_recon']:.2f}",
+                    "Stop attuale": f"{r['current_stop']:.2f}",
+                    "Δ ATR": round(r["dist_atr"], 2),
+                    "Δ %": round(r["dist_pct"], 2),
+                    "Priority": (
+                        "🔴 IMMEDIATE" if r["dist_atr"] < 0.5
+                        else "🟠 1-2gg" if r["dist_atr"] < 1.0
+                        else "🟡 3-5gg" if r["dist_atr"] < 2.0
+                        else "🟢 safe"
+                    ),
+                }
+                for r in watch_rows
+            ]
+            st.dataframe(
+                display_rows,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Δ ATR": st.column_config.ProgressColumn(
+                        format="%.2f", min_value=0.0, max_value=3.0,
+                        help="Multipli di ATR tra current e trailing-recon. "
+                             "<0.5 = stop-out immediate possibile.",
+                    ),
+                    "Δ %": st.column_config.NumberColumn(format="%+.2f%%"),
+                },
+            )
+            st.caption(
+                "**Δ ATR < 0.5** = trailing-stop a portata di un giorno volatile · "
+                "**0.5-1.0** = 1-2gg trading se trend inverte · "
+                "**1.0-2.0** = 3-5gg cushion · "
+                "**> 2.0** = safe distance. "
+                "Trail? ✅ = trailing attivo, — = trailing OFF (default per contrarian/thematic)."
+            )
+
+            # Alert specifico immediate
+            immediate = [r for r in watch_rows if r["dist_atr"] < 0.5]
+            if immediate:
+                st.error(
+                    "🔴 **CHECK NOW**: " + ", ".join(r["ticker"] for r in immediate) +
+                    " — trailing-recon entro 0.5×ATR dal prezzo corrente. "
+                    "Decidi: enable trailing per protect, OR tighten stop manuale, "
+                    "OR close partial."
+                )
+
         # ─── Per-position evolution chart ─────────────────────────────────
         # Price history dall'entry_date + entry/stop/target hline + reconstructed
         # trailing stop (rolling highest - atr_mult × ATR) per visualizzare se

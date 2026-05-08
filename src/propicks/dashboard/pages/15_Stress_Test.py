@@ -411,6 +411,202 @@ st.dataframe(
 st.caption(
     "**Limiti modello**: shock applicato istantaneo, no propagazione "
     "sector-correlation, no liquidity gap fill, no margin call simulation. "
-    "Usa come **first-order approx**, non come backtest accurato. Per bootstrap "
-    "statistical (CI 95% drawdown), usa Page 8 → Risk → VaR/Expected Shortfall."
+    "Usa come **first-order approx**, non come backtest accurato."
 )
+
+
+# ---------------------------------------------------------------------------
+# Drawdown forecast Monte Carlo (statistical complement to deterministic)
+# ---------------------------------------------------------------------------
+st.divider()
+with st.expander("📊 Drawdown forecast — Monte Carlo bootstrap", expanded=False):
+    st.caption(
+        "Differenza dallo stress test sopra: questo è **statistical bootstrap** "
+        "su returns history reali. Non scenario deterministico, ma distribuzione "
+        "di possibili drawdown nei prossimi N giorni."
+    )
+
+    mc1, mc2, mc3 = st.columns(3)
+    horizon_days = mc1.slider(
+        "Horizon forecast (giorni)",
+        min_value=5, max_value=90, value=30, step=5,
+        key="mc_horizon",
+    )
+    n_paths = mc2.select_slider(
+        "N paths Monte Carlo",
+        options=[200, 500, 1000, 2000, 5000],
+        value=1000,
+        key="mc_paths",
+    )
+    history_period = mc3.selectbox(
+        "Returns history",
+        options=("3mo", "6mo", "1y", "2y"),
+        index=2,
+        key="mc_period",
+    )
+
+    if st.button("▶️ Run Monte Carlo", type="primary", key="mc_run"):
+        from propicks.dashboard._shared import cached_returns
+
+        with st.spinner(f"Bootstrap {n_paths} paths × {horizon_days} days…"):
+            returns_df = cached_returns(tuple(tickers), history_period)
+
+        if returns_df is None or returns_df.empty:
+            st.error("Returns history non disponibile — impossibile bootstrap.")
+        else:
+            import numpy as np
+            import pandas as pd
+
+            # Compute portfolio weights mark-to-market
+            weights = {}
+            for tk, pos in positions.items():
+                mv = _pos_market_value(tk, pos)
+                weights[tk] = mv / total_market if total_market else 0
+
+            # Portfolio daily returns history (weighted)
+            common_tickers = [tk for tk in tickers if tk in returns_df.columns]
+            if not common_tickers:
+                st.error(f"Nessun ticker con returns disponibile (cercati: {tickers}).")
+            else:
+                rets = returns_df[common_tickers].dropna()
+                if len(rets) < 30:
+                    st.warning(
+                        f"Returns history corta ({len(rets)} giorni). "
+                        "Forecast indicativo only."
+                    )
+                w_arr = np.array([weights.get(tk, 0) for tk in common_tickers])
+                portfolio_rets = (rets.values * w_arr).sum(axis=1)
+
+                # Bootstrap N paths
+                rng = np.random.default_rng(42)
+                n_obs = len(portfolio_rets)
+                if n_obs < 5:
+                    st.error("Returns insufficienti per bootstrap.")
+                else:
+                    # Sample with replacement
+                    paths = np.zeros((n_paths, horizon_days))
+                    for i in range(n_paths):
+                        sampled = rng.choice(portfolio_rets, size=horizon_days, replace=True)
+                        paths[i] = sampled
+
+                    # Compound to equity curve per path
+                    equity_paths = np.cumprod(1 + paths, axis=1)  # shape (n_paths, horizon)
+
+                    # Max drawdown per path
+                    max_dd_per_path = np.zeros(n_paths)
+                    for i in range(n_paths):
+                        eq = np.concatenate([[1.0], equity_paths[i]])
+                        peak = np.maximum.accumulate(eq)
+                        dd = (eq - peak) / peak
+                        max_dd_per_path[i] = dd.min()
+
+                    # Final equity per path
+                    final_eq = equity_paths[:, -1]
+                    final_ret_pct = (final_eq - 1) * 100
+
+                    # Stats
+                    p5_dd = np.percentile(max_dd_per_path, 5) * 100
+                    p50_dd = np.percentile(max_dd_per_path, 50) * 100
+                    p95_dd = np.percentile(max_dd_per_path, 95) * 100
+
+                    p5_ret = np.percentile(final_ret_pct, 5)
+                    p50_ret = np.percentile(final_ret_pct, 50)
+                    p95_ret = np.percentile(final_ret_pct, 95)
+
+                    # Probabilità DD < soglia
+                    p_dd_5 = (max_dd_per_path < -0.05).mean() * 100
+                    p_dd_10 = (max_dd_per_path < -0.10).mean() * 100
+                    p_dd_15 = (max_dd_per_path < -0.15).mean() * 100
+                    p_dd_20 = (max_dd_per_path < -0.20).mean() * 100
+
+                    st.markdown(f"##### 📉 Max drawdown forecast ({horizon_days}gg)")
+                    dc1, dc2, dc3 = st.columns(3)
+                    dc1.metric("5° percentile (worst)", f"{p5_dd:+.2f}%")
+                    dc2.metric("Mediana", f"{p50_dd:+.2f}%")
+                    dc3.metric("95° percentile (best)", f"{p95_dd:+.2f}%")
+
+                    st.markdown(f"##### 📈 Final return forecast ({horizon_days}gg)")
+                    rc1, rc2, rc3 = st.columns(3)
+                    rc1.metric("5° percentile", f"{p5_ret:+.2f}%")
+                    rc2.metric("Mediana", f"{p50_ret:+.2f}%")
+                    rc3.metric("95° percentile", f"{p95_ret:+.2f}%")
+
+                    st.markdown("##### 🚨 Probability of DD breach")
+                    pdc = st.columns(4)
+                    pdc[0].metric("P(DD < -5%)", f"{p_dd_5:.1f}%")
+                    pdc[1].metric("P(DD < -10%)", f"{p_dd_10:.1f}%")
+                    pdc[2].metric("P(DD < -15%)", f"{p_dd_15:.1f}%")
+                    pdc[3].metric("P(DD < -20%)", f"{p_dd_20:.1f}%")
+
+                    # Histogram drawdown distribution
+                    fig_dd_hist = go.Figure()
+                    fig_dd_hist.add_trace(go.Histogram(
+                        x=max_dd_per_path * 100,
+                        nbinsx=40,
+                        marker=dict(color="#dc2626", line=dict(color="white", width=1)),
+                    ))
+                    fig_dd_hist.add_vline(
+                        x=p5_dd, line_dash="dash", line_color="#7f1d1d",
+                        annotation_text=f"P5 {p5_dd:.1f}%", annotation_position="top",
+                    )
+                    fig_dd_hist.add_vline(
+                        x=p50_dd, line_dash="dot", line_color="#3b82f6",
+                        annotation_text=f"P50 {p50_dd:.1f}%", annotation_position="top",
+                    )
+                    fig_dd_hist.update_layout(
+                        title=dict(
+                            text=f"Distribuzione max drawdown · {n_paths} paths · "
+                                 f"{horizon_days}gg horizon",
+                            x=0.5, xanchor="center", font=dict(size=13),
+                        ),
+                        xaxis_title="Max DD %", yaxis_title="N paths",
+                        height=320, showlegend=False,
+                        margin=dict(l=20, r=20, t=50, b=20),
+                    )
+                    st.plotly_chart(fig_dd_hist, width="stretch")
+
+                    # Sample equity paths chart
+                    sample_paths = paths[:30]  # show 30 sample
+                    sample_eq = np.cumprod(1 + sample_paths, axis=1)
+                    fig_paths = go.Figure()
+                    for i in range(min(30, len(sample_eq))):
+                        fig_paths.add_trace(go.Scatter(
+                            x=list(range(1, horizon_days + 1)),
+                            y=sample_eq[i],
+                            mode="lines",
+                            line=dict(color="rgba(59,130,246,0.3)", width=1),
+                            showlegend=False,
+                            hovertemplate=None,
+                        ))
+                    # Add P5/P50/P95 envelope per day
+                    p5_path = np.percentile(sample_eq, 5, axis=0) if len(sample_eq) > 0 else None
+                    p95_path = np.percentile(sample_eq, 95, axis=0) if len(sample_eq) > 0 else None
+                    median_path = np.percentile(equity_paths, 50, axis=0)
+                    fig_paths.add_trace(go.Scatter(
+                        x=list(range(1, horizon_days + 1)),
+                        y=median_path, mode="lines",
+                        line=dict(color="#3b82f6", width=2),
+                        name="Median path",
+                    ))
+                    fig_paths.add_hline(
+                        y=1.0, line_dash="dot", line_color="#94a3b8",
+                        annotation_text="break-even",
+                    )
+                    fig_paths.update_layout(
+                        title=dict(
+                            text="Sample paths (30) + median",
+                            x=0.5, xanchor="center", font=dict(size=13),
+                        ),
+                        xaxis_title="Days forward", yaxis_title="Growth of 1",
+                        height=320,
+                        margin=dict(l=20, r=20, t=50, b=20),
+                    )
+                    st.plotly_chart(fig_paths, width="stretch")
+
+                    st.caption(
+                        f"**Lettura**: con probabilità ~{p_dd_10:.0f}% il portfolio "
+                        f"farà drawdown peggiore del -10% nei prossimi {horizon_days}gg "
+                        f"(secondo bootstrap su returns storici {history_period}). "
+                        f"**Limiti**: assume returns IID stationari (no regime change), "
+                        f"no fat tails extra rispetto a quanto già osservato."
+                    )
