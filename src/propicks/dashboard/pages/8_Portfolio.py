@@ -307,13 +307,16 @@ with tab_risk:
             )
 
         # ─── PIE 2: Sector concentration ───
+        # Cash escluso (già visibile in PIE 1 buckets). Denominatore =
+        # invested_only così pie + barre tabella matchano (entrambi % del
+        # capitale investito, non del portfolio totale).
+        invested_only = max(total_market - cash_mtm, 0.0)
         sector_exp_for_pie = compute_sector_exposure(
-            positions, prices_map, sector_key_map, total_market,
+            positions, prices_map, sector_key_map, invested_only,
             currency_map=currency_map,
         )
         with col_pie2:
             if sector_exp_for_pie:
-                # Sort biggest first
                 items = sorted(sector_exp_for_pie.items(), key=lambda x: x[1], reverse=True)
                 fig_s = go.Figure(data=[go.Pie(
                     labels=[k for k, _ in items],
@@ -321,13 +324,13 @@ with tab_risk:
                     hole=0.4,
                     textinfo="label+percent",
                     textposition="outside",
-                    hovertemplate="<b>%{label}</b><br>%{value:.2f}%<extra></extra>",
+                    hovertemplate="<b>%{label}</b><br>%{value:.2f}% invested<extra></extra>",
                 )])
                 fig_s.update_layout(
                     height=350, margin=dict(l=10, r=10, t=30, b=10),
                     showlegend=False,
                     title=dict(
-                        text="Concentrazione settoriale (cap 30%)",
+                        text="Concentrazione settoriale (% invested · cap 30%)",
                         x=0.5, xanchor="center", font=dict(size=13),
                     ),
                 )
@@ -335,7 +338,8 @@ with tab_risk:
                 top_sector, top_pct = items[0]
                 st.caption(
                     f"Top sector: **{top_sector}** ({top_pct*100:.1f}%) · "
-                    f"Settori coperti: {len(items)} / 11 GICS"
+                    f"Settori coperti: {len(items)} / 11 GICS · "
+                    "_Denominatore = capitale investito (cash escluso, già in pie buckets)._"
                 )
             else:
                 st.caption("_Sector data non disponibile per pie chart._")
@@ -360,7 +364,7 @@ with tab_risk:
                 column_config={
                     "Esposizione": st.column_config.ProgressColumn(
                         format="%.1f%%", min_value=0.0, max_value=30.0,
-                        help="Quota del portfolio mark-to-market per settore. Cap informativo: 30% → warning.",
+                        help="Quota del **capitale investito** per settore (cash escluso). Cap informativo: 30% → warning.",
                     ),
                 },
             )
