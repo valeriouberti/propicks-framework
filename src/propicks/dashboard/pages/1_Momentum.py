@@ -656,6 +656,105 @@ for r in results:
             st.code(_prompt, language="markdown")
 
         # -----------------------------------------------------------------
+        # Paste LLM response per accuracy tracking
+        # -----------------------------------------------------------------
+        with st.expander(
+            "📥 Incolla risposta LLM (accuracy tracking)",
+            expanded=False,
+        ):
+            from propicks.io.manual_verdicts_store import (
+                parse_paste, save_manual_verdict,
+            )
+
+            st.caption(
+                "Incolla qui la risposta LLM ottenuta da Perplexity Pro / Sonar / "
+                "Claude.ai / ChatGPT / Gemini. Il sistema estrae automaticamente "
+                "verdict + conviction (se presenti in JSON) e li salva linkati al "
+                "ticker per **accuracy tracking** quando il trade chiude."
+            )
+
+            paste_source = st.selectbox(
+                "Source LLM",
+                options=[
+                    "perplexity_pro", "sonar", "claude_web", "gpt", "gemini", "other",
+                ],
+                index=0,
+                key=f"paste_src_{r['ticker']}",
+            )
+            paste_raw = st.text_area(
+                "Risposta LLM (paste full text)",
+                placeholder="Incolla qui la response completa (text + JSON)...",
+                height=180,
+                key=f"paste_raw_{r['ticker']}",
+            )
+            paste_notes = st.text_input(
+                "Nota libera (opzionale)",
+                placeholder="es. 'Perplexity con web search · Q4 earnings imminent'",
+                key=f"paste_notes_{r['ticker']}",
+            )
+
+            # Live preview parse
+            if paste_raw and paste_raw.strip():
+                preview = parse_paste(paste_raw)
+                pcols = st.columns(3)
+                pcols[0].metric(
+                    "Verdict (auto)",
+                    preview.get("verdict") or "—",
+                )
+                pcols[1].metric(
+                    "Conviction (auto)",
+                    f"{preview['conviction']}/10" if preview.get("conviction") is not None else "—",
+                )
+                pcols[2].metric(
+                    "JSON parsed",
+                    "✓" if preview.get("parsed_payload") else "—",
+                )
+
+                # Override manuale se parse fallisce
+                ov_col1, ov_col2 = st.columns(2)
+                v_override = ov_col1.selectbox(
+                    "Verdict (override se auto vuoto)",
+                    options=["(auto)", "CONFIRM", "CAUTION", "REJECT"],
+                    index=0,
+                    key=f"paste_v_ovr_{r['ticker']}",
+                )
+                c_override = ov_col2.slider(
+                    "Conviction (override 0=skip)",
+                    0, 10, 0,
+                    key=f"paste_c_ovr_{r['ticker']}",
+                )
+
+                if st.button(
+                    "💾 Salva verdict",
+                    key=f"paste_save_{r['ticker']}",
+                    type="primary",
+                ):
+                    final_v = preview.get("verdict") if v_override == "(auto)" else v_override
+                    final_c = preview.get("conviction") if c_override == 0 else c_override
+                    try:
+                        vid = save_manual_verdict(
+                            ticker=r["ticker"],
+                            source=paste_source,
+                            raw_paste=paste_raw,
+                            verdict=final_v,
+                            conviction=final_c,
+                            strategy="momentum",
+                            notes=paste_notes or None,
+                        )
+                        st.success(
+                            f"Salvato verdict #{vid} · {r['ticker']} · "
+                            f"{final_v or 'no-verdict'} · "
+                            f"conviction {final_c if final_c else '—'}/10"
+                        )
+                        st.caption(
+                            "Apri Page 9 Journal → Stats per tracciare accuracy "
+                            "quando il trade chiude (auto-link via ticker se "
+                            "trade aperto entro 7gg)."
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+
+        # -----------------------------------------------------------------
         # Manual "→ Watchlist" — funziona per qualunque classe (anche C/D)
         # Utile quando il setup non è pronto ma vuoi tenerlo d'occhio
         # -----------------------------------------------------------------

@@ -389,6 +389,31 @@ CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key);
 
 
 -- ----------------------------------------------------------------------------
+-- Manual AI verdicts (paste-based accuracy tracking)
+-- ----------------------------------------------------------------------------
+-- Quando il trader usa LLM esterno (Perplexity Pro web app, GPT/Gemini diretto,
+-- Claude.ai web invece del SDK) può incollare la response qui per linkare il
+-- verdict a un trade e tracciare l'accuracy ex-post (calibration).
+CREATE TABLE IF NOT EXISTS manual_ai_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trade_id INTEGER,                        -- FK opt → trades.id (NULL se pre-trade)
+  ticker TEXT NOT NULL,
+  strategy TEXT,                           -- momentum/contrarian/etf_rotation/thematic
+  source TEXT NOT NULL,                    -- perplexity_pro/sonar/gemini/gpt/claude_web
+  verdict TEXT,                            -- CONFIRM/CAUTION/REJECT
+  conviction INTEGER,                      -- 0-10
+  raw_paste TEXT NOT NULL,                 -- testo completo incollato
+  parsed_payload TEXT,                     -- JSON estratto (se trovato)
+  notes TEXT,                              -- nota libera trader
+  pasted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_manual_verdicts_ticker ON manual_ai_verdicts(ticker);
+CREATE INDEX IF NOT EXISTS idx_manual_verdicts_trade ON manual_ai_verdicts(trade_id);
+CREATE INDEX IF NOT EXISTS idx_manual_verdicts_pasted ON manual_ai_verdicts(pasted_at);
+
+
+-- ----------------------------------------------------------------------------
 -- Schema versioning
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -399,3 +424,5 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version, description)
   VALUES (1, 'initial schema — migration from JSON stores');
+INSERT OR IGNORE INTO schema_version (version, description)
+  VALUES (2, 'manual_ai_verdicts — paste-based AI accuracy tracking');

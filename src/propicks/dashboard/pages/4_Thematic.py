@@ -541,6 +541,74 @@ with st.expander(
     st.code(_prompt, language="markdown")
 
 
+# ─── Paste LLM response per accuracy tracking (top pick only) ─────────────
+with st.expander(
+    "📥 Incolla risposta LLM (accuracy tracking)",
+    expanded=False,
+):
+    from propicks.io.manual_verdicts_store import (
+        parse_paste as _pp_parse,
+        save_manual_verdict as _pp_save,
+    )
+
+    st.caption(
+        f"Top pick: **{top['ticker']}** ({top.get('theme_label', '—')}). "
+        "Incolla risposta LLM (Perplexity Pro / Sonar / Claude.ai / GPT / Gemini) "
+        "per accuracy tracking thematic. Auto-parse verdict + conviction se "
+        "JSON presente."
+    )
+    _src = st.selectbox(
+        "Source LLM",
+        options=["perplexity_pro", "sonar", "claude_web", "gpt", "gemini", "other"],
+        key="thematic_paste_src",
+    )
+    _raw = st.text_area(
+        "Risposta LLM",
+        placeholder="Paste full text...",
+        height=180,
+        key="thematic_paste_raw",
+    )
+    _notes = st.text_input(
+        "Nota (opzionale)",
+        key="thematic_paste_notes",
+    )
+    if _raw and _raw.strip():
+        _preview = _pp_parse(_raw)
+        _pc = st.columns(3)
+        _pc[0].metric("Verdict", _preview.get("verdict") or "—")
+        _pc[1].metric(
+            "Conviction",
+            f"{_preview['conviction']}/10" if _preview.get("conviction") is not None else "—",
+        )
+        _pc[2].metric("JSON parsed", "✓" if _preview.get("parsed_payload") else "—")
+        _ovc = st.columns(2)
+        _v_ovr = _ovc[0].selectbox(
+            "Verdict override",
+            options=["(auto)", "CONFIRM", "CAUTION", "REJECT"],
+            key="thematic_v_ovr",
+        )
+        _c_ovr = _ovc[1].slider(
+            "Conviction override (0=auto)",
+            0, 10, 0,
+            key="thematic_c_ovr",
+        )
+        if st.button("💾 Salva verdict", key="thematic_paste_save", type="primary"):
+            _fv = _preview.get("verdict") if _v_ovr == "(auto)" else _v_ovr
+            _fc = _preview.get("conviction") if _c_ovr == 0 else _c_ovr
+            try:
+                _vid = _pp_save(
+                    ticker=top["ticker"], source=_src, raw_paste=_raw,
+                    verdict=_fv, conviction=_fc,
+                    strategy="thematic", notes=_notes or None,
+                )
+                st.success(
+                    f"Salvato verdict #{_vid} · {top['ticker']} · "
+                    f"{_fv or 'no-verdict'} · conviction {_fc or '—'}/10"
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # AI validation
 # ---------------------------------------------------------------------------

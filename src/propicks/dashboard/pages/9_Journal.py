@@ -339,6 +339,146 @@ with tab_stats:
 
         st.info(f"**Verdetto sintetico:** {verdict(wr, pf, len(scope))}")
 
+        # ─── Manual AI verdicts accuracy ──────────────────────────────────
+        st.divider()
+        st.subheader("🤖 AI verdict accuracy (manual paste)")
+        st.caption(
+            "Calibration dei verdict LLM esterni (Perplexity Pro / Sonar / "
+            "Claude.ai / GPT / Gemini) incollati nelle page Momentum/Contrarian/"
+            "Thematic. Linkati a trade chiusi → match outcome ex-post. "
+            "**Per linkare** un verdict a un trade, vai a Stats → expander "
+            "'🔗 Link manuali' qui sotto."
+        )
+
+        from propicks.io.manual_verdicts_store import (
+            compute_accuracy as _acc, list_all_verdicts,
+        )
+
+        # Filter source per stats
+        _src_pick = st.selectbox(
+            "Filter source",
+            options=["all", "perplexity_pro", "sonar", "claude_web", "gpt", "gemini", "other"],
+            key="acc_src_filter",
+        )
+        _src_arg = None if _src_pick == "all" else _src_pick
+        _strat_arg = None if strat_filter == "(tutti)" else strat_filter
+
+        acc = _acc(strategy=_strat_arg, source=_src_arg)
+
+        if acc["n_total"] == 0:
+            st.info(
+                "Nessun verdict manuale linkato a trade chiusi. "
+                "Apri page 1/3/4, incolla risposta LLM, poi linka via expander "
+                "'🔗 Link manuali' qui sotto quando il trade è aperto + chiuso."
+            )
+        else:
+            ac1, ac2, ac3, ac4 = st.columns(4)
+            ac1.metric("Verdict directional", acc["n_directional"])
+            ac2.metric(
+                "Accuracy",
+                f"{acc['accuracy'] * 100:.1f}%" if acc["accuracy"] is not None else "—",
+                help="N correct / (N CONFIRM+REJECT). >50% = better than random.",
+            )
+            ac3.metric(
+                "Brier score",
+                f"{acc['brier_score']:.3f}" if acc["brier_score"] is not None else "—",
+                help="< 0.25 = better than random (lower is better)",
+            )
+            ac4.metric("Caution (skipped)", acc["n_caution"])
+
+            # Confusion matrix-style table
+            conf_rows = [
+                {
+                    "Verdict": "🟢 CONFIRM",
+                    "Outcome WIN": acc["n_confirm_win"],
+                    "Outcome LOSS": acc["n_confirm_loss"],
+                    "Match": "✅" if acc["n_confirm_win"] >= acc["n_confirm_loss"] else "❌",
+                },
+                {
+                    "Verdict": "🔴 REJECT",
+                    "Outcome WIN": acc["n_reject_win"],
+                    "Outcome LOSS": acc["n_reject_loss"],
+                    "Match": "✅" if acc["n_reject_loss"] >= acc["n_reject_win"] else "❌",
+                },
+            ]
+            st.dataframe(conf_rows, width="stretch", hide_index=True)
+            st.caption(
+                "**Match logic**: CONFIRM+WIN ✅ correct (true positive) · "
+                "CONFIRM+LOSS ❌ false positive · "
+                "REJECT+LOSS ✅ correct (true negative) · "
+                "REJECT+WIN ❌ false negative. "
+                "**Brier score** = mean((P(verdict) - actual)²) con "
+                "P(CONFIRM)=0.8, P(CAUTION)=0.5, P(REJECT)=0.2."
+            )
+
+        # ─── Link verdict ⇄ trade (manual) ─────────────────────────────────
+        with st.expander("🔗 Link manuali verdict ⇄ trade", expanded=False):
+            from propicks.io.manual_verdicts_store import (
+                link_to_trade, delete_verdict,
+            )
+
+            all_v = list_all_verdicts(strategy=_strat_arg, source=_src_arg)
+            if not all_v:
+                st.caption("_Nessun verdict salvato. Vai a page 1/3/4 → '📥 Incolla risposta LLM'._")
+            else:
+                # Lista verdict salvati (linkati e non)
+                v_rows = [
+                    {
+                        "ID": v["id"],
+                        "Ticker": v["ticker"],
+                        "Strategy": v.get("strategy") or "—",
+                        "Source": v.get("source"),
+                        "Verdict": v.get("verdict") or "—",
+                        "Conviction": v.get("conviction") or "—",
+                        "Trade ID": v.get("trade_id") or "—",
+                        "Pasted": v.get("pasted_at"),
+                    }
+                    for v in all_v
+                ]
+                st.dataframe(v_rows, width="stretch", hide_index=True)
+
+                lc1, lc2, lc3 = st.columns([1, 1, 1])
+                with lc1:
+                    _vid_link = st.number_input(
+                        "Verdict ID",
+                        min_value=0, value=0, step=1,
+                        key="link_verdict_id",
+                    )
+                    _tid_link = st.number_input(
+                        "Trade ID",
+                        min_value=0, value=0, step=1,
+                        key="link_trade_id",
+                    )
+                    if st.button("Link", type="primary", key="btn_link_v"):
+                        if _vid_link > 0 and _tid_link > 0:
+                            try:
+                                link_to_trade(int(_vid_link), int(_tid_link))
+                                st.success(f"Linked verdict #{_vid_link} → trade #{_tid_link}")
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(str(exc))
+                        else:
+                            st.warning("Verdict ID e Trade ID > 0 obbligatori.")
+                with lc2:
+                    _vid_del = st.number_input(
+                        "Verdict ID delete",
+                        min_value=0, value=0, step=1,
+                        key="del_verdict_id",
+                    )
+                    if st.button("Delete", type="secondary", key="btn_del_v"):
+                        if _vid_del > 0:
+                            delete_verdict(int(_vid_del))
+                            st.success(f"Deleted verdict #{_vid_del}")
+                            st.rerun()
+                with lc3:
+                    st.caption(
+                        "Workflow: 1) Incolla LLM response in page 1/3/4 → "
+                        "verdict salvato no-trade-link. 2) Apri trade in journal "
+                        "(otteni trade ID dalla tabella Trades). 3) Qui Link "
+                        "verdict_id + trade_id. 4) Quando trade close, accuracy "
+                        "aggiornata automaticamente."
+                    )
+
 # ---------------------------------------------------------------------------
 # Add trade
 # ---------------------------------------------------------------------------
