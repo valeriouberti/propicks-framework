@@ -475,6 +475,7 @@ with st.expander(
 
     from propicks.ai.user_prompts import (
         llm_generic_thematic_validate_full,
+        perplexity_thematic_validate_full,
         sonar_thematic_validate_full,
     )
     from propicks.config import THEMATIC_ETFS
@@ -483,6 +484,7 @@ with st.expander(
         "Target LLM",
         options=[
             "Sonar (Perplexity nativo) — Recommended",
+            "Perplexity Pro (Claude/GPT/Gemini via Pro)",
             "Claude.ai / ChatGPT / Gemini diretto",
         ],
         index=0,
@@ -492,7 +494,8 @@ with st.expander(
             "Sonar nativo: schema in cima, persona thematic distillata, "
             "regole computabili (REJECT su corr-kill / STRONG_BEAR), "
             "constraint esplicito su alternative_ticker (solo same-cohort). "
-            "LLM diretto: system prompt Anthropic byte-per-byte."
+            "Perplexity Pro: system prompt Anthropic con web search section "
+            "rimossa (Perplexity ha search nativa). LLM diretto: byte-per-byte."
         ),
     )
 
@@ -520,6 +523,19 @@ with st.expander(
             f"(theme=**{_theme_now}**). **Default consigliato**."
         )
         _prompt = sonar_thematic_validate_full(
+            top,
+            candidates=_candidates,
+            as_of_date=_today,
+        )
+    elif _target_label.startswith("Perplexity Pro"):
+        st.caption(
+            f"Per Claude / GPT / Gemini eseguiti via Perplexity Pro. System "
+            f"prompt Anthropic completo con sezione `# Web search usage` "
+            f"rimossa (Perplexity ha search nativa). Schema JSON con fallback "
+            f"`---JSON---`. **Constraint esplicito** alternative_ticker: "
+            f"{len(_candidates)} same-cohort candidates."
+        )
+        _prompt = perplexity_thematic_validate_full(
             top,
             candidates=_candidates,
             as_of_date=_today,

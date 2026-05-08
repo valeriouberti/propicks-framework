@@ -65,7 +65,7 @@ The user message includes the weekly macro regime (5-bucket on SPY/^GSPC). Treat
 - `confidence_by_dimension` keys: `thematic_alpha`, `crowding_flows`, `concentration_risk`, `catalyst_strength`, `parent_alignment`, `regime_consistency`.
 - `theme_stage`: EARLY (first 3-6M of theme outperformance), MID (6-18M, established), LATE (18M+, distribution risk), UNKNOWN.
 - `entry_tactic`: ALLOCATE_NOW, STAGGER_3_TRANCHES, WAIT_PULLBACK, WAIT_CONFIRMATION, HOLD_CASH.
-- `alternative_ticker`: a different wrapper for same theme that you prefer (e.g., SOXX over SMH), or null.
+- `alternative_ticker`: a different wrapper for same theme that you prefer (e.g., SOXX over SMH), or null. **Pick ONLY from the theme cohort provided in the user message — never invent tickers.** If no same-cohort wrapper is clearly preferable, set to null.
 - `time_horizon_weeks`: integer 4-26 — when to re-check the view.
 - Self-consistency: CONFIRM requires conviction >= 7 AND thematic_alpha >= 6 AND crowding_flows >= 4. If any fails, downgrade to CAUTION.
 - Be specific and falsifiable. "Cybersec is leading" is useless. "LOCK.MI RS vs XDWT.MI turning up since 2026-02 driven by ransomware insurance demand and EU NIS2 enforcement; top 3 holdings (PANW/CRWD/FTNT) = 28% AUM, breadth healthy" is useful.

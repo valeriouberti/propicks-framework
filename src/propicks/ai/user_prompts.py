@@ -860,6 +860,8 @@ search always active. Guidelines:
 
 
 _SONAR_STOCK_SCHEMA = {
+    "_model": "sonar",
+    "_schema_version": "1.0",
     "verdict": "CONFIRM | CAUTION | REJECT",
     "conviction_score": "integer 0-10",
     "thesis_summary": "string, 2-3 sentences, falsifiable",
@@ -874,6 +876,7 @@ _SONAR_STOCK_SCHEMA = {
     "invalidation_deadline": "YYYY-MM-DD date",
     "entry_tactic": "MARKET_NOW | LIMIT_PULLBACK | WAIT_VOLUME_CONFIRMATION | SCALE_IN",
     "alignment_with_technicals": "STRONG | MIXED | WEAK",
+    "regime_context": "STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR (echo from user message for hard-rule check)",
     "confidence_by_dimension": {
         "fundamentals": "integer 0-10 (business durability + balance sheet)",
         "catalyst_credibility": "integer 0-10 (3-6m catalyst path)",
@@ -918,6 +921,8 @@ an independent verdict.
 
 
 _SONAR_CONTRA_SCHEMA = {
+    "_model": "sonar",
+    "_schema_version": "1.0",
     "verdict": "CONFIRM | CAUTION | REJECT",
     "conviction_score": "integer 0-10",
     "thesis_summary": "string, 2-3 sentences, names the selloff cause",
@@ -927,8 +932,10 @@ _SONAR_CONTRA_SCHEMA = {
     "bear_case": "string, falsifiable",
     "reversion_target": "float, price level (typically EMA50 daily)",
     "invalidation_price": "float, price level (HARD STOP)",
+    "reward_risk_ratio": "float, computed (reversion_target - current_price) / (current_price - invalidation_price)",
     "time_horizon_days": "integer 3-30 (typical 5-15 for clean setups)",
     "entry_tactic": "MARKET_NOW | LIMIT_BELOW | SCALE_IN_TRANCHES | WAIT_STABILIZATION",
+    "regime_context": "STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR (echo for hard-rule check)",
     "confidence_by_dimension": {
         "quality_persistence": "integer 0-10 (still high-quality in 12 months?)",
         "catalyst_credibility": "integer 0-10 (confidence in FLUSH vs BREAK call)",
@@ -978,16 +985,19 @@ below EMA50, above EMA200 weekly). Your job: classify the SELLOFF CAUSE.
 
 
 _SONAR_ETF_SCHEMA = {
+    "_model": "sonar",
+    "_schema_version": "1.0",
     "verdict": "CONFIRM | CAUTION | REJECT",
     "conviction_score": "integer 0-10",
     "thesis_summary": "string, 2-3 sentences",
     "top_sector_verdict": "ticker from the proposed slate, OR 'FLAT' if no exposure recommended",
-    "alternative_sector": "ticker from the universe (NOT in top-3) OR null. MUST come from the constrained list provided.",
+    "alternative_sector": "ticker from the universe (NOT in top-3) OR null. MUST come from the constrained list provided in the user message — never invent tickers.",
     "bull_case": "string, falsifiable, with cited macro/flow data",
     "bear_case": "string, falsifiable",
     "stage": "EARLY (1-2M) | MID (3-6M) | LATE (6M+) | UNKNOWN",
     "entry_tactic": "ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH",
     "rebalance_horizon_weeks": "integer 2-12",
+    "regime_context": "STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR (echo for hard-rule check)",
     "confidence_by_dimension": {
         "macro_fit": "integer 0-10 (rates/USD/commodities confirm ranking?)",
         "breadth_and_flows": "integer 0-10 (broad participation + AUM flows)",
@@ -1160,11 +1170,13 @@ def sonar_etf_validate_full(
 
 
 _SONAR_THEMATIC_SCHEMA = {
+    "_model": "sonar",
+    "_schema_version": "1.0",
     "verdict": "CONFIRM | CAUTION | REJECT",
     "conviction_score": "integer 0-10",
     "thematic_summary": "string, 2-3 sentences naming the alpha-vs-parent thesis",
     "theme_stage": "EARLY (3-6M) | MID (6-18M) | LATE (18M+) | UNKNOWN",
-    "alternative_ticker": "ticker from the constrained list provided OR null. MUST come from the same theme cohort.",
+    "alternative_ticker": "ticker from the constrained list provided OR null. MUST come from the same theme cohort — never invent tickers.",
     "bull_case": "string, falsifiable, with cited flow/holdings data",
     "bear_case": "string, falsifiable",
     "catalysts": ["list of strings, 2-4 items, concrete drivers in next 2-3 months"],
@@ -1173,6 +1185,8 @@ _SONAR_THEMATIC_SCHEMA = {
     "entry_tactic": "ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH",
     "time_horizon_weeks": "integer 4-26",
     "alignment_with_parent": "STRONG | MIXED | CONTRADICTORY",
+    "regime_context": "STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR (echo for hard-rule check)",
+    "corr_kill_applied": "boolean — echo from user message (true if corr_60d ≥ 0.85, forces verdict REJECT)",
     "confidence_by_dimension": {
         "thematic_alpha": "integer 0-10 (RS-vs-parent durable, not noise)",
         "crowding_flows": "integer 0-10 (positioning early vs stretched)",
@@ -1326,3 +1340,67 @@ def llm_generic_thematic_validate_full(
 claude_stock_validate_fallback = perplexity_stock_validate_full
 claude_contrarian_validate_fallback = perplexity_contrarian_validate_full
 claude_etf_validate_fallback = perplexity_etf_validate_full
+
+
+# ---------------------------------------------------------------------------
+# perplexity_thematic_validate_full — simmetria con stock/contra/etf
+# ---------------------------------------------------------------------------
+def perplexity_thematic_validate_full(
+    analysis: dict,
+    *,
+    candidates: list[dict] | None = None,
+    as_of_date: str | None = None,
+) -> str:
+    """Prompt completo thematic ``--validate`` — fallback Perplexity multi-modello.
+
+    Pattern speculare a ``perplexity_etf_validate_full``: rimuove la sezione
+    ``# Web search usage`` dal THEMATIC_SYSTEM_PROMPT in memoria. Aggiunge
+    constraint alternative_ticker = same-cohort candidates.
+    """
+    from propicks.ai.claude_client import _THEMATIC_JSON_SCHEMA
+    from propicks.ai.thematic_prompts import (
+        THEMATIC_SYSTEM_PROMPT,
+        render_thematic_user_prompt,
+    )
+
+    today = _today_iso(as_of_date)
+    system = _strip_web_search_section(THEMATIC_SYSTEM_PROMPT)
+    user = render_thematic_user_prompt(analysis, as_of_date=today)
+    schema_block = _SCHEMA_INSTRUCTION_PERPLEXITY.format(
+        schema=_format_schema_block(_THEMATIC_JSON_SCHEMA)
+    )
+
+    # Constraint alternative_ticker (same logic of sonar_thematic)
+    ticker_now = analysis.get("ticker", "?").upper()
+    pool = [
+        c for c in (candidates or [])
+        if c.get("ticker", "").upper() != ticker_now
+    ]
+    if pool:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_TICKER — constrained list\n\n"
+            "For the ``alternative_ticker`` field in the schema, pick "
+            "EXCLUSIVELY from this list (or null):\n"
+            + "\n".join(
+                f"- {c['ticker']} ({c.get('theme_label', '?')}, "
+                f"parent {c.get('parent_ticker', '?')})"
+                for c in pool
+            )
+            + "\n\nDo NOT invent tickers. If none is a clear upgrade for "
+            "the same thematic exposure, set the field to null.\n"
+        )
+    else:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_TICKER\n\n"
+            "No same-cohort alternatives provided. Set "
+            "``alternative_ticker`` = null.\n"
+        )
+
+    return (
+        _PERPLEXITY_HEADER
+        + "# SYSTEM\n\n" + system.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + alt_constraint + schema_block
+    )
+
+
+claude_thematic_validate_fallback = perplexity_thematic_validate_full

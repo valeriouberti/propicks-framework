@@ -64,7 +64,7 @@ For the proposed rotation slate, evaluate across:
 - All integer scores on 0-10 scale: `conviction_score` and each value in `confidence_by_dimension`.
 - `confidence_by_dimension` keys: `macro_fit`, `breadth`, `positioning_flows`, `rotation_stage`, `alternatives`, `regime_consistency`.
 - `top_sector_verdict`: the ticker you recommend as highest conviction from the proposed slate, OR `"FLAT"` if the best action is no sector exposure.
-- `alternative_sector`: a ticker from the universe NOT in the top-N proposed that you believe deserves consideration, OR null.
+- `alternative_sector`: a ticker from the universe NOT in the top-N proposed that you believe deserves consideration, OR null. **Pick ONLY from the ranked universe shown in the user message — do NOT invent tickers.** If no ETF in the slate qualifies, set to null.
 - `stage`: one of EARLY (first 1-2M of leadership), MID (3-6M, established trend), LATE (6M+, distribution risk), UNKNOWN.
 - `entry_tactic`: one of ALLOCATE_NOW, STAGGER_3_TRANCHES, WAIT_PULLBACK, WAIT_CONFIRMATION, HOLD_CASH.
 - `rebalance_horizon_weeks`: integer 2-12 — after how many weeks should this view be re-checked.
