@@ -725,6 +725,191 @@ with tab_mgmt:
                     "Valuta chiusura manuale (tab **Chiudi posizione** + Journal close)."
                 )
 
+        # ─── Per-position evolution chart ─────────────────────────────────
+        # Price history dall'entry_date + entry/stop/target hline + reconstructed
+        # trailing stop (rolling highest - atr_mult × ATR) per visualizzare se
+        # il trailing avrebbe protetto profit storicamente.
+        st.divider()
+        st.subheader("📈 Per-position evolution")
+        st.caption(
+            "Visualizza price history dall'entry_date + livelli (entry/stop/target) + "
+            "trailing stop ricostruito. Utile per capire ex-post se il trailing "
+            "avrebbe colpito o lasciato corsa."
+        )
+
+        sel_ticker = st.selectbox(
+            "Posizione", options=sorted(positions.keys()),
+            key="mgmt_evo_ticker",
+        )
+        if sel_ticker:
+            pos = positions[sel_ticker]
+            entry_date_str = pos.get("entry_date")
+            entry_price = float(pos.get("entry_price", 0))
+            cur_stop = float(pos.get("stop_loss", 0))
+            cur_target = pos.get("target")
+
+            if not entry_date_str:
+                st.info(f"{sel_ticker}: entry_date mancante, skip evolution chart.")
+            else:
+                from datetime import datetime as _dt
+
+                from propicks.config import ATR_PERIOD
+                from propicks.domain.indicators import compute_atr
+                from propicks.market.yfinance_client import (
+                    DataUnavailable,
+                    download_history,
+                )
+
+                try:
+                    hist = download_history(sel_ticker)
+                except DataUnavailable as err:
+                    st.error(f"{sel_ticker}: {err}")
+                    hist = None
+
+                if hist is not None and not hist.empty:
+                    try:
+                        entry_dt = _dt.strptime(entry_date_str, "%Y-%m-%d")
+                    except ValueError:
+                        entry_dt = None
+
+                    if entry_dt is not None:
+                        # Slice history dall'entry_date
+                        hist_index = hist.index
+                        if hasattr(hist_index, "tz_localize") and hist_index.tz is not None:
+                            hist = hist.tz_localize(None)
+                        hist_post = hist[hist.index >= entry_dt]
+                    else:
+                        hist_post = hist.tail(120)
+
+                    if len(hist_post) < 3:
+                        st.info(
+                            f"{sel_ticker}: storia post-entry insufficiente ({len(hist_post)} bar). "
+                            "Riprova tra qualche giorno di trading."
+                        )
+                    else:
+                        # Trailing stop ricostruito: max(entry - initial_risk,
+                        # rolling_highest - atr_mult × ATR), ratchet-up
+                        atr_mult = float(st.session_state.get("mgmt_atr_mult") or DEFAULT_TRAILING_ATR_MULT)
+                        atr = compute_atr(
+                            hist_post["High"], hist_post["Low"], hist_post["Close"],
+                            ATR_PERIOD,
+                        )
+                        rolling_high = hist_post["High"].cummax()
+                        initial_stop = cur_stop  # fallback se non si conosce stop iniziale
+                        # Activation: highest > entry + (entry - initial_stop)
+                        initial_risk = entry_price - initial_stop
+                        activation_threshold = entry_price + initial_risk
+
+                        trailing_recon = []
+                        running_stop = initial_stop
+                        for i, (idx, row) in enumerate(hist_post.iterrows()):
+                            highest_so_far = rolling_high.iloc[i]
+                            cur_atr = atr.iloc[i] if not (
+                                atr.iloc[i] != atr.iloc[i]  # NaN check
+                            ) else 0
+                            if highest_so_far >= activation_threshold and cur_atr > 0:
+                                proposed = highest_so_far - atr_mult * cur_atr
+                                running_stop = max(running_stop, proposed)
+                            trailing_recon.append(running_stop)
+
+                        import plotly.graph_objects as go
+                        fig_evo = go.Figure()
+
+                        # Price line
+                        fig_evo.add_trace(go.Scatter(
+                            x=hist_post.index, y=hist_post["Close"],
+                            mode="lines", name="Close",
+                            line=dict(color="#3b82f6", width=2),
+                            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Close %{y:.2f}<extra></extra>",
+                        ))
+
+                        # Rolling highest
+                        fig_evo.add_trace(go.Scatter(
+                            x=hist_post.index, y=rolling_high,
+                            mode="lines", name="Rolling highest",
+                            line=dict(color="#10b981", width=1, dash="dot"),
+                            hovertemplate="Highest %{y:.2f}<extra></extra>",
+                        ))
+
+                        # Trailing stop ricostruito
+                        fig_evo.add_trace(go.Scatter(
+                            x=hist_post.index, y=trailing_recon,
+                            mode="lines", name=f"Trailing stop ({atr_mult}×ATR)",
+                            line=dict(color="#f97316", width=1.5, dash="dash"),
+                            hovertemplate="Trailing %{y:.2f}<extra></extra>",
+                        ))
+
+                        # Hlines: entry, current stop, target
+                        fig_evo.add_hline(
+                            y=entry_price, line_color="#94a3b8", line_dash="solid",
+                            line_width=1, annotation_text=f"Entry {entry_price:.2f}",
+                            annotation_position="right",
+                        )
+                        fig_evo.add_hline(
+                            y=cur_stop, line_color="#dc2626", line_dash="solid",
+                            line_width=1, annotation_text=f"Stop {cur_stop:.2f}",
+                            annotation_position="right",
+                        )
+                        if cur_target:
+                            fig_evo.add_hline(
+                                y=float(cur_target), line_color="#16a34a", line_dash="solid",
+                                line_width=1, annotation_text=f"Target {cur_target:.2f}",
+                                annotation_position="right",
+                            )
+
+                        # Current price marker
+                        last_price = float(hist_post["Close"].iloc[-1])
+                        fig_evo.add_trace(go.Scatter(
+                            x=[hist_post.index[-1]], y=[last_price],
+                            mode="markers",
+                            marker=dict(color="#3b82f6", size=12, symbol="circle",
+                                        line=dict(color="white", width=2)),
+                            name=f"Current {last_price:.2f}",
+                            hovertemplate=f"Current {last_price:.2f}<extra></extra>",
+                        ))
+
+                        fig_evo.update_layout(
+                            title=dict(
+                                text=f"{sel_ticker} — entry {entry_date_str}",
+                                x=0.5, xanchor="center", font=dict(size=13),
+                            ),
+                            xaxis_title="", yaxis_title="Price",
+                            height=400, hovermode="x unified",
+                            margin=dict(l=20, r=20, t=50, b=20),
+                            legend=dict(orientation="h", yanchor="bottom",
+                                        y=1.0, xanchor="right", x=1.0),
+                        )
+                        st.plotly_chart(fig_evo, width="stretch")
+
+                        # Quick stats sotto il chart
+                        max_high = float(rolling_high.iloc[-1])
+                        pnl_pct_now = (last_price - entry_price) / entry_price * 100
+                        max_pnl_pct = (max_high - entry_price) / entry_price * 100
+                        days_held = (hist_post.index[-1] - hist_post.index[0]).days
+                        recon_stop_now = trailing_recon[-1]
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Days held", days_held)
+                        c2.metric("P&L now", f"{pnl_pct_now:+.2f}%")
+                        c3.metric("Max P&L (rolling high)", f"{max_pnl_pct:+.2f}%")
+                        c4.metric(
+                            "Recon trailing now",
+                            f"{recon_stop_now:.2f}",
+                            delta=f"vs current {cur_stop:.2f}",
+                            delta_color=("normal" if abs(recon_stop_now - cur_stop) < 0.01 else "inverse"),
+                        )
+                        if abs(recon_stop_now - cur_stop) > 0.01:
+                            if recon_stop_now > cur_stop:
+                                st.caption(
+                                    f"💡 Trailing ricostruito (€{recon_stop_now:.2f}) > stop corrente "
+                                    f"(€{cur_stop:.2f}): considera applicare trailing per proteggere profit."
+                                )
+                            else:
+                                st.caption(
+                                    f"ℹ️ Stop corrente (€{cur_stop:.2f}) più stretto del trailing "
+                                    f"ricostruito (€{recon_stop_now:.2f}) — stop manuale aggressivo OK."
+                                )
+
     st.divider()
     render_indicator_legend("portfolio")
 
