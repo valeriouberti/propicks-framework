@@ -1160,6 +1160,163 @@ def sonar_etf_validate_full(
     )
 
 
+_SONAR_THEMATIC_SCHEMA = {
+    "verdict": "CONFIRM | CAUTION | REJECT",
+    "conviction_score": "integer 0-10",
+    "thematic_summary": "string, 2-3 sentences naming the alpha-vs-parent thesis",
+    "theme_stage": "EARLY (3-6M) | MID (6-18M) | LATE (18M+) | UNKNOWN",
+    "alternative_ticker": "ticker from the constrained list provided OR null. MUST come from the same theme cohort.",
+    "bull_case": "string, falsifiable, with cited flow/holdings data",
+    "bear_case": "string, falsifiable",
+    "catalysts": ["list of strings, 2-4 items, concrete drivers in next 2-3 months"],
+    "crowding_read": "string, 1-2 sentences on AUM flows + positioning (last 30-60d)",
+    "concentration_read": "string, top 3-5 holdings as % of AUM + risk if mega-cap blow-up",
+    "entry_tactic": "ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH",
+    "time_horizon_weeks": "integer 4-26",
+    "alignment_with_parent": "STRONG | MIXED | CONTRADICTORY",
+    "confidence_by_dimension": {
+        "thematic_alpha": "integer 0-10 (RS-vs-parent durable, not noise)",
+        "crowding_flows": "integer 0-10 (positioning early vs stretched)",
+        "concentration_risk": "integer 0-10 (10=well diversified, 0=3-stock proxy)",
+    },
+    "invalidation_triggers": ["list of strings, 2-4 items, observable conditions"],
+    "sources": ["list of [source.com, YYYY-MM-DD] tuples cited"],
+}
+
+
+_SONAR_THEMATIC_SYSTEM = """You are a senior thematic / sub-industry investor
+(12+ years, long/short fund running thematic baskets). Your edge: separating
+genuine thematic alpha from leveraged-sector-bet camouflage (a thematic ETF
+that is just a higher-beta version of its parent GICS sector with no
+independent edge).
+
+The engine has produced a composite score combining RS-vs-parent (50%),
+abs momentum 3M (25%), trend (15%), parent regime fit (10%). It also kills
+composite to 0 if 60d correlation with parent ≥ 0.85 (alpha illusory).
+
+# Retrieval queries (priority — theme-specific, not generic):
+- Theme catalysts next 4-8 weeks (FDA decisions, defense procurement, NIS2
+  enforcement, semis capex cycle data, China stimulus, EV regulation).
+- Recent thematic ETF flows / AUM trends (last 30-60 days, Reuters fund
+  flows, ETF.com, justETF for UCITS).
+- Top 3-5 holdings concentration % of AUM — is theme genuinely diversified
+  or 3-stock proxy?
+- Sub-industry breadth: are most names in basket participating, or 2-3
+  mega-caps carrying the move?
+- Cross-asset signals specific to theme (lithium for EV, TSMC capex for
+  semis, XBI vs IBB spread for biotech).
+
+# Hard computable rules (apply mechanically):
+- IF correlation with parent ≥ 0.85 (engine flags `corr_kill_applied=True`)
+  → verdict = REJECT (alpha illusory, leveraged sector bet).
+- IF regime in {STRONG_BEAR} → verdict = REJECT.
+- IF regime == "BEAR" AND theme is NOT defensive-flavored (e.g. defense in
+  geopolitical bear) → verdict = REJECT.
+- IF theme_stage == "LATE" AND crowding_flows < 5 → verdict = CAUTION at most.
+- IF alternative_ticker is NOT in the constrained list provided → set to null.
+- CONFIRM requires: conviction >= 7 AND thematic_alpha >= 6 AND
+  crowding_flows >= 4 AND theme_stage in {EARLY, MID}.
+
+# Anti-fabrication:
+- Do NOT invent AUM numbers, holdings %, flow figures.
+- Do NOT invent ETF tickers — use only the analyzed ticker or those in the
+  alternative_ticker constrained list provided in the user message.
+- Use web_search or write "unknown — not found".
+
+# Output: see schema at top of message. Prosa breve + ---JSON--- + JSON."""
+
+
+def sonar_thematic_validate_full(
+    analysis: dict,
+    *,
+    candidates: list[dict] | None = None,
+    as_of_date: str | None = None,
+) -> str:
+    """Variante Sonar-native del thematic validate.
+
+    Aggiunge constraint esplicito su ``alternative_ticker``: lista vincolata
+    ai tematici dello stesso ``theme_label`` (escluso il ticker analizzato).
+    Razionale: per tematici l'alternative deve restare nello stesso cohort
+    (es. SMH alternative = SOXX/SMH.MI, non LOCK.MI). Senza vincolo Sonar
+    tende a confabulare ticker fantasma o uscire dal cohort tematico.
+
+    Args:
+        analysis: dict da ``analyze_theme``.
+        candidates: lista di tematici candidati per ``alternative_ticker``.
+            Tipicamente filtrato dal chiamante per stesso ``theme_label``
+            o ``parent_sector_key``. Se None, lo prompt non aggiunge
+            constraint e Sonar può mettere null.
+        as_of_date: ISO YYYY-MM-DD (default oggi).
+    """
+    from propicks.ai.thematic_prompts import render_thematic_user_prompt
+
+    today = _today_iso(as_of_date)
+    user_body = render_thematic_user_prompt(analysis, as_of_date=today)
+
+    ticker_now = analysis.get("ticker", "?").upper()
+    pool = [
+        c for c in (candidates or [])
+        if c.get("ticker", "").upper() != ticker_now
+    ]
+    if pool:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_TICKER — constrained list\n\n"
+            "For the ``alternative_ticker`` field in the schema, pick "
+            "EXCLUSIVELY from this list (or null):\n"
+            + "\n".join(
+                f"- {c['ticker']} ({c.get('theme_label', '?')}, "
+                f"parent {c.get('parent_ticker', '?')})"
+                for c in pool
+            )
+            + "\n\nDo NOT invent tickers. If none is a clear upgrade for "
+            "the same thematic exposure, set the field to null.\n"
+        )
+    else:
+        alt_constraint = (
+            "\n\n# ALTERNATIVE_TICKER\n\n"
+            "No same-cohort alternatives available. Set "
+            "``alternative_ticker`` = null.\n"
+        )
+
+    return (
+        _sonar_schema_block(_SONAR_THEMATIC_SCHEMA)
+        + _SONAR_HEADER
+        + "# SYSTEM\n\n" + _SONAR_THEMATIC_SYSTEM.rstrip() + "\n\n"
+        + "---\n\n"
+        + "# USER\n\n"
+        + f"Today is {today}.\n\n"
+        + user_body.rstrip()
+        + alt_constraint
+    )
+
+
+def llm_generic_thematic_validate_full(
+    analysis: dict, as_of_date: str | None = None
+) -> str:
+    """Prompt completo thematic ``--validate`` — fallback per LLM generici.
+
+    Target: Claude.ai web app, console Anthropic, ChatGPT, Gemini. System
+    prompt ``THEMATIC_SYSTEM_PROMPT`` byte-per-byte → compat piena con SDK
+    Anthropic. Schema strict (no ``---JSON---`` fallback).
+    """
+    from propicks.ai.claude_client import _THEMATIC_JSON_SCHEMA
+    from propicks.ai.thematic_prompts import (
+        THEMATIC_SYSTEM_PROMPT,
+        render_thematic_user_prompt,
+    )
+
+    today = _today_iso(as_of_date)
+    user = render_thematic_user_prompt(analysis, as_of_date=today)
+    schema_block = _SCHEMA_INSTRUCTION_STRICT.format(
+        schema=_format_schema_block(_THEMATIC_JSON_SCHEMA)
+    )
+    return (
+        _LLM_GENERIC_HEADER
+        + "# SYSTEM\n\n" + THEMATIC_SYSTEM_PROMPT.rstrip() + "\n\n"
+        + "# USER\n\n" + user.rstrip() + schema_block
+    )
+
+
 # ---------------------------------------------------------------------------
 # Backwards-compat aliases (deprecati, da rimuovere in prossima major release)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,270 @@
+// ============================================================================
+// AI TRADING SYSTEM — Thematic Signal Engine v1.0
+// ============================================================================
+// Timeframe: WEEKLY (preferred) o DAILY
+// Scopo: Scoring Thematic ETF (sub-industry / cross-sector tilt) — replica
+//        src/propicks/domain/thematic_scoring.py.
+//
+// Va piazzato sul ticker tematico (es. SMH, XBI, LOCK.MI) configurando il
+// PARENT sector ETF nei parametri. La metrica chiave è RS-vs-parent: è
+// l'unica che discrimina alfa tematico genuino da leveraged sector bet.
+//
+//   composite = RS_vs_parent*50% + abs_momentum*25% + trend*15% + parent_regime_fit*10%
+//
+// COME USARLO:
+// 1. Apri chart del thematic ETF (es. SMH) sul timeframe WEEKLY
+// 2. Configura il "Parent Symbol":
+//    - SMH/SOXX/CIBR/BUG/BOTZ → XLK
+//    - XBI/IBB                → XLV
+//    - ROBO/XAR/ITA           → XLI
+//    - ICLN/TAN               → XLE
+//    - KWEB                   → XLC
+//    - LOCK.MI / SMH.MI / XAIX.MI / WCLD.MI / DGTL.MI → XDWT.MI o XDWT.DE
+//    - RBOT.MI / DFND.MI / BATT.MI                    → XDWI.MI o XDWI.DE
+//    - IH2O.MI / NUCL.MI / INRG.MI                    → XDWU.MI o XDWU.DE
+//    - GNOM.MI / HEAL.MI / SBIO.MI                    → XDWH.MI o XDWH.DE
+//    - IS0D.MI                                        → XDW0.MI o XDW0.DE
+//    - BNKE.MI / DPAY.MI                              → XDWF.MI o XDWF.DE
+//    - REMX.MI                                        → XDWM.MI o XDWM.DE
+// 3. Configura "Parent Sector Key" per regime_fit lookup
+// 4. Imposta "Macro Benchmark" (default SPX — per regime classifier)
+// 5. Lo script mostra:
+//    - RS line theme/parent (subplot panel)
+//    - Composite score 0-100 (panel)
+//    - Stop -10% (line)
+//    - Background bias verde/rosso da composite
+//    - Warning ⚠CORR se corr 60d >= 0.85 (alfa illusorio, kill switch)
+//
+// ─── CONTRATTO CON MOTORE PYTHON ───────────────────────────────────────────
+// Default allineati a src/propicks/config.py:
+//   THEMATIC_RS_LOOKBACK_WEEKS=26, THEMATIC_RS_EMA_WEEKS=10,
+//   THEMATIC_MOMENTUM_LOOKBACK_DAYS=63, REGIME_WEEKLY_EMA_SLOW=30,
+//   THEMATIC_WEIGHT_RS_VS_PARENT=0.50, THEMATIC_WEIGHT_ABS_MOMENTUM=0.25,
+//   THEMATIC_WEIGHT_TREND=0.15, THEMATIC_WEIGHT_PARENT_REGIME_FIT=0.10,
+//   THEMATIC_SCORE_OVERWEIGHT=70, THEMATIC_SCORE_HOLD=55, THEMATIC_SCORE_NEUTRAL=40,
+//   THEMATIC_STOP_LOSS_PCT=0.10, THEMATIC_CORR_KILL_THRESHOLD=0.85,
+//   THEMATIC_CORR_LOOKBACK_DAYS=60, REGIME_FAVORED_SECTORS.
+//
+// Gate regime: STRONG_BEAR(1)→0, BEAR(2)→cap 40 (no overweight tematico in bear).
+// Kill switch: corr_60d(theme, parent) >= 0.85 → composite forzato a 0.
+// ============================================================================
+
+//@version=6
+indicator("AI Trading System — Thematic Signal", overlay=true, max_labels_count=30, max_lines_count=20)
+
+// ─── INPUTS ─────────────────────────────────────────────────────────────────
+
+parentSym  = input.symbol("AMEX:XLK", "Parent Sector ETF",
+     group="Parent",
+     tooltip="Parent sector ETF (XLK, XLV, XLI, XLE, XDWT.DE, ...). RS calcolato vs questo, NON vs benchmark broad.")
+
+macroBench = input.symbol("SPX", "Macro Benchmark (regime)",
+     group="Regime",
+     tooltip="Benchmark per regime classifier (^GSPC tipicamente)")
+
+parentSectorKey = input.string("technology", "Parent Sector Key", options=[
+     "technology", "financials", "energy", "healthcare", "industrials",
+     "consumer_discretionary", "consumer_staples", "utilities",
+     "real_estate", "materials", "communications", "unknown"
+     ], group="Parent",
+     tooltip="GICS sector_key del parent — pilota REGIME_FAVORED_SECTORS lookup")
+
+// RS vs parent
+rsLookback = input.int(26, "RS Lookback (weeks)", minval=8, maxval=52, group="RS")
+rsEmaSpan  = input.int(10, "RS Slope window (weeks)", minval=4, maxval=26, group="RS")
+
+// Correlation kill switch
+corrLook   = input.int(60, "Corr lookback (days)", minval=20, maxval=120, group="Corr",
+     tooltip="60d correlation theme/parent. Se >= threshold → composite=0 (alfa illusorio)")
+corrKill   = input.float(0.85, "Corr kill threshold", minval=0.5, maxval=0.99, step=0.01, group="Corr")
+
+// Momentum + trend
+momLookback = input.int(63, "Momentum lookback (days)", minval=20, maxval=126, group="Momentum")
+emaSlowLen  = input.int(30, "EMA Slow (weekly)", minval=10, maxval=52, group="Trend")
+
+// Regime classifier
+emaFastLenW = input.int(10, "Regime EMA Fast (weeks)", group="Regime")
+ema200dLenW = input.int(40, "Regime EMA 200d-equiv (weeks)", group="Regime")
+adxStrong   = input.float(25.0, "ADX Strong threshold", group="Regime")
+
+// Stop & weights
+stopPct     = input.float(10.0, "Thematic Stop Loss %", minval=5.0, maxval=20.0, step=0.5, group="Risk")
+
+wRS         = input.float(0.50, "Weight RS-vs-parent", minval=0, maxval=1, step=0.05, group="Weights")
+wAbsMom     = input.float(0.25, "Weight Abs Momentum", minval=0, maxval=1, step=0.05, group="Weights")
+wTrend      = input.float(0.15, "Weight Trend", minval=0, maxval=1, step=0.05, group="Weights")
+wParentFit  = input.float(0.10, "Weight Parent Regime Fit", minval=0, maxval=1, step=0.05, group="Weights")
+
+// Display
+showEMA     = input.bool(true, "Show EMA Slow", group="Display")
+showStop    = input.bool(true, "Show Stop Level", group="Display")
+showPanel   = input.bool(true, "Show Score Panel", group="Display")
+showBG      = input.bool(true, "Show Background", group="Display")
+
+
+// ─── SERIES (theme + parent + macro benchmark) ──────────────────────────────
+
+weeklyTF    = "W"
+
+// Theme weekly + daily
+themeW      = request.security(syminfo.tickerid, weeklyTF, close, lookahead=barmerge.lookahead_off)
+themeD      = close
+
+// Parent weekly + daily
+parentW     = request.security(parentSym, weeklyTF, close, lookahead=barmerge.lookahead_off)
+parentD     = request.security(parentSym, timeframe.period, close, lookahead=barmerge.lookahead_off)
+
+// Macro benchmark weekly (regime)
+benchWClose = request.security(macroBench, weeklyTF, close, lookahead=barmerge.lookahead_off)
+benchWHigh  = request.security(macroBench, weeklyTF, high,  lookahead=barmerge.lookahead_off)
+benchWLow   = request.security(macroBench, weeklyTF, low,   lookahead=barmerge.lookahead_off)
+
+
+// ─── SCORE 1/4 — RS-vs-parent (peso 50%) ────────────────────────────────────
+
+rsRatioRaw = themeW / parentW
+rsBase     = rsRatioRaw[rsLookback]
+rsNorm     = rsBase > 0 ? rsRatioRaw / rsBase : 1.0
+rsRatio    = rsNorm
+rsPast     = rsNorm[rsEmaSpan]
+rsSlope    = (rsRatio - rsPast) / rsEmaSpan
+
+rsBars     = rsLookback + 3 * rsEmaSpan
+rsWarmOk   = bar_index >= rsBars
+
+scoreRS = not rsWarmOk ? 50.0 : rsRatio >= 1.05 and rsSlope > 0 ? 100.0 : rsRatio >= 1.02 and rsSlope > 0 ? 85.0 : rsRatio >= 1.0 and rsSlope > 0 ? 70.0 : rsRatio >= 1.0 ? 55.0 : rsRatio >= 0.95 and rsSlope > 0 ? 45.0 : rsRatio >= 0.95 ? 25.0 : rsSlope > 0 ? 20.0 : 10.0
+
+
+// ─── SCORE 2/4 — Abs momentum 3M (peso 25%) ─────────────────────────────────
+mom = (themeD - themeD[momLookback]) / themeD[momLookback]
+scoreMom = mom >= 0.15 ? 100.0 : mom >= 0.08 ? 80.0 : mom >= 0.03 ? 60.0 : mom >= 0.0 ? 40.0 : mom >= -0.05 ? 25.0 : 10.0
+
+
+// ─── SCORE 3/4 — Trend EMA30w (peso 15%) ────────────────────────────────────
+emaSlow = ta.ema(themeW, emaSlowLen)
+emaPrev = emaSlow[4]
+emaSlope = emaPrev > 0 ? (emaSlow - emaPrev) / emaPrev : 0.0
+above   = themeW > emaSlow
+rising  = emaSlope > 0.005
+flat    = emaSlope >= -0.005 and emaSlope <= 0.005
+
+scoreTrend = above and rising ? 100.0 : above and flat ? 75.0 : above ? 55.0 : rising ? 35.0 : 10.0
+
+
+// ─── SCORE 4/4 — Parent regime fit (peso 10%) ──────────────────────────────
+// Classifica regime weekly su macro benchmark (mirror di domain.regime).
+
+bEmaFast = ta.ema(benchWClose, emaFastLenW)
+bEmaSlow = ta.ema(benchWClose, emaSlowLen)
+bEma200  = ta.ema(benchWClose, ema200dLenW)
+bRsi     = ta.rsi(benchWClose, 14)
+
+// ADX semplificato weekly
+upMove   = benchWHigh - benchWHigh[1]
+downMove = benchWLow[1] - benchWLow
+plusDM   = upMove > downMove and upMove > 0 ? upMove : 0.0
+minusDM  = downMove > upMove and downMove > 0 ? downMove : 0.0
+trWeekly = math.max(benchWHigh - benchWLow, math.max(math.abs(benchWHigh - benchWClose[1]), math.abs(benchWLow - benchWClose[1])))
+atrW     = ta.rma(trWeekly, 14)
+plusDI   = 100 * ta.rma(plusDM, 14) / atrW
+minusDI  = 100 * ta.rma(minusDM, 14) / atrW
+dx       = math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
+adxW     = ta.rma(dx, 14)
+
+// Regime code (5=STRONG_BULL, 1=STRONG_BEAR) — semplificato
+trendStrong  = adxW >= adxStrong
+priceAbove200 = benchWClose > bEma200
+emaStack     = bEmaFast > bEmaSlow and bEmaSlow > bEma200
+emaStackBear = bEmaFast < bEmaSlow and bEmaSlow < bEma200
+
+regimeCode = priceAbove200 and emaStack and trendStrong ? 5 : priceAbove200 and emaStack ? 4 : priceAbove200 ? 3 : emaStackBear and trendStrong ? 1 : 2
+
+// REGIME_FAVORED_SECTORS lookup (mirror config.py)
+favoredInRegime(sec, code) =>
+    code == 5 ? (sec == "technology" or sec == "consumer_discretionary" or sec == "communications" or sec == "financials" or sec == "industrials") : code == 4 ? (sec == "technology" or sec == "consumer_discretionary" or sec == "industrials" or sec == "materials" or sec == "financials") : code == 3 ? (sec == "healthcare" or sec == "industrials" or sec == "financials" or sec == "technology") : code == 2 ? (sec == "consumer_staples" or sec == "utilities" or sec == "healthcare") : code == 1 ? (sec == "consumer_staples" or sec == "utilities") : false
+
+isFavored    = favoredInRegime(parentSectorKey, regimeCode)
+adjFavoredUp = favoredInRegime(parentSectorKey, regimeCode + 1)
+adjFavoredDn = favoredInRegime(parentSectorKey, regimeCode - 1)
+
+scoreParentFit = isFavored ? 100.0 : (adjFavoredUp or adjFavoredDn) ? 60.0 : 20.0
+
+
+// ─── CORRELATION KILL SWITCH ────────────────────────────────────────────────
+// 60d daily-returns correlation theme/parent. Se >= corrKill → kill score.
+themeRet  = ta.change(themeD)
+parentRet = ta.change(parentD)
+correl    = ta.correlation(themeRet, parentRet, corrLook)
+killTriggered = not na(correl) and correl >= corrKill
+
+
+// ─── COMPOSITE + REGIME GATE ────────────────────────────────────────────────
+compositeRaw = scoreRS * wRS + scoreMom * wAbsMom + scoreTrend * wTrend + scoreParentFit * wParentFit
+compositeRaw := math.max(0.0, math.min(100.0, compositeRaw))
+
+compositePostCorr = killTriggered ? 0.0 : compositeRaw
+
+// Regime gate: STRONG_BEAR → 0, BEAR → cap 40
+compositeFinal = regimeCode == 1 ? 0.0 : regimeCode == 2 ? math.min(compositePostCorr, 40.0) : compositePostCorr
+
+
+// ─── CLASSIFICAZIONE ────────────────────────────────────────────────────────
+classLabel = compositeFinal >= 70 ? "A — OVERWEIGHT" : compositeFinal >= 55 ? "B — HOLD" : compositeFinal >= 40 ? "C — NEUTRAL" : "D — AVOID"
+
+
+// ─── PLOTS ──────────────────────────────────────────────────────────────────
+plot(showEMA ? emaSlow : na, "EMA30w", color=color.new(color.orange, 0))
+stopLevel = themeD * (1 - stopPct / 100)
+plot(showStop ? stopLevel : na, "Stop -10%", color=color.new(color.red, 0), style=plot.style_linebr)
+
+bgColor = compositeFinal >= 70 ? color.new(color.green, 88) : compositeFinal >= 55 ? color.new(color.lime, 92) : compositeFinal < 40 ? color.new(color.red, 88) : na
+bgcolor(showBG ? bgColor : na)
+
+
+// ─── PANEL ──────────────────────────────────────────────────────────────────
+if showPanel and barstate.islast
+    var table panel = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+    table.cell(panel, 0, 0, "Thematic Signal",  text_color=color.white, bgcolor=color.new(color.blue, 50))
+    table.cell(panel, 1, 0, syminfo.ticker,     text_color=color.white, bgcolor=color.new(color.blue, 50))
+
+    table.cell(panel, 0, 1, "Parent",           text_color=color.silver)
+    table.cell(panel, 1, 1, parentSectorKey,    text_color=color.white)
+
+    table.cell(panel, 0, 2, "Regime",           text_color=color.silver)
+    table.cell(panel, 1, 2, str.tostring(regimeCode) + "/5", text_color=color.white)
+
+    table.cell(panel, 0, 3, "RS-vs-parent (50%)", text_color=color.silver)
+    table.cell(panel, 1, 3, str.tostring(scoreRS, "#"),       text_color=color.white)
+
+    table.cell(panel, 0, 4, "Abs Mom (25%)",     text_color=color.silver)
+    table.cell(panel, 1, 4, str.tostring(scoreMom, "#"),      text_color=color.white)
+
+    table.cell(panel, 0, 5, "Trend (15%)",       text_color=color.silver)
+    table.cell(panel, 1, 5, str.tostring(scoreTrend, "#"),    text_color=color.white)
+
+    table.cell(panel, 0, 6, "Parent Fit (10%)",  text_color=color.silver)
+    table.cell(panel, 1, 6, str.tostring(scoreParentFit, "#"),text_color=color.white)
+
+    table.cell(panel, 0, 7, "Corr 60d",          text_color=color.silver)
+    corrTxt = na(correl) ? "n/a" : str.tostring(correl, "0.00")
+    corrColor = killTriggered ? color.red : color.white
+    table.cell(panel, 1, 7, corrTxt + (killTriggered ? " ⚠KILL" : ""), text_color=corrColor)
+
+    table.cell(panel, 0, 8, "RS ratio",          text_color=color.silver)
+    table.cell(panel, 1, 8, str.tostring(rsRatio, "0.000"),    text_color=color.white)
+
+    table.cell(panel, 0, 9, "Composite RAW",     text_color=color.silver)
+    table.cell(panel, 1, 9, str.tostring(compositeRaw, "#.#"),text_color=color.white)
+
+    table.cell(panel, 0, 10, "Composite FINAL",   text_color=color.silver)
+    finColor = compositeFinal >= 70 ? color.green : compositeFinal >= 55 ? color.lime : compositeFinal < 40 ? color.red : color.yellow
+    table.cell(panel, 1, 10, str.tostring(compositeFinal, "#.#"), text_color=finColor)
+
+    table.cell(panel, 0, 11, "Class",             text_color=color.silver)
+    table.cell(panel, 1, 11, classLabel,          text_color=finColor)
+
+
+// ─── ALERTS ─────────────────────────────────────────────────────────────────
+alertcondition(ta.crossover(compositeFinal, 70),  "OVERWEIGHT crossover", "Composite ≥ 70 (A — OVERWEIGHT)")
+alertcondition(ta.crossunder(compositeFinal, 40), "AVOID crossunder",      "Composite < 40 (D — AVOID)")
+alertcondition(killTriggered and not killTriggered[1], "Corr kill triggered", "Correlation kill switch (corr ≥ 0.85)")

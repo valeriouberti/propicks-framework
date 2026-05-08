@@ -30,18 +30,25 @@ src/propicks/dashboard/
 ├── launcher.py               # Entry point propicks-dashboard
 ├── cadence.py                # Helper countdown/markup per stato job scheduler
 └── pages/
-    ├── 1_Momentum.py
-    ├── 2_ETF_Rotation.py
-    ├── 3_Portfolio.py
-    ├── 4_Journal.py
-    ├── 5_Reports.py
-    ├── 6_Backtest.py
-    ├── 7_Watchlist.py
-    ├── 8_Contrarian.py
-    ├── 9_Calendar.py
-    ├── 10_Scheduler.py
-    └── 11_Backtest_Portfolio.py
+    ├── 1_Momentum.py              # Strategie
+    ├── 2_ETF_Rotation.py          # Strategie
+    ├── 3_Contrarian.py            # Strategie
+    ├── 4_Thematic.py              # Strategie
+    ├── 5_Backtest.py              # Backtest
+    ├── 6_Backtest_Portfolio.py    # Backtest
+    ├── 7_Calibration.py           # Backtest analytics (DSR + CPCV)
+    ├── 8_Portfolio.py             # Operativo
+    ├── 9_Journal.py               # Operativo
+    ├── 10_Reports.py              # Operativo
+    ├── 11_Watchlist.py            # Operativo
+    ├── 12_Calendar.py             # Operativo
+    ├── 13_Regime_Composite.py     # Diagnostics
+    └── 14_Decay_Monitor.py        # Diagnostics
 ```
+
+**Ordine sidebar** (Streamlit usa il prefisso numerico): strategie in cima
+(1-4), backtest cluster (5-7), operativo (8-12), diagnostics (13-14).
+Lo scheduler resta CLI-only (`propicks-scheduler`) — niente page dashboard.
 
 Le page sono **thin** come la CLI: parsing input UI + chiamata a domain/io/ai +
 formatting tabellare via `st.dataframe`/`st.metric`. **Nessuna logica di business**
@@ -123,7 +130,7 @@ Output:
 
 ---
 
-## 3. Portfolio — `pages/3_Portfolio.py`
+## 8. Portfolio — `pages/8_Portfolio.py`
 
 **Trade lifecycle completo** in tab.
 
@@ -155,7 +162,7 @@ CLI equivalente: `propicks-portfolio risk`.
 
 ---
 
-## 4. Journal — `pages/4_Journal.py`
+## 9. Journal — `pages/9_Journal.py`
 
 **Storico trade append-only** (= [`propicks-journal`](CLI_REFERENCE.md#propicks-journal)).
 
@@ -176,7 +183,7 @@ Action:
 
 ---
 
-## 5. Reports — `pages/5_Reports.py`
+## 10. Reports — `pages/10_Reports.py`
 
 **Genera + visualizza markdown reports**.
 
@@ -192,7 +199,7 @@ Archivio:
 
 ---
 
-## 6. Backtest — `pages/6_Backtest.py`
+## 5. Backtest — `pages/5_Backtest.py`
 
 **Backtest single-ticker** (= [`propicks-backtest`](CLI_REFERENCE.md#propicks-backtest)).
 
@@ -210,7 +217,7 @@ Output:
 
 ---
 
-## 11. Backtest Portfolio — `pages/11_Backtest_Portfolio.py`
+## 6. Backtest Portfolio — `pages/6_Backtest_Portfolio.py`
 
 **Backtest multi-ticker portfolio** + Monte Carlo.
 
@@ -228,7 +235,7 @@ Output:
 
 ---
 
-## 7. Watchlist — `pages/7_Watchlist.py`
+## 11. Watchlist — `pages/11_Watchlist.py`
 
 **Idee in incubazione** (= [`propicks-watchlist`](CLI_REFERENCE.md#propicks-watchlist)).
 
@@ -244,7 +251,7 @@ Action:
 
 ---
 
-## 8. Contrarian — `pages/8_Contrarian.py`
+## 3. Contrarian — `pages/3_Contrarian.py`
 
 **Mean reversion screener** (= [`propicks-contra`](CLI_REFERENCE.md#propicks-contra)).
 
@@ -267,7 +274,7 @@ Output: ranked list con expander per dettaglio + AI verdict flush-vs-break.
 
 ---
 
-## 9. Calendar — `pages/9_Calendar.py`
+## 12. Calendar — `pages/12_Calendar.py`
 
 **Earnings + macro events**.
 
@@ -286,23 +293,59 @@ Tab "Check ticker":
 
 ---
 
-## 10. Scheduler — `pages/10_Scheduler.py`
+## 4. Thematic ETF — `pages/4_Thematic.py`
 
-**APScheduler EOD jobs + alert queue** (= [`propicks-scheduler`](CLI_REFERENCE.md#propicks-scheduler)).
+**Scoring tematici sub-industry** (= [`propicks-themes`](CLI_REFERENCE.md#propicks-themes)).
 
-Tab "Status":
-- Job list con next-run countdown (cadence helper in `cadence.py`)
-- Last run timestamp + duration + outcome (ok/error)
-- "Run now" buttons per job (= `scheduler job <name>`)
+Mode:
+- **Ranking universo**: scora tutto `THEMATIC_ETFS` filtrato per region/theme
+- **Singolo ticker**: analizza un solo tematico (es. LOCK.MI)
 
-Tab "History":
-- Storico esecuzioni ultimi 7gg
-- Filter per job name + status
+Inputs:
+- Region: ALL / US / WORLD (parent SPDR vs Xtrackers MSCI World .MI)
+- Filtro theme_label opzionale (cybersecurity, biotech, semiconductors, ...)
+- Validate (Claude) + Force toggle
 
-Tab "Alerts":
-- Coda alert pending con severity / ticker / message / age
-- Bulk ack / single ack
-- Stats: delivered / muted / failed last 24h
+Output:
+- Tabella ranking con composite + 4 sub-score (RS-vs-P 50% / Abs mom 25% /
+  Trend 15% / Parent regime fit 10%) + Corr 60d con parent + flag ⚠ CORR-KILL
+  / ⚠ REGIME-GATE
+- Top pick: 4 metric (composite/class/theme/parent) + 4 sub-score +
+  4 gate row (corr / corr-kill / regime-gate / stop -10%)
+- Watchlist quick-add (source="thematic")
+- AI verdict Claude con summary, alternative_ticker (validato vs THEMATIC_ETFS),
+  theme_stage, catalysts, crowding/concentration read, bull/bear case
+- Expander prompt --validate con selettore Sonar / LLM diretto
+  (constraint alternative_ticker = same-cohort candidates)
+
+Vedi [`THEMATIC_STRATEGY.md`](THEMATIC_STRATEGY.md) per scoring + invarianti.
+
+---
+
+## 7. Calibration — `pages/7_Calibration.py`
+
+**Threshold calibration con DSR + CPCV** (= [`propicks-calibrate`](CLI_REFERENCE.md#propicks-calibrate)).
+
+Sweep multi-threshold con Bailey-Lopez 2014 Deflated Sharpe Ratio + Lopez de
+Prado Combinatorial Purged Cross-Validation. Output: per-threshold IS/OOS
+Sharpe, DSR, raccomandazione threshold ottimale. Vedi
+[`THRESHOLD_CALIBRATION.md`](THRESHOLD_CALIBRATION.md).
+
+---
+
+## 13. Regime Composite — `pages/13_Regime_Composite.py`
+
+**Regime daily composite** (Fase B.3): HY OAS + breadth + VIX z-score.
+Diagnostics-only — il regime weekly su `^GSPC` resta il gate ufficiale per
+entry. Vedi [`REGIME_COMPOSITE.md`](REGIME_COMPOSITE.md).
+
+---
+
+## 14. Decay Monitor — `pages/14_Decay_Monitor.py`
+
+**Strategy decay framework** (Fase D.4): rolling Sharpe + CUSUM (Page 1954) +
+SPRT (Wald 1945) per detectare degrade strategia post-deployment. Vedi
+[`DECAY_MONITOR.md`](DECAY_MONITOR.md).
 
 ---
 

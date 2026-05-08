@@ -47,6 +47,20 @@ def cached_rank(region: str) -> list[dict]:
     return rank_universe(region=region)  # type: ignore[arg-type]
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_thematic_rank(region: str, theme_label: str | None) -> list[dict]:
+    """Ranking universo Thematic ETF. TTL 5min."""
+    from propicks.domain.thematic_scoring import rank_universe as theme_rank
+    return theme_rank(region=region, theme_label=theme_label)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_thematic_analyze(ticker: str) -> dict | None:
+    """Singolo Thematic ETF — RS-vs-parent + corr + composite. TTL 5min."""
+    from propicks.domain.thematic_scoring import analyze_theme
+    return analyze_theme(ticker)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_current_prices(tickers: tuple[str, ...]) -> dict[str, float]:
     """Prezzi spot per mark-to-market. TTL 1min. Tuple in input perché list non è hashable."""
@@ -369,6 +383,43 @@ INDICATOR_HELP_ETF: dict[str, str] = {
     ),
 }
 
+INDICATOR_HELP_THEMATIC: dict[str, str] = {
+    "score_composite": (
+        "Score 0-100 pesato: RS-vs-parent 50% + abs momentum 25% + "
+        "trend 15% + parent regime fit 10%. Forzato a 0 da corr-kill (≥0.85) "
+        "o regime gate (STRONG_BEAR=0, BEAR=cap 40)."
+    ),
+    "classification": (
+        "A OVERWEIGHT (≥70) · B HOLD (55-69) · C NEUTRAL (40-54) · D AVOID (<40)."
+    ),
+    "theme_label": "Etichetta sub-industry (semis, biotech, cybersec, ...).",
+    "parent_ticker": (
+        "Parent sector ETF di riferimento per RS. NON il broad benchmark — "
+        "discrimina alfa tematico genuino vs leveraged sector bet."
+    ),
+    "rs_vs_parent": (
+        "RS theme/parent — 50% del composite. Sub-score level × slope. "
+        "Theme batte parent in accelerazione=100, lagger=10. È l'unica metrica "
+        "che separa alfa tematico da beta-leveraged sector trade."
+    ),
+    "abs_momentum": "Momentum assoluto 3M (63d) — 25% del composite.",
+    "trend": (
+        "Trend price vs EMA30 weekly + slope EMA 4w — 15% del composite."
+    ),
+    "parent_regime_fit": (
+        "Regime fit del PARENT sector — 10% del composite. Tematico eredita "
+        "regime fit dal parent (sub-industry non mappa GICS direttamente)."
+    ),
+    "corr_60d": (
+        "Correlation 60d daily-returns con parent. Se ≥0.85 → kill switch: "
+        "composite forzato a 0 (alfa illusorio, è solo leverage del parent)."
+    ),
+    "corr_kill": "✓ = correlation kill triggered (corr ≥ 0.85).",
+    "regime_gate": "✓ = regime gate triggered (STRONG_BEAR=0 / BEAR=cap 40).",
+    "perf_3m": "Performance assoluta 3 mesi.",
+}
+
+
 INDICATOR_HELP_STOCK: dict[str, str] = {
     "score": (
         "Score tecnico 0-100: trend 25% + momentum 20% + volume 15% + "
@@ -606,6 +657,65 @@ Entry long abilitato da NEUTRAL in su.
 
 **Stop suggerito** = livello calcolato dal motore (struttura + ATR),
 da copiare nei settings del Pine script daily come `stop_suggest`.
+"""
+            )
+    elif scope == "thematic":
+        with st.expander("ℹ️ Legenda indicatori Thematic ETF", expanded=False):
+            st.markdown(
+                """
+**Composite score (0-100)** — somma pesata di 4 sub-score:
+
+| Pilastro | Peso | Cosa misura |
+|----------|------|-------------|
+| **RS-vs-parent** | 50% | Alfa tematico: theme batte il parent sector ETF? |
+| **Abs momentum** | 25% | Performance assoluta 3M (63d) |
+| **Trend** | 15% | Price vs EMA30 weekly + slope EMA 4w |
+| **Parent regime fit** | 10% | Regime fit del parent sector (lookup REGIME_FAVORED_SECTORS) |
+
+**RS-vs-parent** — `close(theme)/close(parent)` normalizzato 26w + slope
+EMA(10w). Reference è il PARENT sector ETF (XLK per SMH, XLV per XBI,
+XDWT.MI per LOCK.MI), NON il broad benchmark. Discrimina alfa tematico
+genuino da leveraged sector bet camuffato.
+
+| Condizione RS-vs-parent | Score |
+|-------------------------|-------|
+| RS ≥1.05 & slope positiva (alfa accelerando) | 100 |
+| RS ≥1.0 & slope positiva | 70 |
+| RS ≥1.0 & slope negativa (alfa stanco) | 55 |
+| RS <1.0 & slope positiva (recupero) | 45 |
+| RS <1.0 & slope negativa (lagger / leverage parent) | 10-20 |
+
+**Correlation kill-switch** — `corr_60d(theme, parent) ≥ 0.85`:
+**composite forzato a 0**. Razionale: a quella correlazione il tematico
+non porta alfa proprio, è solo concentration più alta del parent.
+Comprare a corr 0.92 è leverage 1.3× del parent, no edge.
+
+**Regime gate**:
+- **STRONG_BEAR (1)** → composite forzato a 0 (no tematici growth in crash)
+- **BEAR (2)** → composite cap a 40 (max class C NEUTRAL)
+- **NEUTRAL+ (3-5)** → pass-through
+
+**Classification**:
+
+| Class | Score | Azione |
+|-------|-------|--------|
+| **A** OVERWEIGHT | ≥70 | Top pick — alfa tematico durable, allocate |
+| **B** HOLD | 55-69 | Mantieni se già in portfolio |
+| **C** NEUTRAL | 40-54 | Skip per nuove allocazioni |
+| **D** AVOID | <40 | Evita — alfa illusorio o setup rotto |
+
+**Bucket constraint**:
+- Max **2** tematici aperti simultanei
+- Max **15%** size per posizione
+- Stop hard **10%** (ATR% tematici tipicamente più alto del momentum 8%)
+- Cap aggregato `weight(theme) + weight(parent_ETF) ≤ 25%` — evita doppio bet camuffato
+
+**Universo** (`config.THEMATIC_ETFS`):
+- US listing (parent SPDR Select Sector): SMH, SOXX, CIBR, BUG, XBI, IBB, ROBO, BOTZ, ICLN, TAN, XAR, ITA, KWEB
+- Borsa Italiana .MI (parent Xtrackers MSCI World `.MI`):
+  XAIX/SMH/LOCK/WCLD/DGTL.MI (tech), DFND/RBOT/BATT.MI (industrials),
+  IH2O/NUCL/INRG.MI (utilities), GNOM/HEAL/SBIO.MI (healthcare),
+  IS0D.MI (energy), BNKE/DPAY.MI (financials), REMX.MI (materials)
 """
             )
     elif scope == "portfolio":

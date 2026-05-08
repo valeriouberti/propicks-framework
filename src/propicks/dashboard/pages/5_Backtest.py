@@ -31,6 +31,64 @@ page_header(
 )
 invariants_note()
 
+# ─── Compatibility banner ──────────────────────────────────────────────────
+st.warning(
+    "⚠️ **Strategia supportata: SOLO Momentum.** Il backtest engine usa "
+    "`domain.scoring.analyze_ticker` (formula 6 sub-score momentum). "
+    "Contrarian / ETF Rotation / Thematic NON sono supportate qui — il loro "
+    "scoring engine ha logica diversa (oversold + quality, RS-vs-benchmark, "
+    "RS-vs-parent) non integrata. Per validare contrarian usa CLI "
+    "`propicks-contra --discover-*` su periodo lungo + analisi journal manuale.",
+    icon="⚠️",
+)
+
+# ─── Cosa fa, in 3 righe ──────────────────────────────────────────────────
+with st.expander("📖 Come funziona (in 3 righe)", expanded=False):
+    st.markdown(
+        """
+**Come funziona**:
+1. Scarica storia daily del ticker e calcola lo score momentum per ogni barra.
+2. Quando lo score supera la **threshold**, simula un'entry long con stop e
+   target ancorati all'ATR (volatilità) e un time-stop.
+3. Chiude su stop / target / time-stop, registra ogni trade e calcola
+   metriche aggregate (win rate, profit factor, Sharpe, drawdown).
+
+**Quando usarla**:
+- Vuoi vedere se un singolo ticker (o pochi) avrebbe dato P&L positivo
+  applicando la formula momentum su 1-10 anni di storia.
+- Vuoi calibrare una threshold (60 vs 70 vs 75) e vedere cosa cambia.
+- **Non è un portfolio test**: niente cross-ticker, niente capital constraint,
+  niente correlation. Per quello → page *Backtest Portfolio*.
+
+**Workflow tipico**:
+1. Inserisci 3-5 ticker liquidi diversi (no penny stock).
+2. Periodo `5y` (default), threshold `60` (default).
+3. Premi *Esegui backtest*, leggi win rate + profit factor + drawdown.
+4. Se profit factor < 1.3 o drawdown > 30%: setup non utilizzabile sui
+   ticker scelti. Cambia threshold o ticker, NON tunare ATR.
+"""
+    )
+
+with st.expander("🎛️ Parametri — cosa fanno e come sceglierli", expanded=False):
+    st.markdown(
+        """
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Tickers** | Ticker da testare (1 alla volta o batch). Ogni ticker è simulato isolato | Lista 3-5 nomi liquidi. Per universi ampi (S&P 500) usa la CLI |
+| **Periodo** | Storia daily da fetchare (1y → max). Più lungo = stat più stabili | `5y` default. `10y` se ticker ha storia. `1y` solo per smoke test |
+| **Threshold composite** | Score minimo (0-100) per aprire un'entry | Default 60. Sotto = più trade ma più noise. Sopra 75 = pochi trade ma high-conviction |
+| **Stop in ATR** | Distanza stop dall'entry in multipli di ATR(14) | 2.0 default. Più alto = stop più largo (meno stop-out, più loss per trade). 1.5 = aggressivo |
+| **Target in ATR** | Distanza target in multipli di ATR. R:R = target/stop | 4.0 default → R:R 2:1. Per momentum 2:1 è il floor. Sotto 1.5 = setup rotto |
+| **Time stop** | Numero di bar (giorni) max in trade | 30 default. Trade momentum reggono 1-2 mesi. Sotto 15 = chiude troppo presto, sopra 60 = capital tied up |
+
+**Regola pratica**: parti dai default. Cambia UNA cosa alla volta. Se cambi
+threshold + stop + target insieme stai overfittando. Se threshold da 60 a
+70 raddoppia il profit factor con n_trades dimezzato → la formula funziona,
+60 era troppo basso. Se invece n_trades crolla a 2-3 → non c'è più segnale
+statistico.
+"""
+    )
+
 
 # ---------------------------------------------------------------------------
 # Cached runner: chiave = parametri esatti

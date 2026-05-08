@@ -27,6 +27,70 @@ st.info(
     icon="ℹ️",
 )
 
+st.success(
+    "✅ **Strategy-agnostic**: filtra closed trades dal journal per strategia. "
+    "Funziona per momentum / contrarian / ETF rotation / thematic — l'unica "
+    "richiesta è avere closed trades nel journal con `strategy_tag` settato. "
+    "Per thematic: serve aspettare 15+ trade chiusi (gate journal-evidence "
+    "del subpackage, vedi `THEMATIC_STRATEGY.md` §9).",
+    icon="✅",
+)
+
+with st.expander("📖 Come funziona — in 5 righe", expanded=False):
+    st.markdown(
+        """
+**Idea**: una strategia profittevole in backtest può degradarsi in produzione
+(market change, alpha decay, regime shift). Tre detector indipendenti
+misurano deviation tra Sharpe atteso e Sharpe realizzato:
+
+1. **Rolling Sharpe** — Sharpe degli ultimi N trade. Se crolla sotto soglia
+   = warning visivo immediato.
+2. **CUSUM** (Page 1954, Cumulative Sum) — somma cumulativa delle deviation
+   tra Sharpe atteso e realizzato. Cattura **drift lento** (degrade 6-12
+   mesi) prima che il rolling Sharpe lo veda.
+3. **SPRT** (Wald 1945, Sequential Probability Ratio Test) — test
+   sequenziale H0: "edge ancora valido" vs H1: "edge dimezzato". Decide
+   ALIVE / DEAD / continua a campionare con falsi positivi controllati (α).
+
+Decision composite:
+- **ALIVE** — tutti e 3 detector OK
+- **MONITOR** — 1 detector borderline
+- **WARNING** — 2 detector flagged
+- **ALERT_DECAY** — 3 detector flagged → **stop strategia + review**
+
+**Quando usarla**: ogni 4-6 settimane su trade chiusi della strategia in
+produzione. Se `ALERT_DECAY` → confronta con regime change (page 13)
+e con backtest re-run (page 6) per discriminare alpha decay vs regime shift.
+"""
+    )
+
+with st.expander("🎛️ Parametri — cosa fanno e come sceglierli", expanded=False):
+    st.markdown(
+        """
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Strategy filter** | Filtra closed trades per `strategy_tag` (momentum / contrarian / etf / thematic / all) | Imposta sulla strategia che vuoi monitorare. `all` solo per overview generale (mescola Sharpe diversi) |
+| **Expected Sharpe per-trade** | Sharpe per-trade atteso da backtest baseline | Da page *Backtest*: `expectancy_pct / volatility_pct`. Tipico 0.10-0.30. Default 0.20 ≈ Sharpe annuo ~1.2 (50 trade/anno) |
+| **Rolling Sharpe window (trades)** | N ultimi trade per rolling Sharpe | 30 default. Sotto 20 = troppo rumoroso. Sopra 60 = rileva degrade troppo tardi |
+| **CUSUM threshold (σ units)** | Soglia di trigger del CUSUM detector | 5.0 default. Più basso = più sensibile (più early-warning ma più false positive). 3.0 = aggressivo, 7.0 = conservativo |
+| **SPRT α (false positive rate)** | Probabilità di "ALERT_DECAY" quando edge è ancora valido | 0.05 default = 5% false positive. Sotto 0.02 = troppo conservativo, decision tarda |
+
+**Sample size banner**:
+- < 30 trade chiusi → **OUTPUT NON AFFIDABILE**, framework ready ma stat
+  signal troppo debole. Usa solo come sanity check visivo.
+- 30-50 trade → output indicativo, decisioni con cautela.
+- ≥ 50 trade → output affidabile, ALERT_DECAY = action.
+
+**Workflow tipico**:
+1. Filter su `momentum` (o strategia che monitori).
+2. Expected Sharpe = quello del tuo backtest 5y validato.
+3. Default rolling/CUSUM/SPRT params.
+4. Se ALERT_DECAY: NON chiudere subito le posizioni aperte, ma **stop
+   nuove entry**, fai review qualitativa (cambiamenti macro? rotazione
+   settoriale? feature dell'engine deprecate?).
+"""
+    )
+
 
 # ---------------------------------------------------------------------------
 # Form
@@ -34,7 +98,13 @@ st.info(
 with st.form("decay_form", border=True):
     col1, col2, col3 = st.columns(3)
     strategy_filter = col1.selectbox(
-        "Strategy filter", options=["all", "momentum", "contrarian", "etf"], index=0,
+        "Strategy filter",
+        options=["all", "momentum", "contrarian", "etf", "thematic"],
+        index=0,
+        help=(
+            "Filtra closed trades per strategy_tag. "
+            "thematic: richiede 15+ trade chiusi (gate journal-evidence)"
+        ),
     )
     expected_sharpe = col2.number_input(
         "Expected Sharpe per-trade",
@@ -95,13 +165,38 @@ with st.spinner("Fetching closed trades…"):
 n_trades = len(rows)
 st.metric("Closed trades found", n_trades)
 
+# Sample-size tiered banner — la statistica decay è strutturalmente fragile
+# sotto 30 trade. Banner esplicito per evitare che l'utente prenda decisioni
+# da output rumoroso (specie su strategie giovani come thematic).
 if n_trades < 5:
-    st.warning(
-        f"⚠ Solo {n_trades} trade chiusi. Decay framework richiede minimo 5 — "
-        "preferibilmente 50+. Output potrebbe essere fuorviante."
+    st.error(
+        f"🛑 **{n_trades} trade chiusi — output NON calcolabile.** "
+        f"Decay framework richiede minimo 5 trade. "
+        f"Strategia `{strategy_filter}`: continua a tradare e accumula "
+        f"trade chiusi nel journal prima di rieseguire."
     )
-    if n_trades < 5:
-        st.stop()
+    st.stop()
+elif n_trades < 30:
+    st.warning(
+        f"⚠️ **{n_trades} trade chiusi — output NON AFFIDABILE.** "
+        f"Stat signal troppo debole sotto 30 trade. "
+        f"Framework esegue, ma usa solo come **sanity check visivo**, "
+        f"NON per decisioni di stop strategia. "
+        + (
+            "Per **thematic** specifico: il subpackage richiede 15+ trade "
+            "chiusi prima della promotion gate (vedi `THEMATIC_STRATEGY.md` §9)."
+            if strategy_filter == "thematic"
+            else ""
+        )
+    )
+elif n_trades < 50:
+    st.info(
+        f"ℹ️ **{n_trades} trade chiusi — output indicativo.** "
+        f"50+ trade per signal pienamente affidabile. "
+        f"Decisioni ALERT_DECAY in questa fascia richiedono sanity check "
+        f"con regime composite (page 13) e backtest re-run (page 6).",
+        icon="ℹ️",
+    )
 
 
 # Convert to returns frazionali

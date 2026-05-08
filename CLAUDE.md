@@ -26,6 +26,7 @@ journaling → review.
 | Stock momentum / quality | [`MOMENTUM_STRATEGY.md`](docs/MOMENTUM_STRATEGY.md) | `propicks-momentum` | 6 sub-score (trend/momentum/volume/dist-high/vol/MA-cross) |
 | Quality-filtered mean reversion | [`CONTRARIAN_STRATEGY.md`](docs/CONTRARIAN_STRATEGY.md) | `propicks-contra` | 4 sub-score (oversold/quality/context/reversion) |
 | Sector ETF rotation | [`ETF_ROTATION_STRATEGY.md`](docs/ETF_ROTATION_STRATEGY.md) | `propicks-rotate` | 4 sub-score (RS/regime-fit/abs-mom/trend) |
+| Thematic ETF (sub-industry) | [`THEMATIC_STRATEGY.md`](docs/THEMATIC_STRATEGY.md) | `propicks-themes` | 4 sub-score (RS-vs-parent/abs-mom/trend/parent-regime-fit) + corr kill |
 
 ### Sistemi operativi
 
@@ -105,6 +106,9 @@ propicks-ai-framework/
 │   │   ├── contrarian_discovery.py # 3-stage pipeline su universi ampi
 │   │   ├── etf_scoring.py        # ETF: 4 sub-score + rank_universe + alloc + suggest_defensive_allocation (C.7)
 │   │   ├── etf_universe.py       # Query helpers SECTOR_ETFS_US/EU/WORLD
+│   │   ├── thematic_scoring.py   # Thematic: 4 sub-score (RS-vs-parent/abs-mom/trend/parent-fit) + corr kill + regime gate
+│   │   ├── thematic_universe.py  # Query helpers THEMATIC_ETFS + parent lookup
+│   │   ├── thematic_rs.py        # RS theme/parent line + correlation 60d kill switch
 │   │   ├── stock_rs.py           # Peer RS stock vs sector ETF (US-only)
 │   │   ├── regime.py             # Classifier macro weekly (5-bucket, mirror Pine)
 │   │   ├── regime_composite.py   # Fase B.3: regime daily z-score (HY OAS + breadth + VIX)
@@ -250,6 +254,12 @@ propicks-rotate                                   # US, top 3
 propicks-rotate --top 5 --region {US|EU|WORLD}
 propicks-rotate --allocate [--validate] [--json]
 
+# Thematic ETF (vedi docs/THEMATIC_STRATEGY.md)
+propicks-themes LOCK.MI [--validate] [--json]
+propicks-themes SMH XBI CIBR                     # batch ranking
+propicks-themes --rank [--region {US|EU|WORLD|ALL}]
+propicks-themes --rank --theme cybersecurity
+
 # Portfolio
 propicks-portfolio status / risk
 propicks-portfolio size AAPL --entry X --stop Y --score-claude 8 --score-tech 75
@@ -331,14 +341,19 @@ pytest                                            # tutti senza rete
 | *(home — no CLI equivalent)* | `app.py` Portfolio Overview |
 | `propicks-momentum [--validate] [--discover-*]` | `pages/1_Momentum.py` |
 | `propicks-rotate [--region]` | `pages/2_ETF_Rotation.py` |
-| `propicks-portfolio size/add/update/remove` | `pages/3_Portfolio.py` (tabs base) |
-| `propicks-portfolio risk` | `pages/3_Portfolio.py` → tab "Rischio & esposizione" |
-| `propicks-portfolio manage [--apply]` / `trail enable|disable` | `pages/3_Portfolio.py` → tab "Trade management" |
-| `propicks-journal add/close/list/stats` | `pages/4_Journal.py` |
-| `propicks-report weekly/monthly` | `pages/5_Reports.py` + archivio |
-| `propicks-backtest` | `pages/6_Backtest.py` (+ `pages/11_Backtest_Portfolio.py`) |
-| `propicks-watchlist add/remove/update/list/status` | `pages/7_Watchlist.py` |
-| `propicks-contra [--validate]` | `pages/8_Contrarian.py` |
+| `propicks-contra [--validate]` | `pages/3_Contrarian.py` |
+| `propicks-themes [--rank] [--region] [--theme] [--validate]` | `pages/4_Thematic.py` |
+| `propicks-backtest` | `pages/5_Backtest.py` (+ `pages/6_Backtest_Portfolio.py`) |
+| `propicks-calibrate` | `pages/7_Calibration.py` |
+| `propicks-portfolio size/add/update/remove` | `pages/8_Portfolio.py` (tabs base) |
+| `propicks-portfolio risk` | `pages/8_Portfolio.py` → tab "Rischio & esposizione" |
+| `propicks-portfolio manage [--apply]` / `trail enable|disable` | `pages/8_Portfolio.py` → tab "Trade management" |
+| `propicks-journal add/close/list/stats` | `pages/9_Journal.py` |
+| `propicks-report weekly/monthly` | `pages/10_Reports.py` + archivio |
+| `propicks-watchlist add/remove/update/list/status` | `pages/11_Watchlist.py` |
+| `propicks-calendar` | `pages/12_Calendar.py` |
+| `propicks-scheduler` | *(CLI-only, no dashboard page)* |
+| *(diagnostics)* | `pages/13_Regime_Composite.py`, `pages/14_Decay_Monitor.py` |
 
 ---
 
@@ -351,14 +366,18 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
 - **Max size singola posizione**:
   - Stock momentum: **15%**
   - Sector ETF: **20%**
+  - Thematic ETF: **15%**
   - Contrarian: **8%**
 - **Max esposizione aggregata sector ETF**: **60%** del capitale
 - **Max esposizione aggregata contrarian**: **20%** (bucket cap indipendente)
+- **Max posizioni thematic simultanee**: **2**, cap aggregato `weight(theme)+weight(parent_ETF) ≤ 25%`
+- **Thematic correlation kill-switch**: `corr_60d(theme, parent) ≥ 0.85` → composite forzato a 0
 - **Max posizioni contrarian simultanee**: **3** (cap interno al bucket)
 - **Min cash reserve**: **20%** del capitale
 - **Max loss per trade**:
   - Stock momentum: **8%**
   - Sector ETF: **5%**
+  - Thematic ETF: **10%**
   - Contrarian: **12%** (stop = `recent_low − 1×ATR`, vedi CONTRARIAN_STRATEGY.md)
 - **Max loss settimanale**: 5% del capitale → blocco trading
 - **Max loss mensile**: 15% del capitale → blocco trading e revisione
@@ -370,6 +389,8 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
   - **Contrarian**: skip STRONG_BULL / STRONG_BEAR (edge collassa agli estremi)
   - **ETF Rotation**: in STRONG_BEAR i settori non favoriti sono forzati a 0;
     in BEAR sono capped a 50
+  - **Thematic**: skip BEAR / STRONG_BEAR (engine già forza score=0 in
+    STRONG_BEAR e cap 40 in BEAR; AI gate evita chiamate inutili)
 
 ---
 
@@ -418,6 +439,10 @@ ragioni di ogni soglia, vedi il MD della strategia rilevante.
   - `contrarian_signal_engine.pine` — quality-filtered mean reversion
     (replica `domain/contrarian_scoring.py`: oversold/quality/context/
     reversion, quality gate hard su EMA200d, regime cap STRONG_BULL/BEAR).
+  - `thematic_signal_engine.pine` — thematic sub-industry (replica
+    `domain/thematic_scoring.py`: RS-vs-parent/abs-mom/trend/parent-fit,
+    corr 60d kill switch ≥0.85, regime gate BEAR cap 40 / STRONG_BEAR=0).
+    Configurabile parent symbol + parent_sector_key per RS line on-chart.
 
 ---
 

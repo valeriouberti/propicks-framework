@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from propicks.ai.contrarian_prompts import CONTRA_SYSTEM_PROMPT
 from propicks.ai.etf_prompts import ETF_SYSTEM_PROMPT
 from propicks.ai.prompts import SYSTEM_PROMPT
+from propicks.ai.thematic_prompts import THEMATIC_SYSTEM_PROMPT
 from propicks.config import (
     AI_MAX_TOKENS,
     AI_MODEL,
@@ -144,6 +145,39 @@ class ETFRotationVerdict(BaseModel):
     rebalance_horizon_weeks: int = Field(ge=2, le=12)
     alignment_with_ranking: str = Field(description="STRONG | MIXED | CONTRADICTORY")
     confidence_by_dimension: ETFConfidenceByDimension
+
+
+class ThematicConfidenceByDimension(BaseModel):
+    """Confidence per-dimensione (0-10) sulle 6 dimensioni del framework thematic."""
+
+    thematic_alpha: int = Field(ge=0, le=10)
+    crowding_flows: int = Field(ge=0, le=10)
+    concentration_risk: int = Field(ge=0, le=10)
+    catalyst_strength: int = Field(ge=0, le=10)
+    parent_alignment: int = Field(ge=0, le=10)
+    regime_consistency: int = Field(ge=0, le=10)
+
+
+class ThematicVerdict(BaseModel):
+    """Schema strutturato della risposta di Claude per Thematic ETF."""
+
+    verdict: str = Field(description="CONFIRM | CAUTION | REJECT")
+    conviction_score: int = Field(ge=0, le=10)
+    thematic_summary: str
+    theme_stage: str = Field(description="EARLY | MID | LATE | UNKNOWN")
+    alternative_ticker: str | None = None
+    catalysts: list[str]
+    crowding_read: str
+    concentration_read: str
+    bull_case: list[str]
+    bear_case: list[str]
+    invalidation_triggers: list[str]
+    entry_tactic: str = Field(
+        description="ALLOCATE_NOW | STAGGER_3_TRANCHES | WAIT_PULLBACK | WAIT_CONFIRMATION | HOLD_CASH"
+    )
+    time_horizon_weeks: int = Field(ge=4, le=26)
+    alignment_with_parent: str = Field(description="STRONG | MIXED | CONTRADICTORY")
+    confidence_by_dimension: ThematicConfidenceByDimension
 
 
 class AIValidationError(RuntimeError):
@@ -382,6 +416,71 @@ _ETF_JSON_SCHEMA = {
 }
 
 
+_THEMATIC_CONFIDENCE_KEYS = (
+    "thematic_alpha",
+    "crowding_flows",
+    "concentration_risk",
+    "catalyst_strength",
+    "parent_alignment",
+    "regime_consistency",
+)
+
+_THEMATIC_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["CONFIRM", "CAUTION", "REJECT"]},
+        "conviction_score": {"type": "integer"},
+        "thematic_summary": {"type": "string"},
+        "theme_stage": {"type": "string", "enum": ["EARLY", "MID", "LATE", "UNKNOWN"]},
+        "alternative_ticker": {"type": ["string", "null"]},
+        "catalysts": {"type": "array", "items": {"type": "string"}},
+        "crowding_read": {"type": "string"},
+        "concentration_read": {"type": "string"},
+        "bull_case": {"type": "array", "items": {"type": "string"}},
+        "bear_case": {"type": "array", "items": {"type": "string"}},
+        "invalidation_triggers": {"type": "array", "items": {"type": "string"}},
+        "entry_tactic": {
+            "type": "string",
+            "enum": [
+                "ALLOCATE_NOW",
+                "STAGGER_3_TRANCHES",
+                "WAIT_PULLBACK",
+                "WAIT_CONFIRMATION",
+                "HOLD_CASH",
+            ],
+        },
+        "time_horizon_weeks": {"type": "integer"},
+        "alignment_with_parent": {
+            "type": "string",
+            "enum": ["STRONG", "MIXED", "CONTRADICTORY"],
+        },
+        "confidence_by_dimension": {
+            "type": "object",
+            "properties": {k: {"type": "integer"} for k in _THEMATIC_CONFIDENCE_KEYS},
+            "required": list(_THEMATIC_CONFIDENCE_KEYS),
+            "additionalProperties": False,
+        },
+    },
+    "required": [
+        "verdict",
+        "conviction_score",
+        "thematic_summary",
+        "theme_stage",
+        "catalysts",
+        "crowding_read",
+        "concentration_read",
+        "bull_case",
+        "bear_case",
+        "invalidation_triggers",
+        "entry_tactic",
+        "time_horizon_weeks",
+        "alignment_with_parent",
+        "confidence_by_dimension",
+    ],
+    "additionalProperties": False,
+}
+
+
 def _build_tools() -> list[dict] | None:
     """Tools passati a Claude. Attualmente: web_search (server-side Anthropic)."""
     if not AI_WEB_SEARCH_ENABLED:
@@ -542,6 +641,17 @@ def call_etf_validation(user_prompt: str) -> ETFRotationVerdict:
         return ETFRotationVerdict.model_validate(payload)
     except Exception as err:
         raise AIValidationError(f"Schema mismatch (etf): {err}") from err
+
+
+def call_thematic_validation(user_prompt: str) -> ThematicVerdict:
+    """Chiama Claude per validazione Thematic ETF, ritorna ``ThematicVerdict``."""
+    payload = _call_claude_with_schema(
+        user_prompt, THEMATIC_SYSTEM_PROMPT, _THEMATIC_JSON_SCHEMA
+    )
+    try:
+        return ThematicVerdict.model_validate(payload)
+    except Exception as err:
+        raise AIValidationError(f"Schema mismatch (thematic): {err}") from err
 
 
 def call_contrarian_validation(user_prompt: str) -> ContrarianVerdict:

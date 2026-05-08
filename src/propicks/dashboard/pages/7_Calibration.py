@@ -28,6 +28,104 @@ st.info(
     icon="ℹ️",
 )
 
+# ─── Compatibility banner ──────────────────────────────────────────────────
+st.warning(
+    "⚠️ **Strategia supportata: SOLO Momentum.** La calibration usa "
+    "`_build_momentum_scoring_fn()` + `strategy_tag='momentum'` hardcoded. "
+    "Contrarian / ETF Rotation / Thematic non sono calibrabili qui — il loro "
+    "scoring engine ha logica diversa (oversold + quality, RS-vs-benchmark, "
+    "RS-vs-parent) e richiede framework dedicato (TODO se gate "
+    "journal-evidence passa).",
+    icon="⚠️",
+)
+
+with st.expander("📖 Come funziona — in 5 righe", expanded=False):
+    st.markdown(
+        """
+**Idea**: testi N threshold diversi (es. 60, 65, 70, 75, 80) sullo stesso
+universe e periodo. Ogni threshold dà un Sharpe. Senza correzioni, scegli
+il Sharpe più alto = **fallacia di multiple testing**: con 5 threshold
+testati, c'è ~25% di probabilità che il "migliore" sia rumore.
+
+1. Per ogni threshold: backtest portfolio → trade list → Sharpe per-trade.
+2. **PSR** (Bailey-Lopez 2012, Probabilistic Sharpe Ratio) = P(Sharpe vero > 0)
+   data la distribuzione realizzata. PSR > 0.95 = "95% confidence che la
+   strategia ha edge reale, non solo lucky draw".
+3. **DSR** (Bailey-Lopez 2014, Deflated Sharpe Ratio) = PSR **deflato per
+   il numero di trial testati**. Penalizza esplicitamente il multiple
+   testing. DSR > 0.95 = "edge robusto anche dopo aver provato N threshold".
+4. **CPCV** (Lopez de Prado 2018, Combinatorial Purged Cross-Validation) =
+   genera N!/(k!(N-k)!) test path (purged + embargoed) per misurare
+   varianza true vs path-dependent. Più rigoroso ma 10x più lento.
+5. **Recommendation rule**: tier 1 = primo threshold con DSR ≥ target
+   (default 0.95) E n_trades ≥ min_trades. Tier 2 = relax DSR ≥ 0.90.
+
+**Quando usarla**:
+- Stai per deployare un cambio di threshold (es. da 60 a 70) e vuoi
+  evidenza statistica che NON è overfitting.
+- Vuoi giustificare a te stesso (o a un investor) la scelta del threshold
+  con un numero, non con "feeling".
+
+**Quando NON usarla**:
+- Non hai ancora validato la formula sul page *Backtest* — calibrare prima
+  di sapere se la formula funziona è cargo cult.
+- Universe < 10 ticker o periodo < 3y → stat signal troppo debole.
+"""
+    )
+
+with st.expander("🎛️ Parametri — cosa fanno e come sceglierli", expanded=False):
+    st.markdown(
+        """
+**Universe & periodo**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Universe** | Lista ticker testati. Se vuoto + Discover SP500 attivo → top N | 20-50 nomi liquidi. Sotto 10 = signal debole, sopra 100 = lentezza |
+| **Discover SP500** | Carica top N S&P 500 da Wikipedia | ON per universe automatica. Combinare con membership filter |
+| **Top N** | Quanti ticker se Discover | 30 default. 100 per stat signal robusto |
+| **Periodo** | Storia daily | 5y default. 10y per CPCV (più paths) |
+| **Capitale iniziale** | Budget simulazione | 10k default. Non cambia metriche % |
+
+**Threshold sweep**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Threshold spec** | Range `start:end:step` (es. `60:80:5`) o lista (`60,65,70`) | Default `60:80:5` = 5 trial. Range stretto = recommendation più affidabile (meno multiple-testing penalty su DSR). Range largo (`50:90:5` = 9 trial) = DSR scende meccanicamente |
+
+**CPCV (opzionale)**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Combinatorial Purged CV** | Genera multipli test path purged + embargoed | ON per validazione rigorosa pre-production. OFF per smoke test rapido |
+| **CPCV groups** | N gruppi temporali di split | 6 default. 4-8 range tipico |
+| **CPCV test groups** | Quanti gruppi in test set per path | 2 default. Più alto = più paths ma stat per path più deboli |
+| **CPCV embargo days** | Giorni di gap fra train/test (anti-leakage) | 5 default. Aumenta se ATR/vol features hanno lookback 30+ giorni |
+
+**Recommendation tuning**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Target DSR** | Soglia tier-1 raccomandazione | 0.95 default = high confidence. 0.90 = relax per universi piccoli. Sotto 0.85 = non production-ready |
+| **Min trades per recommendation** | Floor n_trades per validità | 30 default. Sotto 20 = too noisy. Sopra 50 per universi grandi |
+
+**Survivorship**:
+
+`Membership filter sp500` ON usa point-in-time membership (vedi
+`SURVIVORSHIP_BIAS_ANALYSIS.md`): include ticker delistati storicamente.
+Senza, calibri solo sui sopravvissuti = bias positivo strutturale ~1-2%
+Sharpe inflation. Richiede import history (`scripts/import_sp500_history.py`).
+
+**Workflow tipico**:
+1. Universe `Discover SP500 + top 30`, periodo `5y`, threshold `60:80:5`.
+2. CPCV OFF per smoke test, target DSR 0.95.
+3. Se top threshold ha DSR ≥ 0.95 → **deploy**. Documenta nel journal.
+4. Se nessun threshold passa → range threshold sbagliato O strategia non
+   robusta. Re-run con range stretto (es. `65:75:2`) prima di abbandonare.
+5. Pre-production: CPCV ON con groups=6 + test_groups=2. Lento (~10min)
+   ma necessario per giustificare deploy.
+"""
+    )
+
 
 # ---------------------------------------------------------------------------
 # Form

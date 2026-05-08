@@ -32,6 +32,97 @@ st.info(
     icon="ℹ️",
 )
 
+# ─── Compatibility banner ──────────────────────────────────────────────────
+st.warning(
+    "⚠️ **Strategia supportata: SOLO Momentum.** Anche con flag avanzati "
+    "(cross-sectional rank, quality filter, earnings revision overlay) il "
+    "core scoring resta `domain.scoring.rank_universe` momentum. "
+    "Contrarian / ETF Rotation / Thematic non sono supportate. Per ETF "
+    "rotation serve un portfolio engine separato (TODO Phase 9). "
+    "Per thematic: **gate journal-evidence** (15 trade chiusi via "
+    "`propicks-themes` + manual journal) prima di promuovere a backtest "
+    "dedicato (vedi `THEMATIC_STRATEGY.md` §9).",
+    icon="⚠️",
+)
+
+with st.expander("📖 Come funziona (in 4 righe)", expanded=False):
+    st.markdown(
+        """
+**Come funziona**:
+1. Per ogni barra giornaliera scora tutti i ticker dell'universo, ranking
+   cross-sectional o threshold-based.
+2. Apre top-N posizioni rispettando `MAX_POSITIONS` (10) + cash reserve
+   minimo + earnings hard gate (skip entry se earnings < 5gg).
+3. Ogni trade paga **TC** (transaction cost) + slippage configurabile.
+4. Walk-forward OOS split: prime N% delle barre = IS (in-sample, calibrazione),
+   resto = OOS (out-of-sample, verifica). Monte Carlo bootstrap = CI 95%
+   su Sharpe/Win-rate/Drawdown per misurare incertezza statistica.
+
+**Quando usarla**:
+- Hai già validato la formula su single-ticker (page *Backtest*).
+- Vuoi sapere se la strategia regge con **costi reali** (TC 5-10bps),
+  **vincoli di capitale** (max 10 posizioni), e **decisioni cross-ticker**
+  (chi entra se 5 ticker hanno score 70+ ma ho solo 3 slot).
+- Vuoi un Sharpe/CAGR difensibile per produzione, non solo "il backtest funziona".
+
+**Workflow tipico**:
+1. Universe: lista 20-50 ticker liquidi (S&P 500 subset).
+2. Periodo `5y`, threshold `60`, OOS split `0.70` (70% IS / 30% OOS).
+3. TC `5bps`, Monte Carlo `1000` runs.
+4. Leggi: Sharpe IS vs OOS (gap > 50% = overfitting). DSR (Deflated Sharpe
+   Ratio, vedi page *Calibration* per multi-trial DSR rigoroso).
+"""
+    )
+
+with st.expander("🎛️ Parametri — cosa fanno e come sceglierli", expanded=False):
+    st.markdown(
+        """
+**Universe & periodo**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Universe** | Lista ticker testati. Ogni barra ranking cross-sectional fra tutti | 20-50 nomi liquidi. Sotto 10 = poca diversificazione, sopra 100 = lentezza fetch. CLI per S&P 500 full |
+| **Periodo** | Storia daily fetchata | 5y default. 10y se vuoi 2 cicli completi. Sotto 2y = troppo pochi trade |
+
+**Entry / Exit**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Score threshold** | Min score per entry | 60 default. Combina con cross-sectional rank per universi grandi |
+| **Stop in ATR** | Distanza stop in multipli ATR | 2.0 default |
+| **Target in ATR** | Distanza target. R:R = target/stop | 4.0 default → R:R 2:1 |
+| **Time stop (bars)** | Max giorni in trade | 30 default. Momentum chiude swing in 4-8 settimane |
+
+**Costi & capital**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Capitale iniziale** | Budget simulazione | 10k default. Numero non cambia metriche %, solo importi nominali |
+| **TC (bps)** | Transaction cost totale (spread+slip+fees) | 5 default per US large-cap retail. 10 per EU mid-cap, 20 per emerging |
+
+**Validation overfitting**:
+
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **OOS split** | % storia per IS (in-sample, calibrazione). Il resto = OOS (verifica) | 0.70 default. 0.50 più conservativo. Sotto 0.30 IS = troppo pochi trade per calibrare |
+| **Monte Carlo runs** | N bootstrap su trade list per CI 95% Sharpe/WinRate/DD | 1000 default. 500 = veloce, 5000 = CI più strette. Linear scaling tempo |
+
+**Survivorship bias**:
+
+Per tickers cancellati storicamente (es. ENRN, LEH) usa `--historical-membership sp500`
+da CLI: il backtest popola l'universo con membership point-in-time S&P 500.
+Senza, stai testando solo i sopravvissuti = bias positivo strutturale.
+Vedi `SURVIVORSHIP_BIAS_ANALYSIS.md`.
+
+**Regole pratiche**:
+- IS Sharpe 1.5 / OOS Sharpe 0.4 = **overfitting severo**, threshold non usabile.
+- IS 1.2 / OOS 1.0 = setup robusto.
+- Monte Carlo 5° percentile Sharpe < 0 = strategia non statisticamente
+  significativa, declina deployment.
+- DSR < 0.95 (vedi page *Calibration*) = troppe trial → rischio false discovery.
+"""
+    )
+
 
 # ---------------------------------------------------------------------------
 # Form input

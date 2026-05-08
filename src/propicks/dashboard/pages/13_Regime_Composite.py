@@ -26,6 +26,62 @@ st.info(
     icon="ℹ️",
 )
 
+st.success(
+    "✅ **Compatibile con tutte le strategie.** Il regime composite è un "
+    "indicator macro globale (S&P 500 + credit + vol), non strategy-specific. "
+    "Va usato come complemento al regime weekly: se il composite daily flippa "
+    "PRIMA del weekly classifier, è early-warning per tutte le strategie "
+    "(momentum, contrarian, ETF rotation, thematic).",
+    icon="✅",
+)
+
+with st.expander("📖 Come si legge — in 5 righe", expanded=False):
+    st.markdown(
+        """
+**Cosa misura**:
+1. **HY OAS** (high-yield credit spread, FRED `BAMLH0A0HYM2`) — quando il
+   credit spread allarga = stress sistemico, non c'è cushion per ciclico.
+2. **Breadth** (% top-N S&P sopra MA200) — quanti nomi partecipano al trend.
+   Sotto 40% = mercato narrow, distribution risk.
+3. **VIX** (FRED `VIXCLS`) — paura option-implied. >25 = capitulation possibile.
+
+I 3 segnali vengono z-scorati su 252 giorni rolling, pesati e sommati →
+composite z. Soglie:
+
+- z ≤ -1.5 → **STRONG_BULL** (credit tight, breadth alta, vix basso)
+- z ≤ -0.5 → **BULL**
+- |z| < 0.5 → **NEUTRAL**
+- z ≥ 0.5 → **BEAR**
+- z ≥ 1.5 → **STRONG_BEAR** (credit blow-out, breadth crash, vix spike)
+
+**Quando entra in gioco**:
+- Composite daily passa a BEAR mentre weekly è ancora NEUTRAL → **alert
+  early**. Considera de-risking (no nuove entry momentum, scale-in più
+  cauto su contrarian).
+- Composite NEUTRAL mentre weekly STRONG_BULL → distribution stage,
+  rotation possibile.
+
+**Read-only**: NON cambia automaticamente il gate `regime_code` usato dalle
+strategie (resta su classifier weekly). È un'overlay diagnostica per il
+trader.
+"""
+    )
+
+with st.expander("🎛️ Parametri", expanded=False):
+    st.markdown(
+        """
+| Parametro | Cosa fa | Quando cambiarlo |
+|-----------|---------|------------------|
+| **Start / End date** | Finestra storica analizzata | Default 1+ anno. Per stress test storico → COVID 2020-03 |
+| **Breadth universe (top N S&P)** | Quanti ticker per calcolo `% above MA200` | 30 default = veloce. 100 = più rappresentativo, fetch ~1min |
+| **Weight HY OAS / breadth / VIX** | Pesi composite (somma libera, internamente normalizzati) | Default 0.40 / 0.40 / 0.20. Durante crisi credit (2008, 2020-03) HY è dominante → alza HY a 0.50. In risk-off azionario puro (2022) → breadth+vix dominanti |
+
+Output: serie temporale composite z + 5-bucket regime + tabella turning
+points + plot Plotly. Vedi `docs/REGIME_COMPOSITE.md` per derivazione
+e validazione storica.
+"""
+    )
+
 
 # ---------------------------------------------------------------------------
 # Form params

@@ -60,6 +60,16 @@ MEDIUM_CONVICTION_SIZE_PCT: float = 0.08
 # commodity ETF con regole sizing dedicate (Fase commodity, TODO).
 ETF_MAX_POSITION_SIZE_PCT: float = 0.20
 
+# Thematic ETF (sub-industry / cross-sector tilts). Bucket satellite con cap
+# stretto: cap aggregato 25% include il parent sector ETF se posseduto, max 2
+# tematici simultanei per evitare leveraged-sector-bet camuffato. Stop 10% (più
+# largo del momentum 8%, ATR% tematici tipicamente più alto).
+THEMATIC_MAX_POSITION_SIZE_PCT: float = 0.15
+THEMATIC_MAX_POSITIONS: int = 2
+THEMATIC_PARENT_AGGREGATE_CAP_PCT: float = 0.25  # weight(theme) + weight(parent_sector_ETF) ≤ 25%
+THEMATIC_STOP_LOSS_PCT: float = 0.10
+THEMATIC_CORR_KILL_THRESHOLD: float = 0.85  # corr(theme, parent) ≥ → score forzato 0
+
 MIN_SCORE_CLAUDE: int = 6
 MIN_SCORE_TECH: int = 60
 
@@ -385,7 +395,347 @@ SECTOR_ETFS_WORLD: dict[str, dict] = {
             "world full. Composizione yield-tilted vs growth real estate."
         ),
     },
+    # ─── Borsa Italiana (.MI) listings degli stessi Xtrackers MSCI World ────
+    # Stessi fondi UCITS dei .DE, listing .MI per trader retail su BIt. ISIN
+    # identici alle controparti Xetra. Naming ticker uniforme XDW* su tutti
+    # i settori (mirror del listing Xetra). Tieni entrambi i listing (DE e MI)
+    # come voci separate: yfinance li tratta come simboli distinti.
+    "XDWT.MI": {
+        "name": "Xtrackers MSCI World Information Technology UCITS (BIt)",
+        "sector_key": "technology",
+        "isin": "IE00BM67HT60",
+        "listing_note": "Borsa Italiana listing dello stesso fondo XDWT.DE",
+    },
+    "XDWI.MI": {
+        "name": "Xtrackers MSCI World Industrials UCITS (BIt)",
+        "sector_key": "industrials",
+        "isin": "IE00BM67HV82",
+        "listing_note": "Borsa Italiana listing dello stesso fondo XDWI.DE",
+    },
+    "XDWU.MI": {
+        "name": "Xtrackers MSCI World Utilities UCITS (BIt)",
+        "sector_key": "utilities",
+        "isin": "IE00BM67HQ30",
+    },
+    "XDWH.MI": {
+        "name": "Xtrackers MSCI World Health Care UCITS (BIt)",
+        "sector_key": "healthcare",
+        "isin": "IE00BM67HK77",
+    },
+    "XDW0.MI": {
+        "name": "Xtrackers MSCI World Energy UCITS (BIt)",
+        "sector_key": "energy",
+        "isin": "IE00BM67HM91",
+    },
+    "XDWF.MI": {
+        "name": "Xtrackers MSCI World Financials UCITS (BIt)",
+        "sector_key": "financials",
+        "isin": "IE00BM67HL84",
+    },
+    "XDWM.MI": {
+        "name": "Xtrackers MSCI World Materials UCITS (BIt)",
+        "sector_key": "materials",
+        "isin": "IE00BM67HS53",
+    },
 }
+
+
+# ---------------------------------------------------------------------------
+# UNIVERSO THEMATIC ETF (sub-industry / cross-sector)
+# ---------------------------------------------------------------------------
+# Tematici e sub-industry ETF — fuori dall'universo rotation (violano invariante
+# GICS-mutually-exclusive). Bucket satellite: scoring RS-vs-parent per
+# discriminare alfa tematico vs leveraged sector bet.
+#
+# Mapping: ticker → {parent_ticker, parent_sector_key, region, theme_label}.
+# parent_ticker = il sector ETF di riferimento per RS (NON il benchmark broad).
+# Esempi: SMH parent XLK (semis è ~70% top-10 XLK), XBI parent XLV, LOCK.MI
+# parent XDWT.DE (cybersec è sub-industry tech world).
+#
+# Region segue il listing del tematico — RS usa parent stesso region:
+# tematico US → parent SPDR US, tematico .DE/.MI/UCITS → parent Xtrackers WORLD.
+# IMPORTANTE: aggiungere un tematico richiede esistenza del parent in
+# SECTOR_ETFS_{US,EU,WORLD}. Validato da tests/unit/test_thematic_universe.py.
+
+THEMATIC_ETFS: dict[str, dict] = {
+    # ───────── US listings (mantenuti per backtest history più lunga) ─────────
+    "SMH": {
+        "name": "VanEck Semiconductor ETF",
+        "theme_label": "semiconductors",
+        "parent_ticker": "XLK",
+        "parent_sector_key": "technology",
+        "region": "US",
+    },
+    "SOXX": {
+        "name": "iShares Semiconductor ETF",
+        "theme_label": "semiconductors",
+        "parent_ticker": "XLK",
+        "parent_sector_key": "technology",
+        "region": "US",
+    },
+    "CIBR": {
+        "name": "First Trust Nasdaq Cybersecurity ETF",
+        "theme_label": "cybersecurity",
+        "parent_ticker": "XLK",
+        "parent_sector_key": "technology",
+        "region": "US",
+    },
+    "BUG": {
+        "name": "Global X Cybersecurity ETF",
+        "theme_label": "cybersecurity",
+        "parent_ticker": "XLK",
+        "parent_sector_key": "technology",
+        "region": "US",
+    },
+    "ROBO": {
+        "name": "ROBO Global Robotics & Automation ETF",
+        "theme_label": "robotics_ai",
+        "parent_ticker": "XLI",
+        "parent_sector_key": "industrials",
+        "region": "US",
+    },
+    "BOTZ": {
+        "name": "Global X Robotics & Artificial Intelligence ETF",
+        "theme_label": "robotics_ai",
+        "parent_ticker": "XLK",
+        "parent_sector_key": "technology",
+        "region": "US",
+    },
+    "XBI": {
+        "name": "SPDR S&P Biotech ETF",
+        "theme_label": "biotech",
+        "parent_ticker": "XLV",
+        "parent_sector_key": "healthcare",
+        "region": "US",
+    },
+    "IBB": {
+        "name": "iShares Biotechnology ETF",
+        "theme_label": "biotech",
+        "parent_ticker": "XLV",
+        "parent_sector_key": "healthcare",
+        "region": "US",
+    },
+    "ICLN": {
+        "name": "iShares Global Clean Energy ETF",
+        "theme_label": "clean_energy",
+        "parent_ticker": "XLE",
+        "parent_sector_key": "energy",
+        "region": "US",
+    },
+    "TAN": {
+        "name": "Invesco Solar ETF",
+        "theme_label": "solar",
+        "parent_ticker": "XLE",
+        "parent_sector_key": "energy",
+        "region": "US",
+    },
+    "XAR": {
+        "name": "SPDR S&P Aerospace & Defense ETF",
+        "theme_label": "aerospace_defense",
+        "parent_ticker": "XLI",
+        "parent_sector_key": "industrials",
+        "region": "US",
+    },
+    "ITA": {
+        "name": "iShares U.S. Aerospace & Defense ETF",
+        "theme_label": "aerospace_defense",
+        "parent_ticker": "XLI",
+        "parent_sector_key": "industrials",
+        "region": "US",
+    },
+    "KWEB": {
+        "name": "KraneShares CSI China Internet ETF",
+        "theme_label": "china_internet",
+        "parent_ticker": "XLC",
+        "parent_sector_key": "communications",
+        "region": "US",
+    },
+    # ─────────────────────────────────────────────────────────────────────
+    # Borsa Italiana (.MI) thematic universe — broker retail IT.
+    # Parent sono i .MI listing degli Xtrackers MSCI World sector (vedi
+    # SECTOR_ETFS_WORLD blocco .MI). Naming ticker tech/industrials usa
+    # "XWD*", utilities/healthcare/energy/financials/materials usa "XDW*".
+    # ─────────────────────────────────────────────────────────────────────
+    # ─── TECH sub-industries (parent: XDWT.MI) ─────
+    "XAIX.MI": {
+        "name": "Xtrackers Artificial Intelligence and Big Data UCITS ETF 1C",
+        "theme_label": "ai_bigdata",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
+    "SMH.MI": {
+        "name": "VanEck Semiconductor UCITS ETF (BIt)",
+        "theme_label": "semiconductors",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
+    "LOCK.MI": {
+        "name": "iShares Digital Security UCITS ETF (Acc)",
+        "theme_label": "cybersecurity",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
+    "WCLD.MI": {
+        "name": "WisdomTree Cloud Computing UCITS ETF (Acc)",
+        "theme_label": "cloud_computing",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
+    "DGTL.MI": {
+        "name": "iShares Digitalisation UCITS ETF (Acc)",
+        "theme_label": "digitalization",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
+    # ─── INDUSTRIAL sub-industries (parent: XDWI.MI) ─────
+    "DFND.MI": {
+        "name": "iShares Global Aerospace & Defence UCITS ETF (Acc)",
+        "theme_label": "aerospace_defense",
+        "parent_ticker": "XDWI.MI",
+        "parent_sector_key": "industrials",
+        "region": "WORLD",
+    },
+    "RBOT.MI": {
+        "name": "iShares Automation & Robotics UCITS ETF (Acc)",
+        "theme_label": "robotics_ai",
+        "parent_ticker": "XDWI.MI",
+        "parent_sector_key": "industrials",
+        "region": "WORLD",
+    },
+    "BATT.MI": {
+        "name": "L&G Battery Value-Chain UCITS ETF",
+        "theme_label": "battery_value_chain",
+        "parent_ticker": "XDWI.MI",
+        "parent_sector_key": "industrials",
+        "region": "WORLD",
+    },
+    # ─── UTILITIES sub-industries (parent: XDWU.MI) ─────
+    "IH2O.MI": {
+        "name": "iShares Global Water UCITS ETF (Dist)",
+        "theme_label": "water",
+        "parent_ticker": "XDWU.MI",
+        "parent_sector_key": "utilities",
+        "region": "WORLD",
+    },
+    "NUCL.MI": {
+        "name": "VanEck Uranium and Nuclear Technologies UCITS ETF",
+        "theme_label": "uranium_nuclear",
+        "parent_ticker": "XDWU.MI",
+        "parent_sector_key": "utilities",
+        "region": "WORLD",
+    },
+    "INRG.MI": {
+        "name": "iShares Global Clean Energy Transition UCITS ETF (Dist)",
+        "theme_label": "clean_energy",
+        "parent_ticker": "XDWU.MI",
+        "parent_sector_key": "utilities",
+        "region": "WORLD",
+        # Nota: l'utente lista INRG.MI sotto utilities E energy. Parent =
+        # XDWU.MI (utilities) perché clean energy transition è sub-industry
+        # utilities (renewables, grid). Per RS vs energy fossil (XDW0.MI)
+        # l'analisi sarebbe inversa — qui vinciamo coerenza tematica.
+    },
+    # ─── HEALTHCARE sub-industries (parent: XDWH.MI) ─────
+    "GNOM.MI": {
+        "name": "Global X Genomics & Biotechnology UCITS ETF",
+        "theme_label": "genomics",
+        "parent_ticker": "XDWH.MI",
+        "parent_sector_key": "healthcare",
+        "region": "WORLD",
+    },
+    "HEAL.MI": {
+        "name": "iShares Healthcare Innovation UCITS ETF",
+        "theme_label": "healthcare_innovation",
+        "parent_ticker": "XDWH.MI",
+        "parent_sector_key": "healthcare",
+        "region": "WORLD",
+    },
+    "SBIO.MI": {
+        "name": "Invesco Nasdaq Biotech UCITS ETF",
+        "theme_label": "biotech",
+        "parent_ticker": "XDWH.MI",
+        "parent_sector_key": "healthcare",
+        "region": "WORLD",
+    },
+    # ─── ENERGY sub-industries (parent: XDW0.MI) ─────
+    "IS0D.DE": {
+        "name": "iShares Oil & Gas Exploration & Production UCITS ETF",
+        "theme_label": "oil_gas_exploration",
+        "parent_ticker": "XDW0.MI",
+        "parent_sector_key": "energy",
+        "region": "WORLD",
+    },
+    # ─── FINANCIAL sub-industries (parent: XDWF.MI) ─────
+    "BNKE.MI": {
+        "name": "Amundi Euro Stoxx Banks UCITS ETF (Acc)",
+        "theme_label": "eu_banks",
+        "parent_ticker": "XDWF.MI",
+        "parent_sector_key": "financials",
+        "region": "WORLD",
+    },
+    "DPAY.MI": {
+        "name": "L&G Digital Payments UCITS ETF",
+        "theme_label": "digital_payments",
+        "parent_ticker": "XDWF.MI",
+        "parent_sector_key": "financials",
+        "region": "WORLD",
+    },
+    # ─── MATERIALS sub-industries (parent: XDWM.MI) ─────
+    "REMX.MI": {
+        "name": "VanEck Rare Earth and Strategic Metals UCITS ETF",
+        "theme_label": "rare_earth_metals",
+        "parent_ticker": "XDWM.MI",
+        "parent_sector_key": "materials",
+        "region": "WORLD",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# THEMATIC SCORING — PARAMETRI
+# ---------------------------------------------------------------------------
+# Composite (somma = 1.0):
+#   rs_vs_parent  (50%) — alfa tematico genuino vs parent sector
+#   abs_momentum  (25%) — perf 3M assoluta del tematico
+#   trend         (15%) — price vs EMA30 weekly
+#   parent_regime_fit (10%) — regime fit del parent_sector_key
+#
+# RS-vs-parent peso alto: discrimina alfa tematico da leveraged sector bet
+# (correlato → kill-switch separato a CORR ≥ 0.85).
+THEMATIC_RS_LOOKBACK_WEEKS: int = 26
+THEMATIC_RS_EMA_WEEKS: int = 10
+THEMATIC_CORR_LOOKBACK_DAYS: int = 60  # daily window per corr(theme, parent)
+THEMATIC_MOMENTUM_LOOKBACK_DAYS: int = 63  # ~3M
+
+THEMATIC_WEIGHT_RS_VS_PARENT: float = 0.50
+THEMATIC_WEIGHT_ABS_MOMENTUM: float = 0.25
+THEMATIC_WEIGHT_TREND: float = 0.15
+THEMATIC_WEIGHT_PARENT_REGIME_FIT: float = 0.10
+
+_THEMATIC_WEIGHTS = (
+    THEMATIC_WEIGHT_RS_VS_PARENT,
+    THEMATIC_WEIGHT_ABS_MOMENTUM,
+    THEMATIC_WEIGHT_TREND,
+    THEMATIC_WEIGHT_PARENT_REGIME_FIT,
+)
+assert abs(sum(_THEMATIC_WEIGHTS) - 1.0) < 1e-9, (
+    f"Thematic scoring weights non sommano a 1.0: {sum(_THEMATIC_WEIGHTS)}"
+)
+
+# Classification thresholds (parallelo a ETF: A/B/C/D).
+THEMATIC_SCORE_OVERWEIGHT: float = 70.0
+THEMATIC_SCORE_HOLD: float = 55.0
+THEMATIC_SCORE_NEUTRAL: float = 40.0
+
+# AI validation — cache 24h (corta come stock momentum, narrative tematica si
+# muove veloce su catalyst sub-industry).
+THEMATIC_AI_CACHE_TTL_HOURS: int = 24
+THEMATIC_AI_MIN_SCORE_FOR_VALIDATION: float = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -547,11 +897,11 @@ CONTRA_SCORE_C: float = 45.0
 #   BEAR (2)        → ok se quality gate regge (85)
 #   STRONG_BEAR (1) → skip: falling knives, non mean reversion
 CONTRA_REGIME_FIT: dict[int, float] = {
-    5: 25.0,   # STRONG_BULL: oversold rari e poco durevoli
-    4: 70.0,   # BULL: mean reversion su pullback sani
+    5: 25.0,  # STRONG_BULL: oversold rari e poco durevoli
+    4: 70.0,  # BULL: mean reversion su pullback sani
     3: 100.0,  # NEUTRAL: sweet spot
-    2: 85.0,   # BEAR: ottimo se quality gate regge
-    1: 0.0,    # STRONG_BEAR: niente mean reversion su crash
+    2: 85.0,  # BEAR: ottimo se quality gate regge
+    1: 0.0,  # STRONG_BEAR: niente mean reversion su crash
 }
 
 # AI validation contrarian — cache separata (chiave con strategy tag per non
@@ -655,15 +1005,11 @@ AI_WEB_SEARCH_MAX_USES: int = int(os.environ.get("PROPICKS_AI_WEB_SEARCH_MAX_USE
 # cambio di giorno (nuovo file). Cache hit NON contano verso il budget.
 # Override via env per sessioni ad-hoc: ``PROPICKS_AI_MAX_CALLS_PER_DAY=200``.
 AI_MAX_CALLS_PER_DAY: int = int(os.environ.get("PROPICKS_AI_MAX_CALLS_PER_DAY", "50"))
-AI_MAX_COST_USD_PER_DAY: float = float(
-    os.environ.get("PROPICKS_AI_MAX_COST_USD_PER_DAY", "5.0")
-)
+AI_MAX_COST_USD_PER_DAY: float = float(os.environ.get("PROPICKS_AI_MAX_COST_USD_PER_DAY", "5.0"))
 # Costo stimato per chiamata (input + output + web_search medio). Conservative:
 # prompt caching abbatte l'input, ma web_search è $0.01/ricerca e Opus ha output
 # caro. $0.10 = upper bound realistico per validate stock con ~5 web searches.
-AI_EST_COST_PER_CALL_USD: float = float(
-    os.environ.get("PROPICKS_AI_EST_COST_PER_CALL_USD", "0.10")
-)
+AI_EST_COST_PER_CALL_USD: float = float(os.environ.get("PROPICKS_AI_EST_COST_PER_CALL_USD", "0.10"))
 
 os.makedirs(AI_CACHE_DIR, exist_ok=True)
 
@@ -699,7 +1045,9 @@ INDEX_CONSTITUENTS_CACHE_TTL_HOURS: float = 24.0 * 7
 # questo, attiviamo il fallback.
 INDEX_MIN_CONSTITUENTS: int = 480  # S&P 500 è 500 ± qualche split-letter
 FTSEMIB_MIN_CONSTITUENTS: int = 35  # FTSE MIB ha esattamente 40 nomi
-STOXX600_MIN_CONSTITUENTS: int = 500  # STOXX 600 può variare 595-605, Wikipedia talvolta espone tabelle parziali
+STOXX600_MIN_CONSTITUENTS: int = (
+    500  # STOXX 600 può variare 595-605, Wikipedia talvolta espone tabelle parziali
+)
 NASDAQ100_MIN_CONSTITUENTS: int = 95  # Nasdaq-100 ha ~100 nomi (talvolta 101-102 per share class)
 
 # Fonte Wikipedia per S&P 500. Tabella ID 0, colonna "Symbol". I ticker con
@@ -748,7 +1096,6 @@ MACRO_EVENTS_2026: dict[str, list[tuple[str, str]]] = {
     "2026-09-16": [("FOMC", "FOMC meeting + SEP + press conf")],
     "2026-10-28": [("FOMC", "FOMC meeting + statement + press conf")],
     "2026-12-16": [("FOMC", "FOMC meeting + SEP + press conf")],
-
     # CPI release (typically 2nd Tue-Wed of month, 8:30am ET)
     "2026-01-14": [("CPI", "CPI December 2025")],
     "2026-02-11": [("CPI", "CPI January 2026")],
@@ -762,7 +1109,6 @@ MACRO_EVENTS_2026: dict[str, list[tuple[str, str]]] = {
     "2026-10-14": [("CPI", "CPI September 2026")],
     "2026-11-12": [("CPI", "CPI October 2026")],
     "2026-12-09": [("CPI", "CPI November 2026")],
-
     # NFP / Employment Situation (1st Fri of month, 8:30am ET)
     "2026-01-02": [("NFP", "December 2025 Employment Situation")],
     "2026-02-06": [("NFP", "January 2026 Employment Situation")],
@@ -776,7 +1122,6 @@ MACRO_EVENTS_2026: dict[str, list[tuple[str, str]]] = {
     "2026-10-02": [("NFP", "September 2026 Employment Situation")],
     "2026-11-06": [("NFP", "October 2026 Employment Situation")],
     "2026-12-04": [("NFP", "November 2026 Employment Situation")],
-
     # ECB Governing Council monetary policy meetings (8 per year)
     "2026-01-22": [("ECB", "ECB monetary policy decision + press conf")],
     "2026-03-12": [("ECB", "ECB monetary policy decision + press conf")],
