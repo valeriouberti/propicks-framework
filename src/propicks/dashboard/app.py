@@ -180,10 +180,18 @@ _refresh_done = False
 with _btn_cols[0]:
     if st.button("🔄 OHLCV", help="Warm cache daily+weekly per portfolio+watchlist", key="btn_refresh_ohlcv"):
         from propicks.scheduler.jobs import warm_cache as _wc
-        with st.spinner("Warm cache OHLCV…"):
+        with st.spinner("Warm cache OHLCV (sleep 0.15s tra ticker per evitare rate-limit)…"):
             try:
                 res = _wc()
-                st.toast(f"✓ OHLCV warmed: {res.get('notes', '')}", icon="✅")
+                notes = res.get('notes', '')
+                if 'failed' in notes.lower() or 'too many' in notes.lower():
+                    st.warning(
+                        f"⚠ Warm parziale (rate-limit yfinance possibile): {notes}. "
+                        "Streamlit Cloud usa shared IP — yfinance limita ~50 req/min. "
+                        "Riprova tra 60s o aumenta `PROPICKS_YF_BATCH_SLEEP_S=0.5` env var."
+                    )
+                else:
+                    st.toast(f"✓ OHLCV warmed: {notes}", icon="✅")
                 _refresh_done = True
             except Exception as exc:
                 st.error(f"Warm cache fallito: {exc}")
