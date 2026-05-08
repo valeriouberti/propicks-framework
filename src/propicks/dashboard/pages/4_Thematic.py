@@ -139,6 +139,75 @@ col_b.caption(
 st.divider()
 
 
+# Score distribution charts (skip su singolo ticker)
+if len(results) >= 3:
+    import plotly.graph_objects as go
+    from collections import Counter as _C
+
+    _scores = [float(r["score_composite"]) for r in results]
+    _classes = [r.get("classification", "—").split(" — ")[0] for r in results]
+
+    _col_h, _col_b = st.columns(2)
+    with _col_h:
+        _fig = go.Figure()
+        _fig.add_trace(go.Histogram(
+            x=_scores, nbinsx=20,
+            marker=dict(
+                color=[
+                    "#16a34a" if s >= 70 else "#10b981" if s >= 55
+                    else "#ca8a04" if s >= 40 else "#dc2626"
+                    for s in _scores
+                ],
+                line=dict(color="white", width=1),
+            ),
+            hovertemplate="Score %{x:.0f}<br>N %{y}<extra></extra>",
+        ))
+        # Class boundaries thematic: A ≥70, B ≥55, C ≥40
+        for thr, lbl, c in [(70, "A", "#16a34a"), (55, "B", "#10b981"), (40, "C", "#ca8a04")]:
+            _fig.add_vline(x=thr, line_dash="dot", line_color=c, opacity=0.6,
+                           annotation_text=lbl, annotation_position="top")
+        _fig.update_layout(
+            title=dict(text=f"Score distribution (n={len(_scores)}, avg {sum(_scores)/len(_scores):.1f})",
+                       x=0.5, xanchor="center", font=dict(size=13)),
+            xaxis_title="Composite score 0-100", yaxis_title="N tickers",
+            height=300, showlegend=False, bargap=0.05,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(_fig, width="stretch")
+
+    with _col_b:
+        _cnt = _C(_classes)
+        _order = ["A", "B", "C", "D"]
+        _lbl = [k for k in _order if k in _cnt]
+        _vals = [_cnt[k] for k in _lbl]
+        _cmap = {"A": "#16a34a", "B": "#10b981", "C": "#ca8a04", "D": "#dc2626"}
+        _fig2 = go.Figure()
+        _fig2.add_trace(go.Bar(
+            x=_lbl, y=_vals,
+            marker=dict(color=[_cmap.get(k, "#94a3b8") for k in _lbl]),
+            text=[f"{v}<br>{v/len(_scores)*100:.0f}%" for v in _vals],
+            textposition="auto",
+            hovertemplate="Class %{x}<br>N %{y}<extra></extra>",
+        ))
+        _fig2.update_layout(
+            title=dict(text="Classification breakdown", x=0.5, xanchor="center", font=dict(size=13)),
+            xaxis_title="", yaxis_title="N tickers",
+            height=300, showlegend=False,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(_fig2, width="stretch")
+
+    # Corr-kill / regime-gate flags count
+    _corr_kill_n = sum(1 for r in results if r.get("corr_kill_applied"))
+    _regime_n = sum(1 for r in results if r.get("regime_gate_applied"))
+    st.caption(
+        f"🟢 A (≥70) overweight · 🟢 B (55-69) hold · 🟡 C (40-54) neutral · 🔴 D (<40) avoid. "
+        f"⚠ Corr-kill triggered: **{_corr_kill_n}** (alfa illusorio = leverage parent). "
+        f"⚠ Regime gate: **{_regime_n}** (BEAR cap 40, STRONG_BEAR=0)."
+    )
+    st.divider()
+
+
 # ---------------------------------------------------------------------------
 # Ranking table
 # ---------------------------------------------------------------------------

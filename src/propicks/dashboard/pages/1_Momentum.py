@@ -304,6 +304,86 @@ if branch == "discovery":
         _summary_cols[2].metric("Scored", _summary["scored"])
         _summary_cols[3].metric("Returned (top N)", len(results))
 
+# Score distribution charts — utili sia su discovery (universi grandi) che
+# batch manuale (≥3 ticker). Skip su singolo ticker (poco senso statistico).
+if len(results) >= 3:
+    import plotly.graph_objects as go
+
+    scores = [float(r["score_composite"]) for r in results]
+    classes = [r.get("classification", "—").split(" — ")[0] for r in results]
+
+    col_h, col_b = st.columns(2)
+    with col_h:
+        # Histogram score distribution con vline class boundaries
+        fig_h = go.Figure()
+        fig_h.add_trace(go.Histogram(
+            x=scores, nbinsx=20,
+            marker=dict(
+                color=[
+                    "#16a34a" if s >= 75 else "#10b981" if s >= 60
+                    else "#ca8a04" if s >= 45 else "#dc2626"
+                    for s in scores
+                ],
+                line=dict(color="white", width=1),
+            ),
+            hovertemplate="Score %{x:.0f}<br>N %{y}<extra></extra>",
+        ))
+        # Class boundaries
+        for thr, label, color in [
+            (75, "A", "#16a34a"), (60, "B", "#10b981"),
+            (45, "C", "#ca8a04"),
+        ]:
+            fig_h.add_vline(
+                x=thr, line_dash="dot", line_color=color, opacity=0.6,
+                annotation_text=label, annotation_position="top",
+            )
+        fig_h.update_layout(
+            title=dict(
+                text=f"Score distribution (n={len(scores)}, avg {sum(scores)/len(scores):.1f})",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            xaxis_title="Composite score 0-100", yaxis_title="N tickers",
+            height=300, showlegend=False, bargap=0.05,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(fig_h, width="stretch")
+
+    with col_b:
+        # Class breakdown bar
+        from collections import Counter
+        c_counts = Counter(classes)
+        order = ["A", "B", "C", "D"]
+        labels = [k for k in order if k in c_counts]
+        values = [c_counts[k] for k in labels]
+        colors_b = {"A": "#16a34a", "B": "#10b981", "C": "#ca8a04", "D": "#dc2626"}
+        bar_colors = [colors_b.get(k, "#94a3b8") for k in labels]
+
+        fig_b = go.Figure()
+        fig_b.add_trace(go.Bar(
+            x=labels, y=values,
+            marker=dict(color=bar_colors),
+            text=[f"{v}<br>{v / len(scores) * 100:.0f}%" for v in values],
+            textposition="auto",
+            hovertemplate="Class %{x}<br>N %{y}<extra></extra>",
+        ))
+        fig_b.update_layout(
+            title=dict(
+                text="Classification breakdown",
+                x=0.5, xanchor="center", font=dict(size=13),
+            ),
+            xaxis_title="", yaxis_title="N tickers",
+            height=300, showlegend=False,
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
+        st.plotly_chart(fig_b, width="stretch")
+
+    st.caption(
+        "🟢 A (≥75) tradable now · 🟢 B (60-74) watchlist auto-add · "
+        "🟡 C (45-59) skip · 🔴 D (<45) avoid. "
+        "Distribuzione skewed verso A/B = universe risk-on; verso C/D = regime adverso o universe filter troppo largo."
+    )
+    st.divider()
+
 # ---------------------------------------------------------------------------
 # Auto-add classe A+B alla watchlist (coerente col CLI propicks-momentum)
 #   - Classe A → target = current_price per nuove entry (preserva target esistente)
