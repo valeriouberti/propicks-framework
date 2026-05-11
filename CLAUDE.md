@@ -351,19 +351,21 @@ pytest                                            # tutti senza rete
 | `propicks-rotate [--region]` | `pages/2_ETF_Rotation.py` |
 | `propicks-contra [--validate]` | `pages/3_Contrarian.py` |
 | `propicks-themes [--rank] [--region] [--theme] [--validate]` | `pages/4_Thematic.py` |
-| `propicks-backtest` | `pages/5_Backtest.py` (+ `pages/6_Backtest_Portfolio.py`) |
-| `propicks-calibrate` | `pages/7_Calibration.py` |
-| `propicks-portfolio size/add/update/remove` | `pages/8_Portfolio.py` (tabs base) |
-| `propicks-portfolio risk` | `pages/8_Portfolio.py` → tab "Rischio & esposizione" |
-| `propicks-portfolio manage [--apply]` / `trail enable|disable` | `pages/8_Portfolio.py` → tab "Trade management" |
-| `propicks-journal add/close/list/stats` | `pages/9_Journal.py` |
-| `propicks-report weekly/monthly` | `pages/10_Reports.py` + archivio |
-| `propicks-watchlist add/remove/update/list/status` | `pages/11_Watchlist.py` |
-| `propicks-calendar` | `pages/12_Calendar.py` |
+| `propicks-core add/contribute/sell/update/remove/list/history` | `pages/5_Core_Portfolio.py` |
+| `propicks-core exposure / drift / consolidated` | `pages/6_Allocation_Consolidated.py` |
+| `propicks-backtest` | `pages/7_Backtest.py` (+ `pages/8_Backtest_Portfolio.py`) |
+| `propicks-calibrate` | `pages/9_Calibration.py` |
+| `propicks-portfolio size/add/update/remove` | `pages/10_Portfolio.py` (tabs base) |
+| `propicks-portfolio risk` | `pages/10_Portfolio.py` → tab "Rischio & esposizione" |
+| `propicks-portfolio manage [--apply]` / `trail enable|disable` | `pages/10_Portfolio.py` → tab "Trade management" |
+| `propicks-journal add/close/list/stats` | `pages/11_Journal.py` |
+| `propicks-report weekly/monthly` | `pages/12_Reports.py` + archivio |
+| `propicks-watchlist add/remove/update/list/status` | `pages/13_Watchlist.py` |
+| `propicks-calendar` | `pages/14_Calendar.py` |
 | `propicks-scheduler` | *(CLI-only, no dashboard page)* |
-| `propicks-regime composite` / `check` | `pages/13_Regime_Composite.py` |
-| `propicks-decay monitor` | `pages/14_Decay_Monitor.py` |
-| *(dashboard-only)* — stress test scenario-based | `pages/15_Stress_Test.py` |
+| `propicks-regime composite` / `check` | `pages/15_Regime_Composite.py` |
+| `propicks-decay monitor` | `pages/16_Decay_Monitor.py` |
+| *(dashboard-only)* — stress test scenario-based | `pages/17_Stress_Test.py` |
 
 ---
 

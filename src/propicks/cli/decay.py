@@ -1,6 +1,6 @@
 """CLI thin wrapper per Strategy Decay Monitor (Fase D.4 SIGNAL_ROADMAP).
 
-Mirror di ``pages/14_Decay_Monitor.py``: rolling Sharpe + CUSUM (Page 1954)
+Mirror di ``pages/16_Decay_Monitor.py``: rolling Sharpe + CUSUM (Page 1954)
 + SPRT (Wald 1945) su closed trades dal journal SQLite.
 
 Stateless: ricomputa ogni volta dai trade chiusi. Niente baseline persistito.

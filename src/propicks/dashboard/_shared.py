@@ -115,6 +115,59 @@ def load_journal() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Core Portfolio (long-term PIC/PAC) — readers non-cachate per le mutazioni
+# ---------------------------------------------------------------------------
+def load_core() -> dict[str, dict]:
+    """Fresh load — usato dopo mutation (add/contribute/sell/remove)."""
+    from propicks.io.core_store import load_core as _load
+    return _load()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cached_core_prices(tickers: tuple[str, ...]) -> dict[str, float]:
+    """Prezzi spot per holdings core. TTL 1min."""
+    if not tickers:
+        return {}
+    from propicks.market.yfinance_client import get_current_prices
+    return get_current_prices(list(tickers))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_core_summary(
+    cache_bust: float,
+    rebalance_threshold: float,
+) -> dict:
+    """Summary completa del core (values + drift + breakdown). TTL 5min.
+
+    ``cache_bust`` permette al caller di invalidare manualmente dopo mutation
+    (passa ``time.time()`` post-write per forzare ricalcolo).
+    """
+    from propicks.io.core_store import load_core
+    from propicks.domain.core_allocation import summarize_core
+    from propicks.market.yfinance_client import get_current_prices
+
+    holdings = load_core()
+    if not holdings:
+        return {
+            "total_value_eur": 0.0,
+            "holdings": {},
+            "drift": {},
+            "asset_class": {},
+            "region": {},
+            "sector": {},
+            "n_holdings": 0,
+            "n_missing_price": 0,
+            "_raw_holdings": {},
+        }
+    prices = get_current_prices(list(holdings.keys()))
+    summary = summarize_core(
+        holdings, prices, rebalance_threshold=rebalance_threshold,
+    )
+    summary["_raw_holdings"] = holdings
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Formatters
 # ---------------------------------------------------------------------------
 def fmt_pct(val: float | None, *, decimals: int = 2, none: str = "—") -> str:

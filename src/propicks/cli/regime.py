@@ -1,6 +1,6 @@
 """CLI thin wrapper per Regime Composite (Fase B.3 SIGNAL_ROADMAP).
 
-Mirror di ``pages/13_Regime_Composite.py``: calcola z-score giornaliero
+Mirror di ``pages/15_Regime_Composite.py``: calcola z-score giornaliero
 combinato (HY OAS + breadth + VIX) e classifica in 5-bucket regime.
 
 Subcomandi:

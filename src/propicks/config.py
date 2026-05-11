@@ -87,6 +87,44 @@ MIN_SCORE_TECH: int = 60
 
 
 # ---------------------------------------------------------------------------
+# CORE PORTFOLIO (long-term PIC/PAC, bucket isolato dal satellite)
+# ---------------------------------------------------------------------------
+# Holdings di lungo periodo (ETF buy&hold) — NON entrano nei cap satellite
+# (Stock 40% / ETF 60% / Cash 20%). Tracking allocazione + drift vs target,
+# nessun stop/target/AI. Vedi docs/CORE_PORTFOLIO.md.
+CoreAssetClass = Literal["EQUITY_ETF", "BOND_ETF", "COMMODITY_ETF", "STOCK"]
+CoreRegion = Literal["WORLD", "US", "EU", "EM", "IT"]
+CoreContributionKind = Literal["PIC", "PAC", "DIVIDEND_REINVEST", "SELL"]
+
+# Threshold drift % oltre cui suggerire rebalance al prossimo PAC.
+# es. target=60%, actual=66% → drift=6% > 5% → flag rebalance.
+CORE_DRIFT_REBALANCE_THRESHOLD_PCT: float = 0.05
+
+# Cap settore aggregato (core + satellite combinati) oltre cui warn overlap.
+# es. core ha VWCE (12% tech implicito) + satellite ha NVDA + MSFT → flag.
+CORE_OVERLAP_SECTOR_WARN_PCT: float = 0.35
+
+ASSET_CLASS_LABELS: dict[str, str] = {
+    "EQUITY_ETF": "Azionario ETF",
+    "BOND_ETF": "Obbligazionario",
+    "COMMODITY_ETF": "Materie prime",
+    "STOCK": "Azionario singolo",
+}
+
+REGION_LABELS: dict[str, str] = {
+    "WORLD": "Globale",
+    "US": "Stati Uniti",
+    "EU": "Europa",
+    "EM": "Mercati Emergenti",
+    "IT": "Italia",
+}
+
+CORE_CONTRIBUTION_KINDS: tuple[str, ...] = (
+    "PIC", "PAC", "DIVIDEND_REINVEST", "SELL",
+)
+
+
+# ---------------------------------------------------------------------------
 # RISK MANAGEMENT
 # ---------------------------------------------------------------------------
 MAX_LOSS_PER_TRADE_PCT: float = 0.08

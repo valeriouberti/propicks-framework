@@ -428,6 +428,59 @@ INSERT OR IGNORE INTO schema_version (version, description)
   VALUES (2, 'manual_ai_verdicts — paste-based AI accuracy tracking');
 INSERT OR IGNORE INTO schema_version (version, description)
   VALUES (3, 'multi-currency — currency column on positions+trades, fx_rates_daily table');
+INSERT OR IGNORE INTO schema_version (version, description)
+  VALUES (4, 'core_holdings + core_contributions — long-term PIC/PAC bucket isolato da satellite');
+
+
+-- ----------------------------------------------------------------------------
+-- 7. CORE PORTFOLIO (long-term PIC/PAC, bucket isolato dal satellite)
+-- ----------------------------------------------------------------------------
+-- Source of truth per holdings di lungo periodo (ETF buy&hold, PAC mensile,
+-- PIC iniziale). Isolato da ``positions`` per non interferire con gli
+-- invarianti del satellite (10 max, bucket cap 40/60%, stop/target, R/R floor).
+--
+-- Risk model: NO stop, NO target, NO R/R, NO AI validation. Solo tracking
+-- allocazione + drift vs target_weight per suggerire rebalance.
+--
+-- avg_cost è denormalizzato (cache) — ricalcolato weighted da
+-- core_contributions ad ogni mutation. shares totali = sum(contributions.shares).
+CREATE TABLE IF NOT EXISTS core_holdings (
+  ticker TEXT PRIMARY KEY,
+  name TEXT,
+  asset_class TEXT,                 -- 'EQUITY_ETF' | 'BOND_ETF' | 'COMMODITY_ETF' | 'STOCK'
+  region TEXT,                      -- 'WORLD' | 'US' | 'EU' | 'EM' | 'IT'
+  sector_key TEXT,                  -- nullable (broad ETF = NULL)
+  shares REAL NOT NULL,             -- totale cumulativo da contributions
+  avg_cost REAL NOT NULL,           -- weighted average cost (cache, ricalcolato)
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  target_weight REAL,               -- target % capitale core (per drift monitor)
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Append-only log di tutte le movimentazioni (PIC iniziale, PAC mensili,
+-- reinvest dividendi). True source per ricalcolo avg_cost e per TWR/IRR.
+-- Mai cancellato. Rimozione holding via shares=0 in core_holdings, le
+-- contributions storiche restano per audit.
+CREATE TABLE IF NOT EXISTS core_contributions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticker TEXT NOT NULL,
+  date DATE NOT NULL,
+  shares REAL NOT NULL,             -- può essere negativo per parziali sell
+  price REAL NOT NULL,
+  amount REAL NOT NULL,             -- shares * price (denormalizzato per query rapide)
+  fees REAL NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'PAC', -- 'PIC' | 'PAC' | 'DIVIDEND_REINVEST' | 'SELL'
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (ticker) REFERENCES core_holdings(ticker) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_core_contrib_ticker_date
+  ON core_contributions(ticker, date);
+CREATE INDEX IF NOT EXISTS idx_core_holdings_asset_class
+  ON core_holdings(asset_class);
 
 
 -- ----------------------------------------------------------------------------

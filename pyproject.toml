@@ -63,6 +63,7 @@ propicks-themes    = "propicks.cli.themes:main"
 propicks-regime    = "propicks.cli.regime:main"
 propicks-decay     = "propicks.cli.decay:main"
 propicks-sync      = "propicks.cli.sync:main"
+propicks-core      = "propicks.cli.core:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
