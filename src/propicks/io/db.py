@@ -524,6 +524,60 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
                 pass
 
 
+# Schema v4 (core portfolio): statement DDL singoli per le nuove tabelle.
+# Eseguiti via ``conn.execute()`` (non executescript) per garantire la
+# creazione anche su libsql_experimental in modalità Turso — alcune versioni
+# di libsql non propagano correttamente DDL multi-statement attraverso
+# ``executescript`` quando il replica locale esiste già. Idempotente.
+_V4_CORE_STATEMENTS: tuple[str, ...] = (
+    """CREATE TABLE IF NOT EXISTS core_holdings (
+        ticker TEXT PRIMARY KEY,
+        name TEXT,
+        asset_class TEXT,
+        region TEXT,
+        sector_key TEXT,
+        shares REAL NOT NULL,
+        avg_cost REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'EUR',
+        target_weight REAL,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS core_contributions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        date DATE NOT NULL,
+        shares REAL NOT NULL,
+        price REAL NOT NULL,
+        amount REAL NOT NULL,
+        fees REAL NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL DEFAULT 'PAC',
+        currency TEXT NOT NULL DEFAULT 'EUR',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ticker) REFERENCES core_holdings(ticker) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_core_contrib_ticker_date ON core_contributions(ticker, date)",
+    "CREATE INDEX IF NOT EXISTS idx_core_holdings_asset_class ON core_holdings(asset_class)",
+)
+
+
+def _ensure_core_tables(conn) -> None:
+    """Crea le tabelle del Core Portfolio (schema v4) via execute() singoli.
+
+    Attivo anche in modalità Turso per garantire la presenza delle tabelle
+    sul replica/remote indipendentemente da come ``executescript`` gestisce
+    il DDL multi-statement. Tutti gli statement sono ``CREATE ... IF NOT
+    EXISTS`` quindi safe da rieseguire ad ogni connect.
+    """
+    for stmt in _V4_CORE_STATEMENTS:
+        try:
+            conn.execute(stmt)
+        except (sqlite3.OperationalError, ValueError):
+            pass
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Applica lo schema + migrations incrementali.
 
@@ -535,8 +589,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     evitare ALTER TABLE su colonne già presenti — la sync pulla lo schema
     completo dal remote. Le migration sono pensate per upgrade in-place di
     DB SQLite locali pre-esistenti.
+
+    Schema v4 (core portfolio) è additivo: le tabelle vengono create via
+    ``_ensure_core_tables`` con singoli ``conn.execute()`` per bypassare
+    bug noti di ``executescript`` su libsql in deploy esistenti.
     """
     conn.executescript(_load_schema_sql())
+    conn.commit()
+    _ensure_core_tables(conn)
     conn.commit()
     if not _is_turso_enabled():
         _apply_migrations(conn)
