@@ -584,11 +584,11 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     Ordine: CREATE TABLE IF NOT EXISTS (nuove tabelle) → ALTER TABLE per
     colonne aggiunte (migrations). Entrambi idempotenti.
 
-    In modalità Turso, lo schema remoto è source of truth: `executescript`
-    è no-op (CREATE IF NOT EXISTS) e `_apply_migrations` viene skippato per
-    evitare ALTER TABLE su colonne già presenti — la sync pulla lo schema
-    completo dal remote. Le migration sono pensate per upgrade in-place di
-    DB SQLite locali pre-esistenti.
+    Le migration ALTER TABLE girano sia su SQLite locale sia su Turso/libsql:
+    sono idempotenti via ``_column_exists`` (PRAGMA table_info), quindi
+    riapplicarle a DB già aggiornati è no-op. Necessarie su Turso perché
+    ``CREATE TABLE IF NOT EXISTS`` non aggiunge colonne a tabelle preesistenti
+    create con schema più vecchio.
 
     Schema v4 (core portfolio) è additivo: le tabelle vengono create via
     ``_ensure_core_tables`` con singoli ``conn.execute()`` per bypassare
@@ -598,9 +598,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     _ensure_core_tables(conn)
     conn.commit()
-    if not _is_turso_enabled():
-        _apply_migrations(conn)
-        conn.commit()
+    _apply_migrations(conn)
+    conn.commit()
 
 
 def init_schema(path: str | None = None) -> None:

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS positions (
   score_claude INTEGER,
   score_tech INTEGER,
   catalyst TEXT,
+  currency TEXT NOT NULL DEFAULT 'EUR',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS trades (
   pnl_per_share REAL,
   duration_days INTEGER,
   post_trade_notes TEXT,
+  currency TEXT NOT NULL DEFAULT 'EUR',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
