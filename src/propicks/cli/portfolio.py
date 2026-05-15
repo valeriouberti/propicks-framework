@@ -47,6 +47,7 @@ from propicks.domain.trade_mgmt import (
 )
 from propicks.io.portfolio_store import (
     add_position,
+    increase_position,
     load_portfolio,
     remove_position,
     update_position,
@@ -494,6 +495,36 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_increase(args: argparse.Namespace) -> int:
+    portfolio = load_portfolio()
+    try:
+        pos = increase_position(
+            portfolio,
+            ticker=args.ticker,
+            add_shares=args.shares,
+            add_price=args.price,
+            new_stop=args.stop,
+            new_target=args.target,
+            ignore_earnings=getattr(args, "ignore_earnings", False),
+        )
+    except ValueError as exc:
+        print(f"[errore] {exc}", file=sys.stderr)
+        return 2
+    target_str = f"{pos['target']:.2f}" if pos.get("target") else "-"
+    print(
+        f"Incrementato {args.ticker.upper()}: ora {pos['shares']} azioni @ "
+        f"entry medio {pos['entry_price']:.2f} "
+        f"(stop {pos['stop_loss']:.2f}, target {target_str}). "
+        f"Cash residuo {portfolio['cash']:.2f}."
+    )
+    print(
+        "Promemoria: il journal NON è stato toccato. Se tracci il trade nel "
+        "journal, annota l'add a mano (entry_date e trade journal restano "
+        "sull'apertura originale)."
+    )
+    return 0
+
+
 def cmd_remove(args: argparse.Namespace) -> int:
     portfolio = load_portfolio()
     try:
@@ -760,6 +791,34 @@ def main() -> int:
     p_upd.add_argument("--stop", type=float, default=None)
     p_upd.add_argument("--target", type=float, default=None)
     p_upd.set_defaults(func=cmd_update)
+
+    p_inc = sub.add_parser(
+        "increase",
+        help="Incrementa (pyramid) una posizione aperta con entry medio pesato",
+    )
+    p_inc.add_argument("ticker")
+    p_inc.add_argument(
+        "--shares", type=int, required=True, help="Azioni da aggiungere (>0)"
+    )
+    p_inc.add_argument(
+        "--price", type=float, required=True, help="Prezzo della nuova tranche"
+    )
+    p_inc.add_argument(
+        "--stop",
+        type=float,
+        default=None,
+        help="Nuovo stop (obbligatorio se quello vecchio sfora il loss cap "
+        "contro l'entry medio aggiornato)",
+    )
+    p_inc.add_argument(
+        "--target", type=float, default=None, help="Nuovo target (opzionale)"
+    )
+    p_inc.add_argument(
+        "--ignore-earnings",
+        action="store_true",
+        help="Bypassa l'earnings hard gate per add intentional",
+    )
+    p_inc.set_defaults(func=cmd_increase)
 
     p_rm = sub.add_parser("remove", help="Rimuove una posizione (non chiude il trade)")
     p_rm.add_argument("ticker")

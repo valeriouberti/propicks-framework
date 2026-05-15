@@ -537,6 +537,228 @@ def remove_position(portfolio: dict, ticker: str) -> dict:
     return pos
 
 
+def increase_position(
+    portfolio: dict,
+    ticker: str,
+    add_shares: int,
+    add_price: float,
+    *,
+    new_stop: float | None = None,
+    new_target: float | None = None,
+    ignore_earnings: bool = False,
+) -> dict:
+    """Incrementa (pyramid) una posizione esistente con entry medio pesato.
+
+    Differenza da remove+re-add: NON rimbalza il cash a entry vecchio, NON
+    tocca il journal, NON resetta ``entry_date`` (continuità time-stop /
+    trade_mgmt). Muta ``portfolio`` in-place AND scrive su DB (UPDATE positions
+    + cash meta, transazione unica).
+
+    Entry risultante = media pesata::
+
+        entry_avg = (sh_old*entry_old + add_shares*add_price)
+                    / (sh_old + add_shares)
+
+    Re-applica TUTTI i gate di business sulla NUOVA size totale: cash
+    sufficiency, size cap per-posizione, bucket aggregate (Stock 40% / ETF
+    60%), sub-cap contrarian/thematic, min cash reserve, loss cap per-trade
+    contro il nuovo entry medio, earnings hard gate.
+
+    Lo stop esistente viene rivalidato contro il nuovo entry medio (mediando
+    al rialzo il rischio% sale a stop fisso): se sfora il loss cap, ``new_stop``
+    diventa obbligatorio. ``new_target``, se passato, deve stare sopra il nuovo
+    entry medio.
+    """
+    ticker = ticker.upper()
+    positions = portfolio.get("positions", {})
+    if ticker not in positions:
+        raise ValueError(
+            f"Nessuna posizione aperta su {ticker}. Usa `add` per aprirla."
+        )
+    if add_shares <= 0:
+        raise ValueError(f"add_shares deve essere > 0 (ricevuto {add_shares}).")
+    if add_price <= 0:
+        raise ValueError(f"add_price deve essere > 0 (ricevuto {add_price}).")
+
+    pos = positions[ticker]
+    strategy = pos.get("strategy")
+
+    # Earnings hard gate (Phase 8) — incrementare è aggiungere esposizione,
+    # stesso gate di add_position. Override esplicito per add intentional.
+    if not ignore_earnings:
+        from propicks.domain.calendar import earnings_gate_check
+        from propicks.market.yfinance_client import get_next_earnings_date
+        try:
+            earnings_date = get_next_earnings_date(ticker)
+        except Exception:
+            earnings_date = None
+        check = earnings_gate_check(ticker, earnings_date, EARNINGS_HARD_GATE_DAYS)
+        if check["blocked"]:
+            raise ValueError(
+                f"Earnings gate: {ticker} ha earnings in {check['days_to_earnings']}gg "
+                f"({earnings_date}). Usa ignore_earnings=True per add intentional, "
+                f"oppure aspetta che passi l'evento."
+            )
+
+    sh_old = int(pos["shares"])
+    entry_old = float(pos["entry_price"])
+    add_cost = add_shares * add_price
+    cash = float(portfolio.get("cash") or 0)
+    if add_cost > cash:
+        raise ValueError(
+            f"Cash insufficiente: servono {add_cost:.2f}, disponibili {cash:.2f}."
+        )
+
+    sh_new = sh_old + int(add_shares)
+    entry_avg = (sh_old * entry_old + add_shares * add_price) / sh_new
+    entry_avg = round(entry_avg, 2)
+    new_cost_basis = sh_new * entry_avg
+
+    total = portfolio_value(portfolio)  # invariato: cash -add_cost, pos +add_cost
+
+    # Bucket detection — stessa precedenza di add_position
+    # (contrarian tag > thematic ticker/tag > etf_rotation > standard).
+    is_contra = isinstance(strategy, str) and strategy.lower().startswith("contra")
+    is_thematic = (not is_contra) and (
+        ticker in THEMATIC_ETFS
+        or (isinstance(strategy, str) and "themat" in strategy.lower())
+    )
+    is_etf_rot = (
+        (not is_contra)
+        and (not is_thematic)
+        and is_etf_rotation_position({"strategy": strategy}, ticker=ticker)
+    )
+    if is_contra:
+        size_cap_pct = CONTRA_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = CONTRA_MAX_LOSS_PER_TRADE_PCT
+        bucket_label = "contrarian"
+    elif is_thematic:
+        size_cap_pct = THEMATIC_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = THEMATIC_STOP_LOSS_PCT
+        bucket_label = "thematic"
+    elif is_etf_rot:
+        size_cap_pct = ETF_MAX_POSITION_SIZE_PCT
+        loss_cap_pct = MAX_LOSS_PER_TRADE_PCT
+        bucket_label = "etf_rotation"
+    else:
+        size_cap_pct = MAX_POSITION_SIZE_PCT
+        loss_cap_pct = MAX_LOSS_PER_TRADE_PCT
+        bucket_label = "standard"
+
+    # Size cap sulla NUOVA size totale della posizione (non solo l'aggiunta).
+    if new_cost_basis > total * size_cap_pct:
+        raise ValueError(
+            f"Size post-incremento {new_cost_basis/total*100:.1f}% supera il "
+            f"limite {size_cap_pct*100:.0f}% per posizione ({bucket_label})."
+        )
+
+    # Bucket aggregate: l'esposizione corrente include già la posizione al
+    # costo vecchio; il delta sul bucket è esattamente ``add_cost``.
+    if is_contra:
+        new_contra_pct = contrarian_aggregate_exposure(portfolio) + (
+            add_cost / total if total > 0 else 0
+        )
+        if new_contra_pct > CONTRA_MAX_AGGREGATE_EXPOSURE_PCT:
+            raise ValueError(
+                f"Incrementare {ticker} porterebbe l'esposizione contrarian a "
+                f"{new_contra_pct*100:.1f}%, sopra il cap "
+                f"{CONTRA_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+    if is_thematic:
+        parent_ticker = THEMATIC_ETFS.get(ticker, {}).get("parent_ticker")
+        if parent_ticker:
+            cur_parent = thematic_parent_aggregate(portfolio, parent_ticker)
+            new_parent = cur_parent + (add_cost / total if total > 0 else 0)
+            if new_parent > THEMATIC_PARENT_AGGREGATE_CAP_PCT:
+                raise ValueError(
+                    f"Incrementare {ticker} porterebbe theme + "
+                    f"parent({parent_ticker}) a {new_parent*100:.1f}%, sopra il "
+                    f"cap {THEMATIC_PARENT_AGGREGATE_CAP_PCT*100:.0f}%."
+                )
+    if is_contra or (not is_thematic and not is_etf_rot):
+        new_stock = stock_aggregate_exposure(portfolio) + (
+            add_cost / total if total > 0 else 0
+        )
+        if new_stock > STOCK_MAX_AGGREGATE_EXPOSURE_PCT:
+            raise ValueError(
+                f"Incrementare {ticker} porterebbe il bucket Stock a "
+                f"{new_stock*100:.1f}%, sopra il cap "
+                f"{STOCK_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+    else:
+        new_etf = etf_aggregate_exposure(portfolio) + (
+            add_cost / total if total > 0 else 0
+        )
+        if new_etf > ETF_MAX_AGGREGATE_EXPOSURE_PCT:
+            raise ValueError(
+                f"Incrementare {ticker} porterebbe il bucket ETF a "
+                f"{new_etf*100:.1f}%, sopra il cap "
+                f"{ETF_MAX_AGGREGATE_EXPOSURE_PCT*100:.0f}%."
+            )
+
+    new_cash = round(cash - add_cost, 2)
+    if new_cash < total * MIN_CASH_RESERVE_PCT:
+        raise ValueError(
+            f"Incremento violerebbe la riserva cash minima "
+            f"({MIN_CASH_RESERVE_PCT*100:.0f}%): cash residuo {new_cash:.2f} "
+            f"< {total * MIN_CASH_RESERVE_PCT:.2f}."
+        )
+
+    # Stop: rivalida contro il nuovo entry medio. Mediando al rialzo il
+    # rischio% a stop fisso cresce → può sforare il loss cap.
+    eff_stop = new_stop if new_stop is not None else float(pos["stop_loss"])
+    if eff_stop <= 0:
+        raise ValueError(f"stop deve essere > 0 (ricevuto {eff_stop}).")
+    if eff_stop >= entry_avg:
+        raise ValueError(
+            f"stop {eff_stop:.2f} >= entry medio {entry_avg:.2f}: invalido per long."
+        )
+    risk_pct = (entry_avg - eff_stop) / entry_avg
+    if risk_pct > loss_cap_pct:
+        raise ValueError(
+            f"Stop {eff_stop:.2f} dista {risk_pct*100:.2f}% dal nuovo entry "
+            f"medio {entry_avg:.2f} > limite {loss_cap_pct*100:.0f}% "
+            f"({bucket_label}). Passa un new_stop più vicino all'entry medio."
+        )
+
+    eff_target = new_target if new_target is not None else pos.get("target")
+    if eff_target is not None:
+        if eff_target <= entry_avg:
+            raise ValueError(
+                f"target {eff_target:.2f} <= entry medio {entry_avg:.2f}: "
+                f"un long con target sotto entry non ha senso."
+            )
+        eff_target = round(eff_target, 2)
+
+    eff_stop = round(eff_stop, 2)
+    now = datetime.now().strftime(DATE_FMT)
+
+    with transaction() as conn:
+        conn.execute(
+            """UPDATE positions
+               SET shares = ?, entry_price = ?, stop_loss = ?, target = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE ticker = ?""",
+            (sh_new, entry_avg, eff_stop, eff_target, ticker),
+        )
+        for key, value in (("cash", str(new_cash)), ("last_updated", now)):
+            conn.execute(
+                """INSERT INTO portfolio_meta (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+
+    pos["shares"] = sh_new
+    pos["entry_price"] = entry_avg
+    pos["stop_loss"] = eff_stop
+    pos["target"] = eff_target
+    portfolio["cash"] = new_cash
+    portfolio["last_updated"] = now
+    return pos
+
+
 def close_position(portfolio: dict, ticker: str, exit_price: float) -> dict:
     """Chiude una posizione con cash accounting corretto (exit_price reali)."""
     ticker = ticker.upper()

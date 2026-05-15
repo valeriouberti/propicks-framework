@@ -55,6 +55,7 @@ from propicks.domain.trade_mgmt import (
 from propicks.io.portfolio_store import (
     add_position,
     get_initial_capital,
+    increase_position,
     remove_position,
     set_initial_capital,
     update_position,
@@ -134,11 +135,21 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Tabs: Risk | Mgmt | Size | Add | Update | Remove
 # ---------------------------------------------------------------------------
-tab_risk, tab_mgmt, tab_size, tab_add, tab_update, tab_remove, tab_broker = st.tabs([
+(
+    tab_risk,
+    tab_mgmt,
+    tab_size,
+    tab_add,
+    tab_increase,
+    tab_update,
+    tab_remove,
+    tab_broker,
+) = st.tabs([
     "Rischio & esposizione",
     "Trade management",
     "Size calculator",
     "Apri posizione",
+    "Incrementa",
     "Aggiorna stop/target",
     "Chiudi posizione",
     "📥 Broker import",
@@ -1222,6 +1233,111 @@ with tab_add:
                     f"{a_ticker.upper()}: {pos['shares']} @ {pos['entry_price']:.2f} "
                     f"{pos.get('currency', 'EUR')}",
                     icon="✅",
+                )
+                st.rerun()
+            except ValueError as err:
+                st.error(str(err))
+
+# ---------------------------------------------------------------------------
+# Increase position (pyramiding)
+# ---------------------------------------------------------------------------
+with tab_increase:
+    st.caption(
+        "Incrementa una posizione aperta con **entry medio pesato**. "
+        "Addebita solo la tranche aggiunta (no rimbalzo cash), non resetta "
+        "`entry_date` (continuità time-stop) e **non tocca il journal**. "
+        "Tutti i gate hard riapplicati sulla nuova size."
+    )
+    if not positions:
+        st.info("Nessuna posizione aperta da incrementare.")
+    else:
+        i_ticker = st.selectbox(
+            "Ticker", sorted(positions.keys()), key="inc_ticker"
+        )
+        ip = positions[i_ticker]
+        ip_sh = int(ip.get("shares") or 0)
+        ip_entry = float(ip.get("entry_price") or 0)
+        ip_stop = float(ip.get("stop_loss") or 0)
+        ip_target = float(ip.get("target") or 0)
+        ip_target_str = f"{ip_target:.2f}" if ip_target else "—"
+        st.caption(
+            f"Posizione corrente — **{ip_sh}** azioni @ entry "
+            f"**{ip_entry:.2f}** · stop {ip_stop:.2f} · "
+            f"target {ip_target_str}. "
+            "Mediando al rialzo il rischio% a stop fisso cresce: se il vecchio "
+            "stop sfora il loss cap, passa un nuovo stop (idem target)."
+        )
+
+        with st.form("increase_form", border=True):
+            cols = st.columns([1, 1, 1, 1])
+            i_shares = cols[0].number_input(
+                "Shares da aggiungere",
+                min_value=1,
+                step=1,
+                key=f"inc_shares_{i_ticker}",
+            )
+            i_price = cols[1].number_input(
+                "Prezzo tranche",
+                min_value=0.01,
+                step=0.01,
+                format="%.2f",
+                key=f"inc_price_{i_ticker}",
+            )
+            i_stop = cols[2].number_input(
+                "Nuovo stop (0 = invariato)",
+                min_value=0.0,
+                value=0.0,
+                step=0.01,
+                format="%.2f",
+                key=f"inc_stop_{i_ticker}",
+            )
+            i_target = cols[3].number_input(
+                "Nuovo target (0 = invariato)",
+                min_value=0.0,
+                value=0.0,
+                step=0.01,
+                format="%.2f",
+                key=f"inc_target_{i_ticker}",
+            )
+            i_ignore_earn = st.checkbox(
+                "Bypassa earnings hard gate (add intentional)",
+                value=False,
+                key=f"inc_ign_{i_ticker}",
+            )
+
+            # Preview entry medio
+            if i_shares and i_price:
+                avg = (ip_sh * ip_entry + int(i_shares) * i_price) / (
+                    ip_sh + int(i_shares)
+                )
+                st.caption(
+                    f"→ Post-incremento: **{ip_sh + int(i_shares)}** azioni @ "
+                    f"entry medio **{avg:.2f}** "
+                    f"(da {ip_entry:.2f}), tranche {int(i_shares) * i_price:.2f}."
+                )
+            submitted = st.form_submit_button("Incrementa", type="primary")
+
+        if submitted:
+            try:
+                pos = increase_position(
+                    portfolio,
+                    i_ticker,
+                    add_shares=int(i_shares),
+                    add_price=i_price,
+                    new_stop=(i_stop or None),
+                    new_target=(i_target or None),
+                    ignore_earnings=i_ignore_earn,
+                )
+                tgt = f"{pos['target']:.2f}" if pos.get("target") else "—"
+                st.toast(
+                    f"{i_ticker}: {pos['shares']} @ entry medio "
+                    f"{pos['entry_price']:.2f} · stop {pos['stop_loss']:.2f} · "
+                    f"target {tgt}",
+                    icon="✅",
+                )
+                st.info(
+                    "Journal non toccato — se tracci il trade, annota l'add a "
+                    "mano (trade journal resta sull'apertura originale)."
                 )
                 st.rerun()
             except ValueError as err:

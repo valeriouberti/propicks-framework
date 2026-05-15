@@ -276,6 +276,8 @@ propicks-portfolio size AAPL --entry X --stop Y --advanced \
 propicks-portfolio size AAPL --entry X --stop Y --contrarian # bucket cap 8%
 propicks-portfolio add AAPL --entry X --shares N --stop Y \
     --target Z --strategy TechTitans [--ignore-earnings]
+propicks-portfolio increase AAPL --shares N --price X \  # pyramid: entry medio pesato
+    [--stop Y] [--target Z] [--ignore-earnings]          # no rimbalzo cash, journal intatto
 propicks-portfolio update AAPL --stop X --target Y
 propicks-portfolio remove AAPL
 propicks-portfolio trail enable|disable AAPL     # contrarian rifiutato (target fisso)
@@ -355,7 +357,7 @@ pytest                                            # tutti senza rete
 | `propicks-core exposure / drift / consolidated` | `pages/6_Allocation_Consolidated.py` |
 | `propicks-backtest` | `pages/7_Backtest.py` (+ `pages/8_Backtest_Portfolio.py`) |
 | `propicks-calibrate` | `pages/9_Calibration.py` |
-| `propicks-portfolio size/add/update/remove` | `pages/10_Portfolio.py` (tabs base) |
+| `propicks-portfolio size/add/increase/update/remove` | `pages/10_Portfolio.py` (tabs base) |
 | `propicks-portfolio risk` | `pages/10_Portfolio.py` → tab "Rischio & esposizione" |
 | `propicks-portfolio manage [--apply]` / `trail enable|disable` | `pages/10_Portfolio.py` → tab "Trade management" |
 | `propicks-journal add/close/list/stats` | `pages/11_Journal.py` |
