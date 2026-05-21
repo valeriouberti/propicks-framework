@@ -120,7 +120,10 @@ REGION_LABELS: dict[str, str] = {
 }
 
 CORE_CONTRIBUTION_KINDS: tuple[str, ...] = (
-    "PIC", "PAC", "DIVIDEND_REINVEST", "SELL",
+    "PIC",
+    "PAC",
+    "DIVIDEND_REINVEST",
+    "SELL",
 )
 
 
@@ -634,6 +637,13 @@ THEMATIC_ETFS: dict[str, dict] = {
     "ESPO.MI": {
         "name": "VanEck Video Gaming and eSports UCITS ETF",
         "theme_label": "video_gaming_esports",
+        "parent_ticker": "XWTS.MI",
+        "parent_sector_key": "communications",
+        "region": "WORLD",
+    },
+    "JEDI.MI": {
+        "name": "VanEck Space Innovators UCITS ETF",
+        "theme_label": "space_innovators",
         "parent_ticker": "XWTS.MI",
         "parent_sector_key": "communications",
         "region": "WORLD",
