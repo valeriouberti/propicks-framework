@@ -532,6 +532,13 @@ THEMATIC_ETFS: dict[str, dict] = {
         "parent_sector_key": "technology",
         "region": "WORLD",
     },
+    "QNTM.MI": {
+        "name": "VanEck Quantum Computing UCITS ETF (Acc)",
+        "theme_label": "quantum_computing",
+        "parent_ticker": "XDWT.MI",
+        "parent_sector_key": "technology",
+        "region": "WORLD",
+    },
     # ─── INDUSTRIAL sub-industries (parent: XDWI.MI) ─────
     "DFND.MI": {
         "name": "iShares Global Aerospace & Defence UCITS ETF (Acc)",
